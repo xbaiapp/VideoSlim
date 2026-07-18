@@ -19,7 +19,7 @@ android {
         applicationId = "com.videoslim.videoslim"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -42,4 +42,14 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    val media3Version = "1.10.1"
+
+    implementation("androidx.activity:activity-ktx:1.13.0")
+    implementation("androidx.media3:media3-common:$media3Version")
+    implementation("androidx.media3:media3-effect:$media3Version")
+    implementation("androidx.media3:media3-transformer:$media3Version")
+    testImplementation("junit:junit:4.13.2")
 }
