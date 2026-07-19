@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:videoslim/app.dart';
+import 'package:videoslim/engine/media_actions.dart';
 import 'package:videoslim/engine/video_engine.dart';
 import 'package:videoslim/engine/video_picker.dart';
 import 'package:videoslim/logging/app_logger.dart';
@@ -42,6 +43,25 @@ final class _FakePicker implements VideoPicker {
   Future<String?> pickFromFiles() async {
     fileCalls += 1;
     return fileResult;
+  }
+}
+
+final class _FakeMediaActions implements MediaActions {
+  final List<String> opened = <String>[];
+  final List<String> shared = <String>[];
+  final List<String> deleted = <String>[];
+  bool deleteResult = true;
+
+  @override
+  Future<void> openMedia(String uri) async => opened.add(uri);
+
+  @override
+  Future<void> shareMedia(String uri) async => shared.add(uri);
+
+  @override
+  Future<bool> deleteSource(String uri) async {
+    deleted.add(uri);
+    return deleteResult;
   }
 }
 
@@ -166,11 +186,13 @@ Widget _app({
   required _FakeEngine engine,
   required _FakePicker picker,
   required AppLogger logger,
+  _FakeMediaActions? mediaActions,
 }) {
   return VideoSlimApp(
     engine: engine,
     picker: picker,
     logger: logger,
+    mediaActions: mediaActions ?? _FakeMediaActions(),
     now: () => DateTime(2026, 7, 19, 1, 2, 3),
   );
 }
@@ -389,6 +411,7 @@ void main() {
     (WidgetTester tester) async {
       final engine = _FakeEngine();
       final picker = _FakePicker();
+      final mediaActions = _FakeMediaActions();
       final backend = _MemoryBackend();
       engine.infoByUri[_outputUri] = _videoInfo(
         uri: _outputUri,
@@ -398,7 +421,12 @@ void main() {
       addTearDown(engine.close);
 
       await tester.pumpWidget(
-        _app(engine: engine, picker: picker, logger: _logger(backend)),
+        _app(
+          engine: engine,
+          picker: picker,
+          logger: _logger(backend),
+          mediaActions: mediaActions,
+        ),
       );
       await _selectGallery(tester, engine, picker);
       await _tapCompression(tester);
@@ -439,7 +467,10 @@ void main() {
 
       expect(engine.metadataCalls, <String>[_sourceUri, _outputUri]);
       expect(find.text('压缩完成'), findsOneWidget);
-      expect(find.text('系统相册 · Movies/VideoSlim'), findsOneWidget);
+      expect(
+        find.text('文件已保存到 Movies/VideoSlim/旅行_视频_slim.mp4'),
+        findsOneWidget,
+      );
       expect(find.text('10.0 MB'), findsWidgets);
       expect(find.text('6.0 MB'), findsOneWidget);
       expect(find.text('节省 4.0 MB · 40.0%'), findsOneWidget);
@@ -447,6 +478,24 @@ void main() {
         find.byKey(const ValueKey<String>('compress-another')),
         findsOneWidget,
       );
+
+      final open = find.byKey(const ValueKey<String>('open-output'));
+      await tester.ensureVisible(open);
+      await tester.tap(open);
+      await tester.pump();
+      final share = find.byKey(const ValueKey<String>('share-output'));
+      await tester.ensureVisible(share);
+      await tester.tap(share);
+      await tester.pump();
+      final delete = find.byKey(const ValueKey<String>('delete-original'));
+      await tester.ensureVisible(delete);
+      await tester.tap(delete);
+      await tester.pump();
+
+      expect(mediaActions.opened, <String>[_outputUri]);
+      expect(mediaActions.shared, <String>[_outputUri]);
+      expect(mediaActions.deleted, <String>[_sourceUri]);
+      expect(find.text('原视频已删除'), findsOneWidget);
     },
   );
 

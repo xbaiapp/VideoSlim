@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../engine/video_engine.dart';
+import '../engine/media_actions.dart';
 import '../engine/video_picker.dart';
 import '../logging/app_logger.dart';
 import '../models/process_request.dart';
@@ -21,12 +22,14 @@ class HomeScreen extends StatefulWidget {
     required this.engine,
     required this.picker,
     required this.logger,
+    required this.mediaActions,
     this.now,
   });
 
   final VideoEngine engine;
   final VideoPicker picker;
   final AppLogger logger;
+  final MediaActions mediaActions;
   final DateTime Function()? now;
 
   @override
@@ -38,6 +41,9 @@ enum _ImportSource { gallery, files }
 class _HomeScreenState extends State<HomeScreen> {
   late final StreamSubscription<ProgressEvent> _progressSubscription;
   late final HomeFlowState _flow;
+  bool _selectedFromGallery = false;
+  bool _sourceDeleted = false;
+  bool _mediaActionBusy = false;
 
   int get _generation => _flow.generation;
   set _generation(int value) => _flow.generation = value;
@@ -143,6 +149,8 @@ class _HomeScreenState extends State<HomeScreen> {
         _outputPublished = false;
         _taskId = null;
         _percent = 0;
+        _selectedFromGallery = source == _ImportSource.gallery;
+        _sourceDeleted = false;
       });
       _logFlow(
         '已选择视频，开始读取技术信息',
@@ -554,8 +562,59 @@ class _HomeScreenState extends State<HomeScreen> {
       _sourceInfo = null;
       _outputInfo = null;
       _outputPublished = false;
+      _selectedFromGallery = false;
+      _sourceDeleted = false;
+      _mediaActionBusy = false;
     });
     _logFlow('重置 M1 流程，等待选择新视频');
+  }
+
+  Future<void> _openOutput() async {
+    final uri = _outputInfo?.uri;
+    if (uri == null || _mediaActionBusy) return;
+    await _runMediaAction(() => widget.mediaActions.openMedia(uri));
+  }
+
+  Future<void> _shareOutput() async {
+    final uri = _outputInfo?.uri;
+    if (uri == null || _mediaActionBusy) return;
+    await _runMediaAction(() => widget.mediaActions.shareMedia(uri));
+  }
+
+  Future<void> _deleteOriginal() async {
+    final uri = _sourceInfo?.uri;
+    if (uri == null ||
+        !_selectedFromGallery ||
+        _sourceDeleted ||
+        _mediaActionBusy) {
+      return;
+    }
+    await _runMediaAction(() async {
+      final deleted = await widget.mediaActions.deleteSource(uri);
+      if (!deleted || !mounted) return;
+      _flow.update(() => _sourceDeleted = true);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('原视频已删除，压缩结果已保留')));
+    });
+  }
+
+  Future<void> _runMediaAction(Future<void> Function() action) async {
+    _flow.update(() => _mediaActionBusy = true);
+    try {
+      await action();
+    } catch (error, stackTrace) {
+      _logError('系统媒体操作失败', error, stackTrace);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_errorTextFor(error, fallback: '系统媒体操作失败，请稍后重试。')),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) _flow.update(() => _mediaActionBusy = false);
+    }
   }
 
   bool _isCurrent(int generation) => mounted && generation == _generation;
@@ -723,6 +782,13 @@ class _HomeScreenState extends State<HomeScreen> {
                     _SuccessCard(
                       sourceInfo: sourceInfo,
                       outputInfo: outputInfo,
+                      busy: _mediaActionBusy,
+                      canDeleteOriginal:
+                          _selectedFromGallery && !_sourceDeleted,
+                      sourceDeleted: _sourceDeleted,
+                      onOpen: _openOutput,
+                      onShare: _shareOutput,
+                      onDeleteOriginal: _deleteOriginal,
                       onAgain: _reset,
                     ),
                   ],
@@ -1110,11 +1176,23 @@ class _SuccessCard extends StatelessWidget {
   const _SuccessCard({
     required this.sourceInfo,
     required this.outputInfo,
+    required this.busy,
+    required this.canDeleteOriginal,
+    required this.sourceDeleted,
+    required this.onOpen,
+    required this.onShare,
+    required this.onDeleteOriginal,
     required this.onAgain,
   });
 
   final VideoInfo sourceInfo;
   final VideoInfo outputInfo;
+  final bool busy;
+  final bool canDeleteOriginal;
+  final bool sourceDeleted;
+  final VoidCallback onOpen;
+  final VoidCallback onShare;
+  final VoidCallback onDeleteOriginal;
   final VoidCallback onAgain;
 
   @override
@@ -1156,7 +1234,7 @@ class _SuccessCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '系统相册 · Movies/VideoSlim',
+              '文件已保存到 Movies/VideoSlim/${outputInfo.fileName}',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: colors.primary,
@@ -1183,6 +1261,41 @@ class _SuccessCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 20),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: OutlinedButton.icon(
+                    key: const ValueKey<String>('open-output'),
+                    onPressed: busy ? null : onOpen,
+                    icon: const Icon(Icons.play_circle_outline_rounded),
+                    label: const Text('打开'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    key: const ValueKey<String>('share-output'),
+                    onPressed: busy ? null : onShare,
+                    icon: const Icon(Icons.share_outlined),
+                    label: const Text('分享'),
+                  ),
+                ),
+              ],
+            ),
+            if (canDeleteOriginal || sourceDeleted) ...<Widget>[
+              const SizedBox(height: 10),
+              TextButton.icon(
+                key: const ValueKey<String>('delete-original'),
+                onPressed: busy || sourceDeleted ? null : onDeleteOriginal,
+                icon: Icon(
+                  sourceDeleted
+                      ? Icons.check_rounded
+                      : Icons.delete_outline_rounded,
+                ),
+                label: Text(sourceDeleted ? '原视频已删除' : '删除原视频'),
+              ),
+            ],
+            const SizedBox(height: 10),
             FilledButton.icon(
               key: const ValueKey<String>('compress-another'),
               onPressed: onAgain,

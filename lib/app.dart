@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'engine/video_engine.dart';
+import 'engine/media_actions.dart';
 import 'engine/video_picker.dart';
 import 'logging/app_logger.dart';
 import 'screens/home_screen.dart';
@@ -12,12 +13,14 @@ class VideoSlimApp extends StatelessWidget {
     required this.engine,
     required this.picker,
     required this.logger,
+    required this.mediaActions,
     this.now,
   });
 
   final VideoEngine engine;
   final VideoPicker picker;
   final AppLogger logger;
+  final MediaActions mediaActions;
 
   /// Optional clock used for collision-safe output names. Primarily useful in
   /// deterministic widget tests.
@@ -68,6 +71,7 @@ class VideoSlimApp extends StatelessWidget {
         engine: engine,
         picker: picker,
         logger: logger,
+        mediaActions: mediaActions,
         now: now,
       ),
     );

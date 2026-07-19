@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'app.dart';
 import 'engine/method_channel_video_engine.dart';
+import 'engine/media_actions.dart';
 import 'logging/app_logger.dart';
 
 export 'app.dart';
@@ -19,7 +20,15 @@ void main() {
 
       final engine = MethodChannelVideoEngine(logger: logger);
       final picker = MethodChannelVideoPicker(logger: logger);
-      runApp(VideoSlimApp(engine: engine, picker: picker, logger: logger));
+      final mediaActions = MethodChannelMediaActions(logger: logger);
+      runApp(
+        VideoSlimApp(
+          engine: engine,
+          picker: picker,
+          logger: logger,
+          mediaActions: mediaActions,
+        ),
+      );
     },
     (Object error, StackTrace stackTrace) {
       bestEffortLog(
