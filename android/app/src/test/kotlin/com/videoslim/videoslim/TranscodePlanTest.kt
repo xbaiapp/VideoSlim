@@ -163,8 +163,30 @@ class TranscodePlanTest {
 
         assertEquals(16L * 1_024L * 1_024L, copy.overheadBytes)
         assertEquals(copy.videoBytes + copy.audioBytes + copy.overheadBytes, copy.outputBytes)
-        assertEquals(copy.outputBytes * 2L + 32L * 1_024L * 1_024L, copy.cacheRequiredBytes)
+        assertEquals(copy.outputBytes + 32L * 1_024L * 1_024L, copy.cacheRequiredBytes)
         assertEquals(copy.outputBytes + 32L * 1_024L * 1_024L, copy.publicRequiredBytes)
+        assertEquals(copy.outputBytes * 2L + 32L * 1_024L * 1_024L, copy.sharedPoolRequiredBytes)
+    }
+
+    @Test
+    fun `storage preflight distinguishes shared separate and unknown pools`() {
+        val estimate =
+            StorageEstimate(
+                videoBytes = 400L,
+                audioBytes = 50L,
+                overheadBytes = 50L,
+                outputBytes = 500L,
+                cacheRequiredBytes = 550L,
+                publicRequiredBytes = 550L,
+                sharedPoolRequiredBytes = 1_050L,
+            )
+
+        assertTrue(hasSufficientStorage(estimate, 550L, 550L, sharesStoragePool = false))
+        assertFalse(hasSufficientStorage(estimate, 550L, 550L, sharesStoragePool = true))
+        assertFalse(hasSufficientStorage(estimate, 550L, 550L, sharesStoragePool = null))
+        assertTrue(hasSufficientStorage(estimate, 1_050L, 1_050L, sharesStoragePool = true))
+        assertFalse(hasSufficientStorage(estimate, 549L, 2_000L, sharesStoragePool = false))
+        assertFalse(hasSufficientStorage(estimate, 2_000L, 549L, sharesStoragePool = false))
     }
 
     @Test

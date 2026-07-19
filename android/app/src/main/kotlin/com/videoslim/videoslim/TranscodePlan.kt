@@ -15,7 +15,21 @@ internal data class StorageEstimate(
     val outputBytes: Long,
     val cacheRequiredBytes: Long,
     val publicRequiredBytes: Long,
+    val sharedPoolRequiredBytes: Long,
 )
+
+internal fun hasSufficientStorage(
+    estimate: StorageEstimate,
+    cacheAvailableBytes: Long,
+    publicAvailableBytes: Long,
+    sharesStoragePool: Boolean?,
+): Boolean =
+    if (sharesStoragePool == false) {
+        cacheAvailableBytes >= estimate.cacheRequiredBytes &&
+            publicAvailableBytes >= estimate.publicRequiredBytes
+    } else {
+        minOf(cacheAvailableBytes, publicAvailableBytes) >= estimate.sharedPoolRequiredBytes
+    }
 
 internal data class TranscodePlan(
     val outputDimensions: VideoDimensions,
@@ -120,9 +134,10 @@ internal data class TranscodePlan(
                     metadata.fileSizeBytes.coerceAtLeast(0L) / SOURCE_OVERHEAD_DIVISOR,
                 )
             val outputBytes = safeAdd(safeAdd(videoBytes, audioBytes), overheadBytes)
-            val cacheRequiredBytes =
-                safeAdd(safeMultiply(outputBytes, OVERLAPPING_TEMP_AND_PUBLIC_OUTPUTS), STORAGE_HEADROOM_BYTES)
+            val cacheRequiredBytes = safeAdd(outputBytes, STORAGE_HEADROOM_BYTES)
             val publicRequiredBytes = safeAdd(outputBytes, STORAGE_HEADROOM_BYTES)
+            val sharedPoolRequiredBytes =
+                safeAdd(safeMultiply(outputBytes, OVERLAPPING_TEMP_AND_PUBLIC_OUTPUTS), STORAGE_HEADROOM_BYTES)
 
             return StorageEstimate(
                 videoBytes = videoBytes,
@@ -131,6 +146,7 @@ internal data class TranscodePlan(
                 outputBytes = outputBytes,
                 cacheRequiredBytes = cacheRequiredBytes,
                 publicRequiredBytes = publicRequiredBytes,
+                sharedPoolRequiredBytes = sharedPoolRequiredBytes,
             )
         }
 

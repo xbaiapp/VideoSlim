@@ -22,27 +22,31 @@ class OrphanCleanupPolicyTest {
         val record = scopedRecord()
         val pending = scopedEntry(isPending = 1)
 
-        assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.scopedAction(record, pending))
-        assertEquals(CleanupAction.KEEP, OrphanCleanupPolicy.scopedAction(record, pending.copy(isPending = 0)))
+        assertEquals(CleanupAction.DELETE, scopedAction(record, pending))
+        assertEquals(CleanupAction.KEEP, scopedAction(record, pending.copy(isPending = 0)))
         assertEquals(
             CleanupAction.DELETE,
-            OrphanCleanupPolicy.scopedAction(
+            scopedAction(
                 record.copy(stage = RecoveryStage.DISCARDING),
                 pending.copy(isPending = 0),
             ),
         )
-        assertEquals(CleanupAction.SKIP_UNSAFE, OrphanCleanupPolicy.scopedAction(record, pending.copy(isPending = 2)))
+        assertEquals(CleanupAction.SKIP_UNSAFE, scopedAction(record, pending.copy(isPending = 2)))
         assertEquals(
             CleanupAction.SKIP_UNSAFE,
-            OrphanCleanupPolicy.scopedAction(record, pending.copy(displayName = "someone-elses.mp4")),
+            scopedAction(record, pending.copy(displayName = "someone-elses.mp4")),
         )
         assertEquals(
             CleanupAction.SKIP_UNSAFE,
-            OrphanCleanupPolicy.scopedAction(record, pending.copy(relativePath = "Movies/Other/")),
+            scopedAction(record, pending.copy(ownerPackageName = "com.example.other")),
         )
         assertEquals(
             CleanupAction.SKIP_UNSAFE,
-            OrphanCleanupPolicy.scopedAction(
+            scopedAction(record, pending.copy(relativePath = "Movies/Other/")),
+        )
+        assertEquals(
+            CleanupAction.SKIP_UNSAFE,
+            scopedAction(
                 record.copy(legacyOutputPath = "/storage/emulated/0/Movies/VideoSlim/lecture.mp4"),
                 pending,
             ),
@@ -58,17 +62,21 @@ class OrphanCleanupPolicyTest {
             )
         val pending = scopedEntry(isPending = 1)
 
-        assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.scopedAction(record, pending))
+        assertEquals(CleanupAction.DELETE, scopedAction(record, pending))
         assertEquals(
             CleanupAction.KEEP,
-            OrphanCleanupPolicy.scopedAction(record, pending.copy(isPending = 0)),
+            scopedAction(record, pending.copy(isPending = 0)),
         )
         assertEquals(
             CleanupAction.SKIP_UNSAFE,
-            OrphanCleanupPolicy.scopedAction(
+            scopedAction(
                 record,
                 pending.copy(relativePath = "Movies/Other/"),
             ),
+        )
+        assertEquals(
+            CleanupAction.SKIP_UNSAFE,
+            scopedAction(record, pending.copy(ownerPackageName = "com.example.other")),
         )
     }
 
@@ -85,17 +93,17 @@ class OrphanCleanupPolicyTest {
             assertFalse(uri, OrphanCleanupPolicy.isAppMediaVideoUri(uri))
             assertEquals(
                 CleanupAction.SKIP_UNSAFE,
-                OrphanCleanupPolicy.scopedAction(scopedRecord().copy(mediaStoreUri = uri), entry.copy(uri = uri)),
+                scopedAction(scopedRecord().copy(mediaStoreUri = uri), entry.copy(uri = uri)),
             )
         }
     }
 
     @Test
     fun `scoped media absent row is already clean only for a safe record`() {
-        assertEquals(CleanupAction.ALREADY_ABSENT, OrphanCleanupPolicy.scopedAction(scopedRecord(), null))
+        assertEquals(CleanupAction.ALREADY_ABSENT, scopedAction(scopedRecord(), null))
         assertEquals(
             CleanupAction.SKIP_UNSAFE,
-            OrphanCleanupPolicy.scopedAction(scopedRecord().copy(mediaStoreUri = "content://other/42"), null),
+            scopedAction(scopedRecord().copy(mediaStoreUri = "content://other/42"), null),
         )
     }
 
@@ -161,14 +169,14 @@ class OrphanCleanupPolicyTest {
         var deletions = 0
 
         repeat(10) {
-            if (OrphanCleanupPolicy.scopedAction(record, observed) == CleanupAction.DELETE) {
+            if (scopedAction(record, observed) == CleanupAction.DELETE) {
                 deletions += 1
                 observed = null
             }
         }
 
         assertEquals(1, deletions)
-        assertEquals(CleanupAction.ALREADY_ABSENT, OrphanCleanupPolicy.scopedAction(record, observed))
+        assertEquals(CleanupAction.ALREADY_ABSENT, scopedAction(record, observed))
     }
 
     @Test
@@ -185,6 +193,11 @@ class OrphanCleanupPolicyTest {
         assertTrue(report.summary().contains("tempDeleted=2"))
         assertTrue(report.summary().contains("failures=4"))
     }
+
+    private fun scopedAction(
+        record: TaskRecoveryRecord,
+        observed: ScopedMediaEntry?,
+    ) = OrphanCleanupPolicy.scopedAction(record, observed, APP_PACKAGE_NAME)
 
     private fun scopedRecord() =
         TaskRecoveryRecord(
@@ -204,5 +217,10 @@ class OrphanCleanupPolicyTest {
             displayName = "lecture.mp4",
             relativePath = OrphanCleanupPolicy.SCOPED_RELATIVE_PATH,
             isPending = isPending,
+            ownerPackageName = APP_PACKAGE_NAME,
         )
+
+    private companion object {
+        const val APP_PACKAGE_NAME = "com.videoslim.videoslim"
+    }
 }

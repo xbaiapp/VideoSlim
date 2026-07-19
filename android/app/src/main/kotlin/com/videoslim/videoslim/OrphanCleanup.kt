@@ -21,6 +21,7 @@ data class ScopedMediaEntry(
     val displayName: String?,
     val relativePath: String?,
     val isPending: Int?,
+    val ownerPackageName: String?,
 )
 
 internal data class LegacyMediaEntry(
@@ -43,8 +44,10 @@ internal object OrphanCleanupPolicy {
     fun scopedAction(
         record: TaskRecoveryRecord,
         observed: ScopedMediaEntry?,
+        expectedOwnerPackageName: String,
     ): CleanupAction {
         val uri = record.mediaStoreUri
+        if (expectedOwnerPackageName.isBlank()) return CleanupAction.SKIP_UNSAFE
         if (record.stage == RecoveryStage.ALLOCATED) {
             if (
                 uri == null ||
@@ -59,7 +62,8 @@ internal object OrphanCleanupPolicy {
             if (
                 observed.uri != uri ||
                 observed.relativePath != SCOPED_RELATIVE_PATH ||
-                observed.displayName?.let(::isSafeOwnedOutputName) != true
+                observed.displayName?.let(::isSafeOwnedOutputName) != true ||
+                observed.ownerPackageName != expectedOwnerPackageName
             ) {
                 return CleanupAction.SKIP_UNSAFE
             }
@@ -84,7 +88,8 @@ internal object OrphanCleanupPolicy {
         if (
             observed.uri != uri ||
             observed.displayName != actualName ||
-            observed.relativePath != SCOPED_RELATIVE_PATH
+            observed.relativePath != SCOPED_RELATIVE_PATH ||
+            observed.ownerPackageName != expectedOwnerPackageName
         ) {
             return CleanupAction.SKIP_UNSAFE
         }
@@ -334,7 +339,7 @@ class OrphanCleanup(
         }
         val query = queryScopedEntry(record.mediaStoreUri!!, report) ?: return
         val observed = query.entry
-        when (OrphanCleanupPolicy.scopedAction(record, observed)) {
+        when (OrphanCleanupPolicy.scopedAction(record, observed, appContext.packageName)) {
             CleanupAction.DELETE -> {
                 try {
                     val count = resolver.delete(Uri.parse(record.mediaStoreUri), null, null)
@@ -472,6 +477,7 @@ class OrphanCleanup(
                         MediaStore.Video.Media.DISPLAY_NAME,
                         MediaStore.Video.Media.RELATIVE_PATH,
                         MediaStore.Video.Media.IS_PENDING,
+                        MediaStore.Video.Media.OWNER_PACKAGE_NAME,
                     ),
                     null,
                     null,
@@ -495,6 +501,7 @@ class OrphanCleanup(
                         displayName = it.nullableString(MediaStore.Video.Media.DISPLAY_NAME),
                         relativePath = it.nullableString(MediaStore.Video.Media.RELATIVE_PATH),
                         isPending = if (it.isNull(pendingColumn)) null else it.getInt(pendingColumn),
+                        ownerPackageName = it.nullableString(MediaStore.Video.Media.OWNER_PACKAGE_NAME),
                     ),
                 )
             } catch (error: Throwable) {

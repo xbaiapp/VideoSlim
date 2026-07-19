@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.StatFs
 import android.os.SystemClock
+import android.os.storage.StorageManager
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -440,20 +441,36 @@ internal class TranscodeEngine(
     }
 
     private fun ensureStorage(estimate: StorageEstimate) {
-        val cacheAvailable = StatFs(appContext.cacheDir.absolutePath).availableBytes
-        val publicAvailable = StatFs(publicStorageRoot().absolutePath).availableBytes
-        if (
-            cacheAvailable < estimate.cacheRequiredBytes ||
-            publicAvailable < estimate.publicRequiredBytes
-        ) {
+        val cacheRoot = appContext.cacheDir
+        val publicRoot = publicStorageRoot()
+        val cacheAvailable = StatFs(cacheRoot.absolutePath).availableBytes
+        val publicAvailable = StatFs(publicRoot.absolutePath).availableBytes
+        val sharesStoragePool = sharesStoragePool(cacheRoot, publicRoot)
+        if (!hasSufficientStorage(estimate, cacheAvailable, publicAvailable, sharesStoragePool)) {
+            val requirement =
+                if (sharesStoragePool == false) {
+                    "应用缓存需 ${estimate.cacheRequiredBytes / MEBIBYTE} MiB，" +
+                        "系统影片目录需 ${estimate.publicRequiredBytes / MEBIBYTE} MiB 可用空间"
+                } else {
+                    "临时文件与系统影片目录的共享存储需 " +
+                        "${estimate.sharedPoolRequiredBytes / MEBIBYTE} MiB 可用空间"
+                }
             throw EngineOperationException(
                 EngineFailure(
                     EngineErrorCode.INSUFFICIENT_STORAGE,
-                    "存储空间不足：应用缓存需 ${estimate.cacheRequiredBytes / MEBIBYTE} MiB，" +
-                        "系统影片目录需 ${estimate.publicRequiredBytes / MEBIBYTE} MiB 可用空间",
+                    "存储空间不足：$requirement",
                 ),
             )
         }
+    }
+
+    private fun sharesStoragePool(cacheRoot: File, publicRoot: File): Boolean? {
+        val storageManager = appContext.getSystemService(StorageManager::class.java) ?: return null
+        return runCatching {
+            storageManager.getUuidForPath(cacheRoot) == storageManager.getUuidForPath(publicRoot)
+        }.onFailure { error ->
+            log("storage volume identity unavailable ${error.javaClass.simpleName}")
+        }.getOrNull()
     }
 
     @Suppress("DEPRECATION")
