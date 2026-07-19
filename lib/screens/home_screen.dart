@@ -13,6 +13,7 @@ import '../logic/eta_estimator.dart';
 import '../models/compression_settings.dart';
 import '../models/device_capabilities.dart';
 import '../models/progress_event.dart';
+import '../models/task_snapshot.dart';
 import '../models/video_info.dart';
 import '../state/home_flow_state.dart';
 import '../widgets/m2_compression_card.dart';
@@ -255,7 +256,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       for (final event in buffered) {
         if (!_isCurrent(generation) || _terminalEventHandled) break;
-        if (event.taskId == snapshot.taskId) {
+        if (_isNewerThanSnapshot(event, snapshot)) {
           _consumeProgress(event, generation);
         }
       }
@@ -607,12 +608,13 @@ class _HomeScreenState extends State<HomeScreen> {
     switch (event.state) {
       case TaskState.running:
         final nextPercent = event.percent.clamp(0, 100).toDouble();
+        final nextPhase = _laterPhase(_taskPhase, event.phase);
         if (mounted) {
           _flow.update(() {
             _preparing = false;
             _processing = true;
-            _taskPhase = event.phase;
-            _cancelling = event.phase == TaskPhase.cancelling;
+            _taskPhase = nextPhase;
+            _cancelling = nextPhase == TaskPhase.cancelling;
             if (nextPercent > _percent) {
               _percent = nextPercent;
             }
@@ -819,13 +821,24 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (confirmed != true || !_isCurrent(generation)) return;
-    _flow.update(() => _cancelling = true);
+    final phaseBeforeCancellation = _taskPhase;
+    _flow.update(() {
+      _cancelling = true;
+      _taskPhase = TaskPhase.cancelling;
+      _remaining = null;
+      _etaStalled = false;
+    });
     try {
       await widget.engine.cancel(taskId);
       _logFlow('已向前台服务请求取消任务', details: <String, Object?>{'taskId': taskId});
     } catch (error, stackTrace) {
       if (mounted && generation == _generation) {
-        _flow.update(() => _cancelling = false);
+        _flow.update(() {
+          _cancelling = false;
+          if (_taskPhase == TaskPhase.cancelling) {
+            _taskPhase = phaseBeforeCancellation;
+          }
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(_errorTextFor(error, fallback: '无法取消任务，请稍后重试。')),
@@ -1870,8 +1883,29 @@ String _errorTextFor(Object error, {required String fallback}) {
   return fallback;
 }
 
-String _stableCode(String? raw, {String fallback = 'UNKNOWN'}) {
-  final normalized = raw?.trim().toUpperCase();
+int _phaseRank(TaskPhase phase) => switch (phase) {
+  TaskPhase.preparing => 0,
+  TaskPhase.encoding => 1,
+  TaskPhase.publishing => 2,
+  TaskPhase.cancelling => 3,
+  TaskPhase.finished => 4,
+};
+
+TaskPhase _laterPhase(TaskPhase current, TaskPhase incoming) =>
+    _phaseRank(incoming) >= _phaseRank(current) ? incoming : current;
+
+bool _isNewerThanSnapshot(ProgressEvent event, TaskSnapshot snapshot) {
+  if (event.taskId != snapshot.taskId || snapshot.state != TaskState.running) {
+    return false;
+  }
+  if (event.state != TaskState.running) return true;
+  if (event.percent > snapshot.percent) return true;
+  if (event.percent < snapshot.percent) return false;
+  return _phaseRank(event.phase) > _phaseRank(snapshot.phase);
+}
+
+String _stableCode(String? value, {String fallback = 'UNKNOWN'}) {
+  final normalized = value?.trim().toUpperCase();
   if (normalized == null || normalized.isEmpty) {
     return fallback;
   }

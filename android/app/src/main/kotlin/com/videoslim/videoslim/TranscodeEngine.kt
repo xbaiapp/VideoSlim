@@ -63,6 +63,21 @@ internal fun interface EngineProgressListener {
     fun onEvent(event: EngineProgressEvent)
 }
 
+internal class PublicationBoundary {
+    @Volatile
+    private var pending = false
+
+    fun begin() {
+        pending = true
+    }
+
+    fun complete() {
+        pending = false
+    }
+
+    fun shouldDeferCancellation(): Boolean = pending
+}
+
 internal class TranscodeEngine(
     context: Context,
     private val metadataReader: VideoMetadataReader = VideoMetadataReader(context),
@@ -143,13 +158,14 @@ internal class TranscodeEngine(
                 EngineFailure(EngineErrorCode.CANCELLED, "任务 ID 不匹配或已结束"),
             )
         }
-        val wasPublishing = task.stage == Stage.PUBLISHING
+        if (task.cancelRequested) return
+        val deferForPublication = task.publicationBoundary.shouldDeferCancellation()
         task.cancelRequested = true
         task.stage = Stage.CANCELLING
         emit(task, task.lastPercent, STATE_RUNNING)
         mainHandler.removeCallbacks(task.progressPoller)
         runCatching { task.transformer?.cancel() }
-        if (!wasPublishing) {
+        if (!deferForPublication) {
             finishCancelled(task)
         }
     }
@@ -394,6 +410,7 @@ internal class TranscodeEngine(
                         },
                     ).build()
             transformer.start(composition, task.tempFile.absolutePath)
+            emit(task, task.lastPercent, STATE_RUNNING)
             scheduleProgress(task)
             log("task=${task.id} transformer started temp=${task.tempFile.name}")
         } catch (error: Throwable) {
@@ -431,6 +448,7 @@ internal class TranscodeEngine(
             finishCancelled(task)
             return
         }
+        task.publicationBoundary.begin()
         task.stage = Stage.PUBLISHING
         emit(task, max(task.lastPercent, PUBLISHING_PERCENT), STATE_RUNNING)
         ioExecutor.execute {
@@ -446,6 +464,7 @@ internal class TranscodeEngine(
                     discardPublished(task, publishedUri)
                     mainHandler.post {
                         runCatching { task.tempFile.delete() }
+                        task.publicationBoundary.complete()
                         if (!disposed && isCurrent(task)) finishCancelled(task)
                     }
                 } else {
@@ -456,9 +475,11 @@ internal class TranscodeEngine(
                         if (disposed || !isCurrent(task) || task.cancelRequested) {
                             discardPublished(task, publishedUri)
                             runCatching { task.tempFile.delete() }
+                            task.publicationBoundary.complete()
                             if (!disposed && isCurrent(task)) finishCancelled(task)
                             return@post
                         }
+                        task.publicationBoundary.complete()
                         cleanupTempAndRecovery(task)
                         task.stage = Stage.FINISHED
                         activeTask = null
@@ -472,11 +493,17 @@ internal class TranscodeEngine(
                     log("task=${task.id} publication cleanup unconfirmed; recovery retained")
                 }
                 if (task.cancelRequested || disposed) {
-                    postToMain {
+                    mainHandler.post {
+                        task.publicationBoundary.complete()
                         if (isCurrent(task)) finishCancelled(task)
                     }
                 } else {
-                    postToMain { fail(task, EngineErrorMapper.fromThrowable(error), error) }
+                    mainHandler.post {
+                        task.publicationBoundary.complete()
+                        if (!disposed && isCurrent(task)) {
+                            fail(task, EngineErrorMapper.fromThrowable(error), error)
+                        }
+                    }
                 }
             }
         }
@@ -762,6 +789,7 @@ internal class TranscodeEngine(
         var sourceAccessAtStart: SourceAccessProbeResult? = null
         var compatibleDecoderNames: Set<String> = emptySet()
         var compatibleEncoderNames: Set<String> = emptySet()
+        val publicationBoundary = PublicationBoundary()
         var transformer: Transformer? = null
         var failureProbeStarted: Boolean = false
         var stage: Stage = Stage.PREPARING

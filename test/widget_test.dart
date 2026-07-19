@@ -905,6 +905,8 @@ void main() {
 
     expect(engine.cancelCalls, <String>['task-1']);
     expect(find.text('正在取消…'), findsOneWidget);
+    expect(find.text('正在取消并清理未完成文件…'), findsOneWidget);
+    expect(find.text('正在压缩视频，可以切换应用或熄屏'), findsNothing);
   });
 
   testWidgets('running native task snapshot reconnects the progress page', (
@@ -975,6 +977,53 @@ void main() {
       await tester.pump();
 
       expect(find.text('73%'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'older buffered phase cannot regress a cancelling task snapshot',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine()
+        ..snapshotCompleter = Completer<TaskSnapshot?>()
+        ..infoByUri[_sourceUri] = _videoInfo();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await tester.pump();
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'restored-task',
+          percent: 42,
+          state: TaskState.running,
+          phase: TaskPhase.encoding,
+        ),
+      );
+      await tester.pump();
+      engine.snapshotCompleter!.complete(
+        TaskSnapshot(
+          taskId: 'restored-task',
+          percent: 42,
+          state: TaskState.running,
+          phase: TaskPhase.cancelling,
+          sourceUri: _sourceUri,
+          outputFileName: 'restored_slim.mp4',
+          startedAtEpochMs: DateTime(2026, 7, 19, 1).millisecondsSinceEpoch,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('正在取消并清理未完成文件…'), findsOneWidget);
+      final cancelButton = tester.widget<OutlinedButton>(
+        find.byKey(const ValueKey<String>('cancel-processing')),
+      );
+      expect(cancelButton.onPressed, isNull);
+      expect(find.textContaining('预计剩余'), findsNothing);
     },
   );
 
