@@ -8,6 +8,7 @@ import '../models/process_request.dart';
 import '../models/progress_event.dart';
 import '../models/video_info.dart';
 import 'video_engine.dart';
+import 'video_picker.dart';
 
 /// [VideoEngine] backed by VideoSlim's Android platform channels.
 final class MethodChannelVideoEngine implements VideoEngine {
@@ -205,7 +206,7 @@ final class MethodChannelVideoEngine implements VideoEngine {
 }
 
 /// Dart adapter for VideoSlim's system gallery and document pickers.
-final class MethodChannelVideoPicker {
+final class MethodChannelVideoPicker implements VideoPicker {
   MethodChannelVideoPicker({
     MethodChannel methodChannel = const MethodChannel('videoslim/picker'),
     AppLogger? logger,
@@ -217,6 +218,7 @@ final class MethodChannelVideoPicker {
   final _LoggedMethodInvoker _invoker;
 
   /// Opens Android's video-only photo picker.
+  @override
   Future<String?> pickFromGallery() {
     return _invoker.invoke<String?>(
       'pickFromGallery',
@@ -226,6 +228,7 @@ final class MethodChannelVideoPicker {
   }
 
   /// Opens Android's video-only document picker.
+  @override
   Future<String?> pickFromFiles() {
     return _invoker.invoke<String?>(
       'pickFromFiles',
