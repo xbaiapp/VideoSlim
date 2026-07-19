@@ -10,6 +10,7 @@ import java.util.Base64
 enum class RecoveryStage {
     PREPARING,
     TRANSFORMING,
+    ALLOCATED,
     PUBLISHING,
     PUBLISHED,
     DISCARDING,
@@ -137,7 +138,9 @@ internal fun isAllowedRecoveryTransition(
     current == next ||
         when (current) {
             RecoveryStage.PREPARING -> next == RecoveryStage.TRANSFORMING
-            RecoveryStage.TRANSFORMING -> next == RecoveryStage.PUBLISHING
+            RecoveryStage.TRANSFORMING ->
+                next == RecoveryStage.ALLOCATED || next == RecoveryStage.PUBLISHING
+            RecoveryStage.ALLOCATED -> next == RecoveryStage.PUBLISHING
             RecoveryStage.PUBLISHING ->
                 next == RecoveryStage.PUBLISHED || next == RecoveryStage.DISCARDING
             RecoveryStage.PUBLISHED -> next == RecoveryStage.DISCARDING
@@ -174,6 +177,16 @@ private fun validateRecoveryRecord(record: TaskRecoveryRecord): String? {
                 record.legacyOutputPath != null
             ) {
                 return "publication target exists before publishing"
+            }
+        }
+        RecoveryStage.ALLOCATED -> {
+            if (
+                record.actualOutputDisplayName != null ||
+                record.mediaStoreUri == null ||
+                record.legacyOutputPath != null ||
+                !OrphanCleanupPolicy.isAppMediaVideoUri(record.mediaStoreUri)
+            ) {
+                return "allocated record has an invalid unverified scoped target"
             }
         }
         RecoveryStage.PUBLISHING,
@@ -247,7 +260,11 @@ class TaskRecoveryStore(
             throw IllegalStateException("Invalid recovery stage transition ${current.stage} -> $stage")
         }
         if (current.stage == stage) return@synchronized current
-        if (stage == RecoveryStage.PUBLISHING || stage == RecoveryStage.PUBLISHED) {
+        if (
+            stage == RecoveryStage.ALLOCATED ||
+            stage == RecoveryStage.PUBLISHING ||
+            stage == RecoveryStage.PUBLISHED
+        ) {
             throw IllegalStateException("Publication stages require their transaction-specific boundary")
         }
         current.copy(stage = stage).also { persist(it, "stage") }
@@ -271,8 +288,17 @@ class TaskRecoveryStore(
             }
             throw IllegalStateException("A different publication target is already recorded")
         }
-        if (current.stage != RecoveryStage.TRANSFORMING) {
+        if (
+            current.stage != RecoveryStage.TRANSFORMING &&
+            current.stage != RecoveryStage.ALLOCATED
+        ) {
             throw IllegalStateException("Publication target cannot be recorded in ${current.stage}")
+        }
+        if (
+            current.stage == RecoveryStage.ALLOCATED &&
+            (current.mediaStoreUri != mediaStoreUri || canonicalLegacyOutputPath != null)
+        ) {
+            throw IllegalStateException("Verified publication target does not match its allocation")
         }
         val updated =
             current.copy(
@@ -283,6 +309,29 @@ class TaskRecoveryStore(
             )
         validateRecoveryRecord(updated)?.let { throw IllegalArgumentException(it) }
         persist(updated, "publication-target")
+        updated
+    }
+
+    @Throws(IOException::class)
+    fun recordScopedAllocation(
+        taskId: String,
+        mediaStoreUri: String,
+    ): TaskRecoveryRecord = synchronized(TRANSACTION_LOCK) {
+        val current = loadForMutation(taskId)
+        if (current.stage == RecoveryStage.ALLOCATED) {
+            if (current.mediaStoreUri == mediaStoreUri) return@synchronized current
+            throw IllegalStateException("A different scoped allocation is already recorded")
+        }
+        if (current.stage != RecoveryStage.TRANSFORMING) {
+            throw IllegalStateException("Scoped allocation cannot be recorded in ${current.stage}")
+        }
+        val updated =
+            current.copy(
+                stage = RecoveryStage.ALLOCATED,
+                mediaStoreUri = mediaStoreUri,
+            )
+        validateRecoveryRecord(updated)?.let { throw IllegalArgumentException(it) }
+        persist(updated, "scoped-allocation")
         updated
     }
 

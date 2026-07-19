@@ -49,6 +49,13 @@ internal class ProcessingService : Service() {
             }
         val publicationObserver =
             object : PublicationObserver {
+                override fun onScopedUriAllocated(mediaStoreUri: String) {
+                    val internalTaskId =
+                        engineTaskId
+                            ?: throw IllegalStateException("Scoped row allocated without an engine task")
+                    recoveryStore.recordScopedAllocation(internalTaskId, mediaStoreUri)
+                }
+
                 override fun onPublicationTargetAllocated(target: PublicationTarget) {
                     val internalTaskId =
                         engineTaskId

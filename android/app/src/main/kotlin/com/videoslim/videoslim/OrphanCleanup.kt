@@ -45,6 +45,30 @@ internal object OrphanCleanupPolicy {
         observed: ScopedMediaEntry?,
     ): CleanupAction {
         val uri = record.mediaStoreUri
+        if (record.stage == RecoveryStage.ALLOCATED) {
+            if (
+                uri == null ||
+                record.actualOutputDisplayName != null ||
+                record.legacyOutputPath != null ||
+                !isAppMediaVideoUri(uri) ||
+                !isValidRecoveryTempFileName(record.tempFileName)
+            ) {
+                return CleanupAction.SKIP_UNSAFE
+            }
+            if (observed == null) return CleanupAction.ALREADY_ABSENT
+            if (
+                observed.uri != uri ||
+                observed.relativePath != SCOPED_RELATIVE_PATH ||
+                observed.displayName?.let(::isSafeOwnedOutputName) != true
+            ) {
+                return CleanupAction.SKIP_UNSAFE
+            }
+            return when (observed.isPending) {
+                1 -> CleanupAction.DELETE
+                0 -> CleanupAction.KEEP
+                else -> CleanupAction.SKIP_UNSAFE
+            }
+        }
         val actualName = record.actualOutputDisplayName
         if (
             uri == null ||
@@ -314,15 +338,27 @@ class OrphanCleanup(
             CleanupAction.DELETE -> {
                 try {
                     val count = resolver.delete(Uri.parse(record.mediaStoreUri), null, null)
+                    var deletionConfirmed = count > 0
                     if (count > 0) {
                         report.outputsDeleted += 1
                         report.mediaRowsDeleted += count
                         report.addDetail("deleted exact pending scoped output task=${record.taskId}")
                     } else {
-                        report.alreadyAbsent += 1
-                        report.addDetail("pending scoped output disappeared before delete task=${record.taskId}")
+                        val verification = queryScopedEntry(record.mediaStoreUri, report)
+                        if (verification != null && verification.entry == null) {
+                            deletionConfirmed = true
+                            report.alreadyAbsent += 1
+                            report.addDetail(
+                                "pending scoped output confirmed absent after zero-row delete task=${record.taskId}",
+                            )
+                        } else if (verification != null) {
+                            report.failures += 1
+                            report.addDetail(
+                                "scoped output still exists after zero-row delete task=${record.taskId}",
+                            )
+                        }
                     }
-                    clearRecord(record, report)
+                    if (deletionConfirmed) clearRecord(record, report)
                 } catch (error: Throwable) {
                     failure(report, "pending scoped output delete failed task=${record.taskId}", error)
                 }
@@ -385,6 +421,17 @@ class OrphanCleanup(
                 if (count > 0) {
                     report.mediaRowsDeleted += count
                     deletedSomething = true
+                } else {
+                    val verification = queryLegacyEntry(uri, report)
+                    if (verification == null) {
+                        allClean = false
+                    } else if (verification.entry != null) {
+                        allClean = false
+                        report.failures += 1
+                        report.addDetail(
+                            "legacy row still exists after zero-row delete task=${record.taskId}",
+                        )
+                    }
                 }
             } catch (error: Throwable) {
                 allClean = false

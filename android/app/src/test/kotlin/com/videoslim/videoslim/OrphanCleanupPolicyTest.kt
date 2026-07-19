@@ -50,6 +50,29 @@ class OrphanCleanupPolicyTest {
     }
 
     @Test
+    fun `unverified scoped allocation deletes only its exact pending row`() {
+        val record =
+            scopedRecord().copy(
+                stage = RecoveryStage.ALLOCATED,
+                actualOutputDisplayName = null,
+            )
+        val pending = scopedEntry(isPending = 1)
+
+        assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.scopedAction(record, pending))
+        assertEquals(
+            CleanupAction.KEEP,
+            OrphanCleanupPolicy.scopedAction(record, pending.copy(isPending = 0)),
+        )
+        assertEquals(
+            CleanupAction.SKIP_UNSAFE,
+            OrphanCleanupPolicy.scopedAction(
+                record,
+                pending.copy(relativePath = "Movies/Other/"),
+            ),
+        )
+    }
+
+    @Test
     fun `scoped media rejects non app and malformed URIs`() {
         val entry = scopedEntry(isPending = 1)
         listOf(

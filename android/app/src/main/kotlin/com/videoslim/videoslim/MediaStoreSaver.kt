@@ -20,6 +20,9 @@ data class PublicationTarget(
 )
 
 interface PublicationObserver {
+    /** Called immediately after a scoped row insert, before any ownership-field query. */
+    fun onScopedUriAllocated(mediaStoreUri: String)
+
     /** Called synchronously immediately after the output row (and legacy path) is allocated. */
     fun onPublicationTargetAllocated(target: PublicationTarget)
 
@@ -32,6 +35,8 @@ interface PublicationObserver {
     companion object {
         val NONE: PublicationObserver =
             object : PublicationObserver {
+                override fun onScopedUriAllocated(mediaStoreUri: String) = Unit
+
                 override fun onPublicationTargetAllocated(target: PublicationTarget) = Unit
 
                 override fun onPublicationCompleted(target: PublicationTarget) = Unit
@@ -95,6 +100,7 @@ internal class MediaStoreSaver(
                 ?: throw IOException("MediaStore insert returned null")
         var target: PublicationTarget? = null
         try {
+            publicationObserver.onScopedUriAllocated(outputUri.toString())
             val allocatedTarget = readScopedPublicationTarget(outputUri)
             target = allocatedTarget
             publicationObserver.onPublicationTargetAllocated(allocatedTarget)

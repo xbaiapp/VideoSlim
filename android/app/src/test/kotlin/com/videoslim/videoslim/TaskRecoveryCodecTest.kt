@@ -32,6 +32,21 @@ class TaskRecoveryCodecTest {
     }
 
     @Test
+    fun `round trips an unverified scoped allocation`() {
+        val record =
+            completeRecord().copy(
+                stage = RecoveryStage.ALLOCATED,
+                actualOutputDisplayName = null,
+                legacyOutputPath = null,
+            )
+
+        assertEquals(
+            TaskRecoveryDecodeResult.Success(record),
+            TaskRecoveryCodec.decode(TaskRecoveryCodec.encode(record)),
+        )
+    }
+
+    @Test
     fun `rejects corrupt unknown incomplete and traversal records`() {
         val encoded = TaskRecoveryCodec.encode(completeRecord())
         val invalid =
@@ -66,15 +81,26 @@ class TaskRecoveryCodecTest {
     fun `rejects publication fields outside their transaction stage`() {
         val publishingWithoutUri = completeRecord().copy(mediaStoreUri = null, legacyOutputPath = null)
         val transformingWithTarget = completeRecord().copy(stage = RecoveryStage.TRANSFORMING)
+        val allocatedWithVerifiedName = completeRecord().copy(stage = RecoveryStage.ALLOCATED)
+        val allocatedWithoutUri =
+            completeRecord().copy(
+                stage = RecoveryStage.ALLOCATED,
+                actualOutputDisplayName = null,
+                mediaStoreUri = null,
+                legacyOutputPath = null,
+            )
 
-        assertTrue(
-            TaskRecoveryCodec.decode(TaskRecoveryCodec.encode(publishingWithoutUri)) is
-                TaskRecoveryDecodeResult.Invalid,
-        )
-        assertTrue(
-            TaskRecoveryCodec.decode(TaskRecoveryCodec.encode(transformingWithTarget)) is
-                TaskRecoveryDecodeResult.Invalid,
-        )
+        listOf(
+            publishingWithoutUri,
+            transformingWithTarget,
+            allocatedWithVerifiedName,
+            allocatedWithoutUri,
+        ).forEach { record ->
+            assertTrue(
+                TaskRecoveryCodec.decode(TaskRecoveryCodec.encode(record)) is
+                    TaskRecoveryDecodeResult.Invalid,
+            )
+        }
     }
 
     @Test
@@ -94,12 +120,15 @@ class TaskRecoveryCodecTest {
     fun `stage transitions are monotonic and idempotent`() {
         RecoveryStage.entries.forEach { stage -> assertTrue(isAllowedRecoveryTransition(stage, stage)) }
         assertTrue(isAllowedRecoveryTransition(RecoveryStage.PREPARING, RecoveryStage.TRANSFORMING))
+        assertTrue(isAllowedRecoveryTransition(RecoveryStage.TRANSFORMING, RecoveryStage.ALLOCATED))
+        assertTrue(isAllowedRecoveryTransition(RecoveryStage.ALLOCATED, RecoveryStage.PUBLISHING))
         assertTrue(isAllowedRecoveryTransition(RecoveryStage.TRANSFORMING, RecoveryStage.PUBLISHING))
         assertTrue(isAllowedRecoveryTransition(RecoveryStage.PUBLISHING, RecoveryStage.PUBLISHED))
         assertTrue(isAllowedRecoveryTransition(RecoveryStage.PUBLISHING, RecoveryStage.DISCARDING))
         assertTrue(isAllowedRecoveryTransition(RecoveryStage.PUBLISHED, RecoveryStage.DISCARDING))
         assertFalse(isAllowedRecoveryTransition(RecoveryStage.PUBLISHED, RecoveryStage.PUBLISHING))
         assertFalse(isAllowedRecoveryTransition(RecoveryStage.DISCARDING, RecoveryStage.PUBLISHED))
+        assertFalse(isAllowedRecoveryTransition(RecoveryStage.ALLOCATED, RecoveryStage.PUBLISHED))
         assertFalse(isAllowedRecoveryTransition(RecoveryStage.TRANSFORMING, RecoveryStage.PREPARING))
         assertFalse(isAllowedRecoveryTransition(RecoveryStage.PREPARING, RecoveryStage.PUBLISHED))
     }
