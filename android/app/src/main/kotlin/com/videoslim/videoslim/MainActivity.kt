@@ -1,5 +1,99 @@
 package com.videoslim.videoslim
 
-import io.flutter.embedding.android.FlutterActivity
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import io.flutter.embedding.android.FlutterFragmentActivity
+import io.flutter.embedding.engine.FlutterEngine
+import java.time.Instant
+import java.util.concurrent.atomic.AtomicLong
 
-class MainActivity : FlutterActivity()
+class MainActivity : FlutterFragmentActivity() {
+    private var logStore: AppLogStore? = null
+    private var logChannel: LogChannel? = null
+    private var pickerChannel: VideoPickerChannel? = null
+    private var engineChannel: EngineChannel? = null
+    private var pendingLegacyPermission: ((Boolean) -> Unit)? = null
+    private val nativeLogSequence = AtomicLong()
+
+    private val legacyWritePermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val callback = pendingLegacyPermission
+            pendingLegacyPermission = null
+            callback?.invoke(granted)
+        }
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        val messenger = flutterEngine.dartExecutor.binaryMessenger
+        val store = AppLogStore(this)
+        logStore = store
+        logChannel = LogChannel(this, messenger, store)
+        pickerChannel = VideoPickerChannel(this, messenger, ::appendNativeLog)
+        val metadataReader = VideoMetadataReader(this)
+        val transcodeEngine =
+            TranscodeEngine(
+                context = this,
+                metadataReader = metadataReader,
+                mediaStoreSaver = MediaStoreSaver(this),
+                logger = ::appendNativeLog,
+            )
+        engineChannel =
+            EngineChannel(
+                messenger = messenger,
+                metadataReader = metadataReader,
+                transcodeEngine = transcodeEngine,
+                requestLegacyWritePermission = ::requestLegacyWritePermission,
+                logger = ::appendNativeLog,
+            )
+        appendNativeLog("Flutter engine channels configured")
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        pendingLegacyPermission?.invoke(false)
+        pendingLegacyPermission = null
+        engineChannel?.dispose()
+        engineChannel = null
+        pickerChannel?.dispose()
+        pickerChannel = null
+        logChannel?.dispose()
+        logChannel = null
+        appendNativeLog("Flutter engine channels disposed")
+        logStore = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    private fun requestLegacyWritePermission(callback: (Boolean) -> Unit) {
+        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
+            callback(true)
+            return
+        }
+        if (
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            callback(true)
+            return
+        }
+        if (pendingLegacyPermission != null) {
+            callback(false)
+            return
+        }
+        pendingLegacyPermission = callback
+        legacyWritePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+    }
+
+    private fun appendNativeLog(message: String) {
+        val store = logStore ?: return
+        runCatching {
+            val eventId = "native-${nativeLogSequence.incrementAndGet()}"
+            store.append(
+                "${Instant.now()} [INFO] [native] [event:$eventId] $message",
+            )
+        }
+    }
+}
