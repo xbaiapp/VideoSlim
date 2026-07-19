@@ -11,7 +11,7 @@
 - ABI：仅 `arm64-v8a`
 - APK：`/root/artifacts/videoslim/m2/VideoSlim-M2-arm64-v1.2.0.apk`
 - 大小：`17,952,527` bytes
-- SHA-256：`3240f478d7c6af3b1339f3abeaebef87d0913c49ba79def74ea6b61a71aa2e11`
+- SHA-256：`7767ec5613a4185f61fa7f10ba67b1a641092332100b785474a0b59e2ac6893a`
 - 签名：Android debug certificate，APK Signature Scheme v2；仅用于当前私有真机验收，不是生产签名。
 
 ## 2. M2 已实现范围
@@ -42,9 +42,10 @@
 - 进程死亡不承诺断点续传；下次合法启动按 recovery journal 对账清理；
 - journal 记录私有随机临时文件、精确 App 创建的 MediaStore URI/legacy 路径、实际输出文件名及发布阶段；
 - `ALLOCATED` 阶段在 MediaStore 插入返回 URI 后、首次目标字段回读前同步落盘，避免回读和回滚同时失败时遗失 `IS_PENDING` 行；
+- 恢复删除同时核对 URI、相对目录、待发布状态和 `OWNER_PACKAGE_NAME`，不能证明仍由本 App 所有时拒绝删除；
 - `DISCARDING` 阶段区分“成功发布应保留”和“取消/失败后应删除”的完整输出；
 - 删除返回 0 时重新查询精确 URI；只有确认目标不存在后才清 journal，无法确认时保留后续对账依据；
-- 空间预检保守覆盖临时转码文件和公共发布副本同时存在的容量；
+- 空间预检通过 `StorageManager.getUuidForPath()` 区分存储卷：同卷按临时文件和公共副本重叠峰值检查，异卷分别检查，卷身份不可用时保守按同卷处理；
 - 不可解码的 journal 只清除私有 journal 值，不触碰无可验证所有权的公共媒体；
 - MediaStore 实际分配文件名实时传回 Flutter；结果页显示 `系统相册 > Movies > VideoSlim > 实际文件名`；
 - 输出 metadata 回读失败时仍保留实际位置、打开和分享入口，不会重复压缩；
@@ -57,7 +58,7 @@
 - Dart format：35 个文件，0 个需修改；
 - Flutter analyze：0 issues；
 - Flutter tests：99/99；
-- Android JVM tests：68/68，0 failures、0 errors、0 skipped；
+- Android JVM tests：69/69，0 failures、0 errors、0 skipped；
 - Android Debug/Release Kotlin 编译；
 - Android `lintDebug` 与 `lintRelease`；
 - `git diff --check`；
@@ -102,4 +103,5 @@ VPS 无 Android 设备或模拟器，以下不能由编译、JVM 测试或静态
 - `da8e9d2` recovery 生命周期边界；
 - `e032e14` M2 Flutter 完整工作流；
 - `a5fba2e` 发布、取消、timeout 和 recovery 加固；
-- `f974ce7` MediaStore 分配恢复、删除复查和共享存储容量加固。
+- `f974ce7` MediaStore 分配恢复、删除复查和共享存储容量加固；
+- `8a4346a` scoped 所有权证明和按存储卷建模的容量预检。

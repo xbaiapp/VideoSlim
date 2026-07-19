@@ -3,7 +3,7 @@
 > 状态：M2 自动化质量门禁和 arm64 Release APK 构建已完成；以下项目仍待项目所有者在真机执行，勾选前不代表已通过。
 >
 > - 验收 APK：`VideoSlim-M2-arm64-v1.2.0.apk`（`1.2.0+3`）
-> - SHA-256：`3240f478d7c6af3b1339f3abeaebef87d0913c49ba79def74ea6b61a71aa2e11`
+> - SHA-256：`7767ec5613a4185f61fa7f10ba67b1a641092332100b785474a0b59e2ac6893a`
 > - 本机路径：`/root/artifacts/videoslim/m2/VideoSlim-M2-arm64-v1.2.0.apk`
 > - 签名：debug certificate，仅用于当前私有真机验收。
 
