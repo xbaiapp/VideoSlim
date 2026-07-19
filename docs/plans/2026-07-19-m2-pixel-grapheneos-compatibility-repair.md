@@ -8,6 +8,8 @@
 
 **Tech Stack:** Flutter/Dart、Kotlin、Android SAF/ContentResolver、MediaCodecList、Media3 Transformer 1.10.1、JUnit 4、Flutter test。
 
+**实施状态（2026-07-19）：** Task 1–8 的源码、自动化门禁、独立复审、`1.2.3+6` ARM64 APK 构建与静态核验已完成。当前源码提交为 `b0d1c29f55482d4c7583437f36c965c3355e0f63`，APK SHA-256 为 `2da1a990cb29a7c00628e6e7a4fb667aa1e470dfe6ce93250966f8363cf0862a`。Pixel 10 Pro / GrapheneOS / Android 17 真机短片和约 98 分钟目标视频仍待执行，完成前不得标记 M2 最终 PASS。
+
 ---
 
 ## 事故基线与约束
