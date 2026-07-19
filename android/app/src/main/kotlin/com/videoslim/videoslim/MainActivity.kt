@@ -1,12 +1,17 @@
 package com.videoslim.videoslim
 
 import android.Manifest
+import android.app.Activity
+import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+import org.json.JSONObject
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicLong
 
@@ -15,7 +20,9 @@ class MainActivity : FlutterFragmentActivity() {
     private var logChannel: LogChannel? = null
     private var pickerChannel: VideoPickerChannel? = null
     private var engineChannel: EngineChannel? = null
+    private var mediaActionsChannel: MediaActionsChannel? = null
     private var pendingLegacyPermission: ((Boolean) -> Unit)? = null
+    private var pendingDeleteConsent: ((Boolean) -> Unit)? = null
     private val nativeLogSequence = AtomicLong()
 
     private val legacyWritePermissionLauncher =
@@ -23,6 +30,13 @@ class MainActivity : FlutterFragmentActivity() {
             val callback = pendingLegacyPermission
             pendingLegacyPermission = null
             callback?.invoke(granted)
+        }
+
+    private val deleteConsentLauncher =
+        registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+            val callback = pendingDeleteConsent
+            pendingDeleteConsent = null
+            callback?.invoke(result.resultCode == Activity.RESULT_OK)
         }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -48,10 +62,23 @@ class MainActivity : FlutterFragmentActivity() {
                 requestLegacyWritePermission = ::requestLegacyWritePermission,
                 logger = ::appendNativeLog,
             )
+        mediaActionsChannel =
+            MediaActionsChannel(
+                activity = this,
+                channel = MethodChannel(messenger, "videoslim/media_actions"),
+                deleteConsentLauncher = DeleteConsentLauncher(::launchDeleteConsent),
+                log = { level, event, details ->
+                    appendNativeLog("$level $event ${JSONObject(details).toString()}")
+                },
+            )
         appendNativeLog("Flutter engine channels configured")
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        mediaActionsChannel?.dispose()
+        mediaActionsChannel = null
+        pendingDeleteConsent?.invoke(false)
+        pendingDeleteConsent = null
         pendingLegacyPermission?.invoke(false)
         pendingLegacyPermission = null
         engineChannel?.dispose()
@@ -63,6 +90,20 @@ class MainActivity : FlutterFragmentActivity() {
         appendNativeLog("Flutter engine channels disposed")
         logStore = null
         super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    private fun launchDeleteConsent(
+        intentSender: IntentSender,
+        onDecision: (Boolean) -> Unit,
+    ) {
+        check(pendingDeleteConsent == null) { "已有系统删除确认正在进行" }
+        pendingDeleteConsent = onDecision
+        try {
+            deleteConsentLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
+        } catch (error: Throwable) {
+            pendingDeleteConsent = null
+            throw error
+        }
     }
 
     private fun requestLegacyWritePermission(callback: (Boolean) -> Unit) {
