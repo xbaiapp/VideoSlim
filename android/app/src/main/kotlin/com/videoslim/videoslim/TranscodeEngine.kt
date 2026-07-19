@@ -464,8 +464,11 @@ internal class TranscodeEngine(
                     discardPublished(task, publishedUri)
                     mainHandler.post {
                         runCatching { task.tempFile.delete() }
-                        task.publicationBoundary.complete()
-                        if (!disposed && isCurrent(task)) finishCancelled(task)
+                        try {
+                            if (!disposed && isCurrent(task)) finishCancelled(task)
+                        } finally {
+                            task.publicationBoundary.complete()
+                        }
                     }
                 } else {
                     // Always post this final cleanup, even if dispose() happens after the I/O
@@ -475,16 +478,22 @@ internal class TranscodeEngine(
                         if (disposed || !isCurrent(task) || task.cancelRequested) {
                             discardPublished(task, publishedUri)
                             runCatching { task.tempFile.delete() }
-                            task.publicationBoundary.complete()
-                            if (!disposed && isCurrent(task)) finishCancelled(task)
+                            try {
+                                if (!disposed && isCurrent(task)) finishCancelled(task)
+                            } finally {
+                                task.publicationBoundary.complete()
+                            }
                             return@post
                         }
-                        task.publicationBoundary.complete()
-                        cleanupTempAndRecovery(task)
-                        task.stage = Stage.FINISHED
-                        activeTask = null
-                        emit(task, 100.0, STATE_SUCCESS, outputUri = publishedUri)
-                        log("task=${task.id} success output=$publishedUri")
+                        try {
+                            cleanupTempAndRecovery(task)
+                            task.stage = Stage.FINISHED
+                            activeTask = null
+                            emit(task, 100.0, STATE_SUCCESS, outputUri = publishedUri)
+                            log("task=${task.id} success output=$publishedUri")
+                        } finally {
+                            task.publicationBoundary.complete()
+                        }
                     }
                 }
             } catch (error: Throwable) {
@@ -494,14 +503,20 @@ internal class TranscodeEngine(
                 }
                 if (task.cancelRequested || disposed) {
                     mainHandler.post {
-                        task.publicationBoundary.complete()
-                        if (isCurrent(task)) finishCancelled(task)
+                        try {
+                            if (isCurrent(task)) finishCancelled(task)
+                        } finally {
+                            task.publicationBoundary.complete()
+                        }
                     }
                 } else {
                     mainHandler.post {
-                        task.publicationBoundary.complete()
-                        if (!disposed && isCurrent(task)) {
-                            fail(task, EngineErrorMapper.fromThrowable(error), error)
+                        try {
+                            if (!disposed && isCurrent(task)) {
+                                fail(task, EngineErrorMapper.fromThrowable(error), error)
+                            }
+                        } finally {
+                            task.publicationBoundary.complete()
                         }
                     }
                 }

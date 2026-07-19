@@ -82,6 +82,8 @@ final class _FakeEngine implements VideoEngine {
   Completer<DeviceCapabilities>? capabilitiesCompleter;
   Object? processError;
   Completer<String>? processCompleter;
+  Object? cancelError;
+  Completer<void>? cancelCompleter;
   String taskId = 'task-1';
   TaskSnapshot? snapshot;
   Completer<TaskSnapshot?>? snapshotCompleter;
@@ -145,7 +147,13 @@ final class _FakeEngine implements VideoEngine {
   }
 
   @override
-  Future<void> cancel(String taskId) async => cancelCalls.add(taskId);
+  Future<void> cancel(String taskId) async {
+    cancelCalls.add(taskId);
+    final completer = cancelCompleter;
+    if (completer != null) await completer.future;
+    final error = cancelError;
+    if (error != null) throw error;
+  }
 
   @override
   Future<String> extractAudio(AudioExtractRequest request) {
@@ -907,6 +915,94 @@ void main() {
     expect(find.text('正在取消…'), findsOneWidget);
     expect(find.text('正在取消并清理未完成文件…'), findsOneWidget);
     expect(find.text('正在压缩视频，可以切换应用或熄屏'), findsNothing);
+  });
+
+  testWidgets('cancel failure preserves a newer publishing phase', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine()
+      ..cancelCompleter = Completer<void>()
+      ..cancelError = const VideoEngineException(
+        code: 'UNKNOWN',
+        message: 'cancel failed',
+      );
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapCompression(tester);
+    await tester.tap(find.byKey(const ValueKey<String>('cancel-processing')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey<String>('confirm-cancel-task')));
+    await tester.pump();
+
+    engine.progress.add(
+      const ProgressEvent(
+        taskId: 'task-1',
+        percent: 99,
+        state: TaskState.running,
+        phase: TaskPhase.publishing,
+      ),
+    );
+    await tester.pump();
+    expect(find.text('正在取消并清理未完成文件…'), findsOneWidget);
+
+    engine.cancelCompleter!.complete();
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('正在保存到系统相册…'), findsOneWidget);
+    final cancelButton = tester.widget<OutlinedButton>(
+      find.byKey(const ValueKey<String>('cancel-processing')),
+    );
+    expect(cancelButton.onPressed, isNotNull);
+  });
+
+  testWidgets('cancel failure keeps a native cancelling confirmation', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine()
+      ..cancelCompleter = Completer<void>()
+      ..cancelError = const VideoEngineException(
+        code: 'UNKNOWN',
+        message: 'cancel failed',
+      );
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapCompression(tester);
+    await tester.tap(find.byKey(const ValueKey<String>('cancel-processing')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey<String>('confirm-cancel-task')));
+    await tester.pump();
+
+    engine.progress.add(
+      const ProgressEvent(
+        taskId: 'task-1',
+        percent: 42,
+        state: TaskState.running,
+        phase: TaskPhase.cancelling,
+      ),
+    );
+    await tester.pump();
+    engine.cancelCompleter!.complete();
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('正在取消并清理未完成文件…'), findsOneWidget);
+    final cancelButton = tester.widget<OutlinedButton>(
+      find.byKey(const ValueKey<String>('cancel-processing')),
+    );
+    expect(cancelButton.onPressed, isNull);
   });
 
   testWidgets('running native task snapshot reconnects the progress page', (

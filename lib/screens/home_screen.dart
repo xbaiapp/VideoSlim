@@ -614,7 +614,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _preparing = false;
             _processing = true;
             _taskPhase = nextPhase;
-            _cancelling = nextPhase == TaskPhase.cancelling;
+            _cancelling = _cancelling || nextPhase == TaskPhase.cancelling;
             if (nextPercent > _percent) {
               _percent = nextPercent;
             }
@@ -821,10 +821,8 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (confirmed != true || !_isCurrent(generation)) return;
-    final phaseBeforeCancellation = _taskPhase;
     _flow.update(() {
       _cancelling = true;
-      _taskPhase = TaskPhase.cancelling;
       _remaining = null;
       _etaStalled = false;
     });
@@ -834,10 +832,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (error, stackTrace) {
       if (mounted && generation == _generation) {
         _flow.update(() {
-          _cancelling = false;
-          if (_taskPhase == TaskPhase.cancelling) {
-            _taskPhase = phaseBeforeCancellation;
-          }
+          _cancelling = _taskPhase == TaskPhase.cancelling;
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1149,13 +1144,19 @@ class _HomeScreenState extends State<HomeScreen> {
                       elapsed: _elapsed,
                       remaining: _remaining,
                       etaStalled: _etaStalled,
-                      phase: _finishing ? TaskPhase.finished : _taskPhase,
+                      phase: _finishing
+                          ? TaskPhase.finished
+                          : _cancelling
+                          ? TaskPhase.cancelling
+                          : _taskPhase,
                       cancelling: _cancelling,
                       onCancel: _processing && _taskId != null && !_cancelling
                           ? _cancelTask
                           : null,
                       message: _finishing
                           ? '正在确认保存结果…'
+                          : _cancelling
+                          ? '正在取消并清理未完成文件…'
                           : switch (_taskPhase) {
                               TaskPhase.preparing => '正在准备视频…',
                               TaskPhase.encoding => '正在压缩视频，可以切换应用或熄屏',
