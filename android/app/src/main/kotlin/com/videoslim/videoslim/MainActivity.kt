@@ -22,6 +22,7 @@ class MainActivity : FlutterFragmentActivity() {
     private var engineChannel: EngineChannel? = null
     private var mediaActionsChannel: MediaActionsChannel? = null
     private var pendingLegacyPermission: ((Boolean) -> Unit)? = null
+    private var pendingNotificationPermission: ((Boolean) -> Unit)? = null
     private var pendingDeleteConsent: ((Boolean) -> Unit)? = null
     private val nativeLogSequence = AtomicLong()
 
@@ -29,6 +30,13 @@ class MainActivity : FlutterFragmentActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             val callback = pendingLegacyPermission
             pendingLegacyPermission = null
+            callback?.invoke(granted)
+        }
+
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val callback = pendingNotificationPermission
+            pendingNotificationPermission = null
             callback?.invoke(granted)
         }
 
@@ -79,6 +87,8 @@ class MainActivity : FlutterFragmentActivity() {
         mediaActionsChannel = null
         pendingDeleteConsent?.invoke(false)
         pendingDeleteConsent = null
+        pendingNotificationPermission?.invoke(false)
+        pendingNotificationPermission = null
         pendingLegacyPermission?.invoke(false)
         pendingLegacyPermission = null
         engineChannel?.dispose()
@@ -126,6 +136,28 @@ class MainActivity : FlutterFragmentActivity() {
         }
         pendingLegacyPermission = callback
         legacyWritePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+    }
+
+    internal fun requestNotificationPermission(callback: (Boolean) -> Unit) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            callback(true)
+            return
+        }
+        if (
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            callback(true)
+            return
+        }
+        if (pendingNotificationPermission != null) {
+            callback(false)
+            return
+        }
+        pendingNotificationPermission = callback
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private fun appendNativeLog(message: String) {
