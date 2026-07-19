@@ -314,12 +314,16 @@ internal class TranscodeEngine(
         task.stage = Stage.PUBLISHING
         emit(task, max(task.lastPercent, PUBLISHING_PERCENT), STATE_RUNNING)
         ioExecutor.execute {
-            var outputUri: String? = null
             try {
-                outputUri = mediaStoreSaver.publishVideo(task.tempFile, task.request.outputFileName)
-                val publishedUri = outputUri
+                val publishedUri =
+                    mediaStoreSaver.publishVideo(
+                        task.tempFile,
+                        task.request.outputFileName,
+                    ) {
+                        task.cancelRequested || disposed || Thread.currentThread().isInterrupted
+                    }
                 if (task.cancelRequested || disposed) {
-                    mediaStoreSaver.deletePublished(publishedUri)
+                    discardPublished(task, publishedUri)
                     mainHandler.post {
                         runCatching { task.tempFile.delete() }
                         if (!disposed && isCurrent(task)) finishCancelled(task)
@@ -330,7 +334,7 @@ internal class TranscodeEngine(
                     // with terminal state publication.
                     mainHandler.post {
                         if (disposed || !isCurrent(task) || task.cancelRequested) {
-                            mediaStoreSaver.deletePublished(publishedUri)
+                            discardPublished(task, publishedUri)
                             runCatching { task.tempFile.delete() }
                             if (!disposed && isCurrent(task)) finishCancelled(task)
                             return@post
@@ -343,8 +347,17 @@ internal class TranscodeEngine(
                     }
                 }
             } catch (error: Throwable) {
-                outputUri?.let(mediaStoreSaver::deletePublished)
-                postToMain { fail(task, EngineErrorMapper.fromThrowable(error), error) }
+                if (error is PublicationCleanupException && !error.cleanupConfirmed) {
+                    task.retainRecovery = true
+                    log("task=${task.id} publication cleanup unconfirmed; recovery retained")
+                }
+                if (task.cancelRequested || disposed) {
+                    postToMain {
+                        if (isCurrent(task)) finishCancelled(task)
+                    }
+                } else {
+                    postToMain { fail(task, EngineErrorMapper.fromThrowable(error), error) }
+                }
             }
         }
     }
@@ -502,6 +515,22 @@ internal class TranscodeEngine(
         runCatching { logger(message) }
     }
 
+    private fun discardPublished(task: ActiveTask, outputUri: String) {
+        val boundaryRecorded =
+            runCatching { recoveryStore.markDiscarding(task.id) }
+                .onFailure { error ->
+                    log("task=${task.id} discard boundary failed ${error.stackTraceToString()}")
+                }.isSuccess
+        val cleanupConfirmed = mediaStoreSaver.deletePublished(outputUri)
+        if (!boundaryRecorded || !cleanupConfirmed) {
+            task.retainRecovery = true
+            log(
+                "task=${task.id} published output cleanup unconfirmed " +
+                    "boundary=$boundaryRecorded deleted=$cleanupConfirmed",
+            )
+        }
+    }
+
     private fun cleanupTempAndRecovery(task: ActiveTask) {
         val tempRemoved =
             runCatching {
@@ -512,6 +541,10 @@ internal class TranscodeEngine(
             }
         if (!tempRemoved) {
             log("task=${task.id} temp cleanup returned false; recovery journal retained")
+            return
+        }
+        if (task.retainRecovery) {
+            log("task=${task.id} recovery journal retained for public output reconciliation")
             return
         }
         if (task.recoveryStarted) {
@@ -537,6 +570,7 @@ internal class TranscodeEngine(
     ) {
         @Volatile var cancelRequested: Boolean = false
         @Volatile var recoveryStarted: Boolean = false
+        @Volatile var retainRecovery: Boolean = false
         var plan: TranscodePlan? = null
         var transformer: Transformer? = null
         var stage: Stage = Stage.PREPARING

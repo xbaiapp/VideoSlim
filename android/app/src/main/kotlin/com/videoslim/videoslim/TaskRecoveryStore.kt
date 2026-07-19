@@ -12,6 +12,7 @@ enum class RecoveryStage {
     TRANSFORMING,
     PUBLISHING,
     PUBLISHED,
+    DISCARDING,
 }
 
 data class TaskRecoveryRecord(
@@ -137,8 +138,10 @@ internal fun isAllowedRecoveryTransition(
         when (current) {
             RecoveryStage.PREPARING -> next == RecoveryStage.TRANSFORMING
             RecoveryStage.TRANSFORMING -> next == RecoveryStage.PUBLISHING
-            RecoveryStage.PUBLISHING -> next == RecoveryStage.PUBLISHED
-            RecoveryStage.PUBLISHED -> false
+            RecoveryStage.PUBLISHING ->
+                next == RecoveryStage.PUBLISHED || next == RecoveryStage.DISCARDING
+            RecoveryStage.PUBLISHED -> next == RecoveryStage.DISCARDING
+            RecoveryStage.DISCARDING -> false
         }
 
 private fun validateRecoveryRecord(record: TaskRecoveryRecord): String? {
@@ -175,6 +178,7 @@ private fun validateRecoveryRecord(record: TaskRecoveryRecord): String? {
         }
         RecoveryStage.PUBLISHING,
         RecoveryStage.PUBLISHED,
+        RecoveryStage.DISCARDING,
         -> {
             if (record.actualOutputDisplayName == null || record.mediaStoreUri == null) {
                 return "publishing record has no complete target"
@@ -296,6 +300,16 @@ class TaskRecoveryStore(
         current.copy(stage = RecoveryStage.PUBLISHED).also { persist(it, "published") }
     }
 
+    @Throws(IOException::class)
+    fun markDiscarding(taskId: String): TaskRecoveryRecord = synchronized(TRANSACTION_LOCK) {
+        val current = loadForMutation(taskId)
+        if (current.stage == RecoveryStage.DISCARDING) return@synchronized current
+        if (!isAllowedRecoveryTransition(current.stage, RecoveryStage.DISCARDING)) {
+            throw IllegalStateException("Publication cannot be discarded from ${current.stage}")
+        }
+        current.copy(stage = RecoveryStage.DISCARDING).also { persist(it, "discarding") }
+    }
+
     fun load(): TaskRecoveryRecord? = synchronized(TRANSACTION_LOCK) {
         val raw =
             try {
@@ -311,6 +325,26 @@ class TaskRecoveryStore(
                 null
             }
         }
+    }
+
+    /** Drops only an unreadable journal value; public media is deliberately left untouched. */
+    @Throws(IOException::class)
+    fun discardInvalidRecord(): Boolean = synchronized(TRANSACTION_LOCK) {
+        if (!preferences.contains(RECORD_KEY)) return@synchronized false
+        val reason =
+            try {
+                val raw = preferences.getString(RECORD_KEY, null)
+                    ?: return@synchronized false
+                when (val result = TaskRecoveryCodec.decode(raw)) {
+                    is TaskRecoveryDecodeResult.Success -> return@synchronized false
+                    is TaskRecoveryDecodeResult.Invalid -> result.reason
+                }
+            } catch (error: Throwable) {
+                "unreadable ${error.javaClass.simpleName}"
+            }
+        commit(preferences.edit().remove(RECORD_KEY), "invalid-clear")
+        log("invalid recovery record cleared: $reason")
+        true
     }
 
     @Throws(IOException::class)

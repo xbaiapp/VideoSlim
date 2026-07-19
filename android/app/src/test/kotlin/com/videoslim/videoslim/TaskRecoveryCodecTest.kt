@@ -96,7 +96,10 @@ class TaskRecoveryCodecTest {
         assertTrue(isAllowedRecoveryTransition(RecoveryStage.PREPARING, RecoveryStage.TRANSFORMING))
         assertTrue(isAllowedRecoveryTransition(RecoveryStage.TRANSFORMING, RecoveryStage.PUBLISHING))
         assertTrue(isAllowedRecoveryTransition(RecoveryStage.PUBLISHING, RecoveryStage.PUBLISHED))
+        assertTrue(isAllowedRecoveryTransition(RecoveryStage.PUBLISHING, RecoveryStage.DISCARDING))
+        assertTrue(isAllowedRecoveryTransition(RecoveryStage.PUBLISHED, RecoveryStage.DISCARDING))
         assertFalse(isAllowedRecoveryTransition(RecoveryStage.PUBLISHED, RecoveryStage.PUBLISHING))
+        assertFalse(isAllowedRecoveryTransition(RecoveryStage.DISCARDING, RecoveryStage.PUBLISHED))
         assertFalse(isAllowedRecoveryTransition(RecoveryStage.TRANSFORMING, RecoveryStage.PREPARING))
         assertFalse(isAllowedRecoveryTransition(RecoveryStage.PREPARING, RecoveryStage.PUBLISHED))
     }

@@ -24,6 +24,13 @@ class OrphanCleanupPolicyTest {
 
         assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.scopedAction(record, pending))
         assertEquals(CleanupAction.KEEP, OrphanCleanupPolicy.scopedAction(record, pending.copy(isPending = 0)))
+        assertEquals(
+            CleanupAction.DELETE,
+            OrphanCleanupPolicy.scopedAction(
+                record.copy(stage = RecoveryStage.DISCARDING),
+                pending.copy(isPending = 0),
+            ),
+        )
         assertEquals(CleanupAction.SKIP_UNSAFE, OrphanCleanupPolicy.scopedAction(record, pending.copy(isPending = 2)))
         assertEquals(
             CleanupAction.SKIP_UNSAFE,

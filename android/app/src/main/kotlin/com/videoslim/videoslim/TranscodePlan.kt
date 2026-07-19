@@ -121,7 +121,7 @@ internal data class TranscodePlan(
                 )
             val outputBytes = safeAdd(safeAdd(videoBytes, audioBytes), overheadBytes)
             val cacheRequiredBytes =
-                safeAdd(safeMultiply(outputBytes, TEMP_AND_PUBLIC_OUTPUTS), STORAGE_HEADROOM_BYTES)
+                safeAdd(outputBytes, STORAGE_HEADROOM_BYTES)
             val publicRequiredBytes = safeAdd(outputBytes, STORAGE_HEADROOM_BYTES)
 
             return StorageEstimate(
@@ -163,7 +163,7 @@ internal data class TranscodePlan(
         private const val SOURCE_OVERHEAD_DIVISOR = 20L
         private const val MIN_OVERHEAD_BYTES = 16L * 1024L * 1024L
         private const val STORAGE_HEADROOM_BYTES = 32L * 1024L * 1024L
-        private const val TEMP_AND_PUBLIC_OUTPUTS = 2L
+
     }
 }
 

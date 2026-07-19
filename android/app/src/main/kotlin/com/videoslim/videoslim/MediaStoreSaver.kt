@@ -9,7 +9,9 @@ import android.os.Environment
 import android.provider.MediaStore
 import java.io.File
 import java.io.FileInputStream
+import java.io.InputStream
 import java.io.IOException
+import java.io.OutputStream
 
 data class PublicationTarget(
     val mediaStoreUri: String,
@@ -24,12 +26,17 @@ interface PublicationObserver {
     /** Called synchronously only after pending is cleared or the legacy copy is fully closed. */
     fun onPublicationCompleted(target: PublicationTarget)
 
+    /** Called before a fully owned allocation is deleted after failure or cancellation. */
+    fun onPublicationDiscarding(target: PublicationTarget)
+
     companion object {
         val NONE: PublicationObserver =
             object : PublicationObserver {
                 override fun onPublicationTargetAllocated(target: PublicationTarget) = Unit
 
                 override fun onPublicationCompleted(target: PublicationTarget) = Unit
+
+                override fun onPublicationDiscarding(target: PublicationTarget) = Unit
             }
     }
 }
@@ -40,23 +47,43 @@ internal class MediaStoreSaver(
 ) {
     private val resolver: ContentResolver = context.applicationContext.contentResolver
 
-    fun publishVideo(tempFile: File, requestedName: String): String {
+    fun publishVideo(
+        tempFile: File,
+        requestedName: String,
+        shouldCancel: () -> Boolean = { false },
+    ): String {
         if (!tempFile.isFile || tempFile.length() <= 0L) {
             throw IOException("Temporary video output is missing or empty")
         }
         validateRequestedName(requestedName)
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            publishScoped(tempFile, requestedName)
+            publishScoped(tempFile, requestedName, shouldCancel)
         } else {
-            publishLegacy(tempFile, requestedName)
+            publishLegacy(tempFile, requestedName, shouldCancel)
         }
     }
 
-    fun deletePublished(uriString: String) {
-        runCatching { resolver.delete(Uri.parse(uriString), null, null) }
-    }
+    fun deletePublished(uriString: String): Boolean =
+        runCatching {
+            val uri = Uri.parse(uriString)
+            if (resolver.delete(uri, null, null) > 0) {
+                true
+            } else {
+                resolver.query(
+                    uri,
+                    arrayOf(MediaStore.Video.Media._ID),
+                    null,
+                    null,
+                    null,
+                )?.use { !it.moveToFirst() } ?: false
+            }
+        }.getOrDefault(false)
 
-    private fun publishScoped(tempFile: File, requestedName: String): String {
+    private fun publishScoped(
+        tempFile: File,
+        requestedName: String,
+        shouldCancel: () -> Boolean,
+    ): String {
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, requestedName)
             put(MediaStore.Video.Media.MIME_TYPE, VIDEO_MIME_TYPE)
@@ -66,19 +93,22 @@ internal class MediaStoreSaver(
         val outputUri =
             resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
                 ?: throw IOException("MediaStore insert returned null")
+        var target: PublicationTarget? = null
         try {
-            val target = readScopedPublicationTarget(outputUri)
-            publicationObserver.onPublicationTargetAllocated(target)
-            copyIntoUri(tempFile, outputUri)
+            val allocatedTarget = readScopedPublicationTarget(outputUri)
+            target = allocatedTarget
+            publicationObserver.onPublicationTargetAllocated(allocatedTarget)
+            copyIntoUri(tempFile, outputUri, shouldCancel)
             val completed = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
             if (resolver.update(outputUri, completed, null, null) != 1) {
                 throw IOException("Unable to publish pending MediaStore video")
             }
-            publicationObserver.onPublicationCompleted(target)
+            publicationObserver.onPublicationCompleted(allocatedTarget)
             return outputUri.toString()
         } catch (error: Throwable) {
-            runCatching { resolver.delete(outputUri, null, null) }
-            throw error
+            target?.let { runCatching { publicationObserver.onPublicationDiscarding(it) } }
+            val cleanupConfirmed = deletePublished(outputUri.toString())
+            throw PublicationCleanupException(cleanupConfirmed, error)
         }
     }
 
@@ -122,7 +152,11 @@ internal class MediaStoreSaver(
     }
 
     @Suppress("DEPRECATION")
-    private fun publishLegacy(tempFile: File, requestedName: String): String {
+    private fun publishLegacy(
+        tempFile: File,
+        requestedName: String,
+        shouldCancel: () -> Boolean,
+    ): String {
         val directory =
             File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
@@ -156,22 +190,32 @@ internal class MediaStoreSaver(
             )
         try {
             publicationObserver.onPublicationTargetAllocated(target)
-            copyIntoUri(tempFile, outputUri)
+            copyIntoUri(tempFile, outputUri, shouldCancel)
             publicationObserver.onPublicationCompleted(target)
             return outputUri.toString()
         } catch (error: Throwable) {
-            runCatching { resolver.delete(outputUri, null, null) }
-            runCatching { destination.delete() }
-            throw error
+            runCatching { publicationObserver.onPublicationDiscarding(target) }
+            val rowRemoved = deletePublished(outputUri.toString())
+            val fileRemoved =
+                runCatching {
+                    !destination.exists() || destination.delete() || !destination.exists()
+                }.getOrDefault(false)
+            throw PublicationCleanupException(rowRemoved && fileRemoved, error)
         }
     }
 
-    private fun copyIntoUri(source: File, outputUri: Uri) {
+    private fun copyIntoUri(
+        source: File,
+        outputUri: Uri,
+        shouldCancel: () -> Boolean,
+    ) {
         val output =
             resolver.openOutputStream(outputUri, WRITE_MODE)
                 ?: throw IOException("MediaStore output stream is unavailable")
         FileInputStream(source).use { input ->
-            output.use { destination -> input.copyTo(destination) }
+            output.use { destination ->
+                copyPublicationBytes(input, destination, shouldCancel)
+            }
         }
     }
 
@@ -210,5 +254,29 @@ internal class MediaStoreSaver(
         const val MAX_COLLISION_SUFFIX = 9_999
         const val MAX_OUTPUT_NAME_LENGTH = 255
         const val MP4_EXTENSION = ".mp4"
+
     }
 }
+
+internal fun copyPublicationBytes(
+    input: InputStream,
+    output: OutputStream,
+    shouldCancel: () -> Boolean,
+    bufferSize: Int = 1024 * 1024,
+) {
+    require(bufferSize > 0) { "bufferSize must be positive" }
+    val buffer = ByteArray(bufferSize)
+    while (true) {
+        if (shouldCancel() || Thread.currentThread().isInterrupted) {
+            throw IOException("Video publication cancelled")
+        }
+        val count = input.read(buffer)
+        if (count < 0) return
+        output.write(buffer, 0, count)
+    }
+}
+
+internal class PublicationCleanupException(
+    val cleanupConfirmed: Boolean,
+    cause: Throwable,
+) : IOException("Video publication failed", cause)

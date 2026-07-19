@@ -73,6 +73,13 @@ internal class ProcessingService : Service() {
                             ?: throw IllegalStateException("Publication completed without an engine task")
                     recoveryStore.markPublished(internalTaskId)
                 }
+
+                override fun onPublicationDiscarding(target: PublicationTarget) {
+                    val internalTaskId =
+                        engineTaskId
+                            ?: throw IllegalStateException("Publication discarded without an engine task")
+                    recoveryStore.markDiscarding(internalTaskId)
+                }
             }
         transcodeEngine =
             TranscodeEngine(
@@ -116,10 +123,20 @@ internal class ProcessingService : Service() {
             return
         }
         runCatching { transcodeEngine.cancel(internalTaskId) }
-            .onFailure {
-                log("timeout cancellation failed: ${it.stackTraceToString()}")
-                failActiveTask("系统已结束超时的媒体处理任务")
+            .onFailure { log("timeout cancellation failed: ${it.stackTraceToString()}") }
+        runCatching {
+            val recovery = recoveryStore.load()
+            if (
+                recovery?.taskId == internalTaskId &&
+                (recovery.stage == RecoveryStage.PUBLISHING ||
+                    recovery.stage == RecoveryStage.PUBLISHED)
+            ) {
+                recoveryStore.markDiscarding(internalTaskId)
             }
+        }.onFailure { log("timeout discard boundary failed: ${it.stackTraceToString()}") }
+        if (!terminalHandled) {
+            failActiveTask("系统已结束超时的媒体处理任务")
+        }
     }
 
     override fun onDestroy() {
@@ -175,8 +192,8 @@ internal class ProcessingService : Service() {
         }
 
         activeTaskId = taskId
-        startForegroundCompat(snapshot, cancelPendingIntent(taskId))
         try {
+            startForegroundCompat(snapshot, cancelPendingIntent(taskId))
             wakeLockGuard.acquire(taskId, MAX_WAKE_LOCK_MS)
             val request = ProcessRequest.parse(readArguments(intent))
             val createdEngineTaskId =

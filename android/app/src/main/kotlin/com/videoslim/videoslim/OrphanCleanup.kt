@@ -66,7 +66,12 @@ internal object OrphanCleanupPolicy {
         }
         return when (observed.isPending) {
             1 -> CleanupAction.DELETE
-            0 -> CleanupAction.KEEP
+            0 ->
+                if (record.stage == RecoveryStage.DISCARDING) {
+                    CleanupAction.DELETE
+                } else {
+                    CleanupAction.KEEP
+                }
             else -> CleanupAction.SKIP_UNSAFE
         }
     }
@@ -192,6 +197,16 @@ class OrphanCleanup(
                 activeTempFileName = activeTempFileName?.takeIf(::isValidRecoveryTempFileName),
                 report = report,
             )
+            try {
+                if (recoveryStore.discardInvalidRecord()) {
+                    report.journalRecordsCleared += 1
+                    report.addDetail(
+                        "discarded unreadable recovery journal without touching public media",
+                    )
+                }
+            } catch (error: Throwable) {
+                failure(report, "invalid recovery journal could not be cleared", error)
+            }
             val record = recoveryStore.load()
             if (record != null) {
                 reconcileRecord(record, report)

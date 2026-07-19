@@ -9,6 +9,7 @@ import android.content.IntentSender
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.annotation.RequiresApi
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.net.URI
@@ -149,6 +150,7 @@ internal class MediaActionsChannel(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun deleteOnAndroidTen(
         uri: Uri,
         result: MethodChannel.Result,
