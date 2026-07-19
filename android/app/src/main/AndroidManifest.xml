@@ -18,6 +18,11 @@
         android:label="视频瘦身"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <service
+            android:name=".ProcessingService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync|mediaProcessing"
+            android:stopWithTask="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

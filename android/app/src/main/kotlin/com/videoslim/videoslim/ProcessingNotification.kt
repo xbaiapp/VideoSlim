@@ -96,6 +96,16 @@ internal class ProcessingNotificationFactory(context: Context) {
         return build(snapshot, null)
     }
 
+    fun notifyForeground(
+        snapshot: TaskRuntimeSnapshot,
+        cancelIntent: PendingIntent,
+    ) {
+        notificationManager.notify(
+            FOREGROUND_NOTIFICATION_ID,
+            foreground(snapshot, cancelIntent),
+        )
+    }
+
     fun notifyTerminal(snapshot: TaskRuntimeSnapshot) {
         notificationManager.notify(TERMINAL_NOTIFICATION_ID, terminal(snapshot))
     }
