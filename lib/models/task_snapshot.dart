@@ -6,6 +6,7 @@ final class TaskSnapshot {
   const TaskSnapshot({
     required this.taskId,
     required this.state,
+    this.phase = TaskPhase.encoding,
     required this.percent,
     required this.sourceUri,
     required this.outputFileName,
@@ -42,6 +43,7 @@ final class TaskSnapshot {
     return TaskSnapshot(
       taskId: _requiredNonEmptyString(map, 'taskId'),
       state: state,
+      phase: taskPhaseFromWireName(map['phase']),
       percent: percent,
       sourceUri: _requiredNonEmptyString(map, 'sourceUri'),
       outputFileName: _requiredNonEmptyString(map, 'outputFileName'),
@@ -57,6 +59,9 @@ final class TaskSnapshot {
 
   /// Current task lifecycle state.
   final TaskState state;
+
+  /// Current phase for reconnecting the correct user-facing status.
+  final TaskPhase phase;
 
   /// Latest completion percentage in the inclusive range 0–100.
   final double percent;
@@ -87,6 +92,7 @@ final class TaskSnapshot {
   Map<String, Object?> toMap() => <String, Object?>{
     'taskId': taskId,
     'state': state.wireName,
+    'phase': phase.wireName,
     'percent': percent,
     'sourceUri': sourceUri,
     'outputFileName': outputFileName,

@@ -20,6 +20,7 @@ void main() {
         'taskId': 'task-1',
         'percent': 40,
         'state': 'running',
+        'phase': 'preparing',
         'outputUri': null,
         'outputFileName': null,
         'errorCode': null,
@@ -29,6 +30,7 @@ void main() {
       expect(event.taskId, 'task-1');
       expect(event.percent, 40.0);
       expect(event.state, TaskState.running);
+      expect(event.phase, TaskPhase.preparing);
       expect(event.outputUri, isNull);
       expect(event.outputFileName, isNull);
       expect(event.errorCode, isNull);
@@ -50,6 +52,7 @@ void main() {
         'taskId': 'task-2',
         'percent': 100.0,
         'state': 'success',
+        'phase': 'encoding',
         'outputUri': 'content://media/output/2',
         'outputFileName': 'actual-output.mp4',
         'errorCode': null,

@@ -1,14 +1,58 @@
 package com.videoslim.videoslim
 
+import android.app.Activity
 import android.content.ContentResolver
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+
+internal data class OpenDocumentSelection(
+    val uri: Uri,
+    val returnedFlags: Int,
+)
+
+internal object PickerGrantPolicy {
+    fun offersRead(flags: Int): Boolean =
+        flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0
+
+    fun offersPersistable(flags: Int): Boolean =
+        flags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION != 0
+
+    fun shouldTakePersistableRead(flags: Int): Boolean =
+        offersRead(flags) && offersPersistable(flags)
+}
+
+private class OpenVideoDocumentContract :
+    ActivityResultContract<Array<String>, OpenDocumentSelection?>() {
+    override fun createIntent(
+        context: Context,
+        input: Array<String>,
+    ): Intent =
+        Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType(if (input.size == 1) input[0] else "*/*")
+            .putExtra(Intent.EXTRA_MIME_TYPES, input)
+            .addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+            )
+
+    override fun parseResult(
+        resultCode: Int,
+        intent: Intent?,
+    ): OpenDocumentSelection? {
+        if (resultCode != Activity.RESULT_OK) return null
+        val uri = intent?.data ?: return null
+        return OpenDocumentSelection(uri = uri, returnedFlags = intent.flags)
+    }
+}
 
 internal class VideoPickerChannel(
     activity: ComponentActivity,
@@ -22,12 +66,15 @@ internal class VideoPickerChannel(
 
     private val galleryLauncher =
         activity.registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            completeRequest(uri)
+            completeRequest(uri, returnedFlags = null)
         }
 
     private val filesLauncher =
-        activity.registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            completeRequest(uri)
+        activity.registerForActivityResult(OpenVideoDocumentContract()) { selection ->
+            completeRequest(
+                uri = selection?.uri,
+                returnedFlags = selection?.returnedFlags,
+            )
         }
 
     init {
@@ -91,7 +138,10 @@ internal class VideoPickerChannel(
         }
     }
 
-    private fun completeRequest(uri: Uri?) {
+    private fun completeRequest(
+        uri: Uri?,
+        returnedFlags: Int?,
+    ) {
         val result = pendingResult ?: return
         pendingResult = null
 
@@ -101,18 +151,47 @@ internal class VideoPickerChannel(
             return
         }
 
-        try {
-            contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+        if (returnedFlags != null) {
+            val readOffered = PickerGrantPolicy.offersRead(returnedFlags)
+            val persistableOffered = PickerGrantPolicy.offersPersistable(returnedFlags)
+            var takeOutcome = "not_offered"
+            if (PickerGrantPolicy.shouldTakePersistableRead(returnedFlags)) {
+                takeOutcome =
+                    try {
+                        contentResolver.takePersistableUriPermission(
+                            uri,
+                            returnedFlags and Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                        )
+                        "success"
+                    } catch (exception: SecurityException) {
+                        "failed_${exception.javaClass.simpleName}"
+                    }
+            }
+            val persistedRead = hasPersistedReadPermission(uri)
+            log(
+                "系统文件读取授权 authority=${uri.authority ?: "none"} " +
+                    "returnedFlags=$returnedFlags readOffered=$readOffered " +
+                    "persistableOffered=$persistableOffered takeOutcome=$takeOutcome " +
+                    "persistedRead=$persistedRead",
             )
-            log("已尝试保留视频 URI 的读取权限")
-        } catch (exception: SecurityException) {
-            // Photo Picker providers do not have to offer persistable grants.
-            log("视频 URI 不支持持久读取授权，将使用当前读取授权")
+        } else {
+            // Android Photo Picker grants are managed by the system and need not appear in
+            // ContentResolver.persistedUriPermissions.
+            log(
+                "系统照片选择授权 authority=${uri.authority ?: "none"} " +
+                    "persistedRead=${hasPersistedReadPermission(uri)} " +
+                    "taskPreflightRequired=true",
+            )
         }
         result.success(uri.toString())
     }
+
+    private fun hasPersistedReadPermission(uri: Uri): Boolean =
+        runCatching {
+            contentResolver.persistedUriPermissions.any { permission ->
+                permission.uri == uri && permission.isReadPermission
+            }
+        }.getOrDefault(false)
 
     private fun log(message: String) {
         runCatching { logger?.invoke(message) }

@@ -82,6 +82,10 @@ class _HomeScreenState extends State<HomeScreen> {
   set _elapsed(Duration value) => _flow.elapsed = value;
   Duration? get _remaining => _flow.remaining;
   set _remaining(Duration? value) => _flow.remaining = value;
+  bool get _etaStalled => _flow.etaStalled;
+  set _etaStalled(bool value) => _flow.etaStalled = value;
+  TaskPhase get _taskPhase => _flow.taskPhase;
+  set _taskPhase(TaskPhase value) => _flow.taskPhase = value;
   bool get _selectedFromGallery => _flow.selectedFromGallery;
   set _selectedFromGallery(bool value) => _flow.selectedFromGallery = value;
   bool get _sourceDeleted => _flow.sourceDeleted;
@@ -224,6 +228,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _publishedOutputUri = snapshot.outputUri;
         _publishedOutputFileName = snapshot.outputFileName;
         _percent = snapshot.percent;
+        _taskPhase = snapshot.phase;
         _preparing = false;
         _processing = true;
         _finishing = false;
@@ -240,6 +245,7 @@ class _HomeScreenState extends State<HomeScreen> {
           taskId: snapshot.taskId,
           percent: snapshot.percent,
           state: snapshot.state,
+          phase: snapshot.phase,
           outputUri: snapshot.outputUri,
           outputFileName: snapshot.outputFileName,
           errorCode: snapshot.errorCode,
@@ -300,9 +306,11 @@ class _HomeScreenState extends State<HomeScreen> {
   void _updateTiming() {
     if (!mounted || _etaEstimator == null) return;
     final timing = _etaEstimator!.update(percent: _percent, now: _now());
+    final showEta = _taskPhase == TaskPhase.encoding;
     _flow.update(() {
       _elapsed = timing.elapsed;
-      _remaining = timing.remaining;
+      _remaining = showEta ? timing.remaining : null;
+      _etaStalled = showEta && timing.isStalled;
     });
   }
 
@@ -422,7 +430,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     if (!plan.isSupported) {
       _flow.update(() {
-        _errorText = '[ENCODER_UNAVAILABLE] 当前设备没有可用的 H.264/HEVC 硬件编码器。';
+        _errorText = '当前手机没有可用的兼容处理方式。';
       });
       return;
     }
@@ -432,7 +440,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     if (_progressStreamClosed) {
       _flow.update(() {
-        _errorText = '[PROGRESS_STREAM_CLOSED] 进度通道已关闭，请重启应用后再压缩。';
+        _errorText = '处理状态连接已中断，请重启应用后再压缩。';
       });
       _logFlow('阻止压缩：进度通道已关闭', level: AppLogLevel.error);
       return;
@@ -453,6 +461,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _finishing = false;
       _cancelling = false;
       _percent = 0;
+      _taskPhase = TaskPhase.preparing;
+      _etaStalled = false;
       _errorText = null;
       _outputInfo = null;
       _outputPublished = false;
@@ -524,10 +534,13 @@ class _HomeScreenState extends State<HomeScreen> {
     required bool hdrSource,
   }) async {
     final warnings = <String>[
-      if (plan.hasLowSavings) '该视频码率已较低，压缩收益有限。',
-      if (plan.isOutsideVerifiedRange)
-        '视频超出已验证的 6 小时 / 50 GB 范围，只能按 best-effort 尝试。',
-      if (hdrSource) 'HDR 视频将色调映射为 SDR，颜色表现取决于设备。',
+      if (plan.hasLowSavings) '该视频本身已经比较精简，压缩后可能节省不多。',
+      if (plan.isOutsideVerifiedRange) '这个视频较大或较长，尚未经过完整验证，可能无法一次完成。',
+      if (plan.usedCodecFallback && _selectedPreset != null)
+        '当前手机无法使用首选格式，将改用兼容模式；输出文件可能稍大。',
+      if (plan.usedCodecFallback && _selectedPreset == null)
+        '当前手机无法使用你选择的 HEVC。继续后将改用 H.264 兼容模式，输出文件可能稍大。',
+      if (hdrSource) 'HDR 视频会转换为普通画面，颜色可能略有变化。',
     ];
     if (warnings.isEmpty) return true;
     final confirmed = await showDialog<bool>(
@@ -598,6 +611,8 @@ class _HomeScreenState extends State<HomeScreen> {
           _flow.update(() {
             _preparing = false;
             _processing = true;
+            _taskPhase = event.phase;
+            _cancelling = event.phase == TaskPhase.cancelling;
             if (nextPercent > _percent) {
               _percent = nextPercent;
             }
@@ -606,14 +621,16 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       case TaskState.success:
         _terminalEventHandled = true;
+        _flow.update(() {
+          _percent = 100;
+          _taskPhase = TaskPhase.finished;
+        });
+        _updateTiming();
         _stopTiming();
         _outputPublished = true;
         final outputUri = event.outputUri?.trim();
         if (outputUri == null || outputUri.isEmpty) {
-          _failGeneration(
-            generation,
-            '[OUTPUT_URI_MISSING] 压缩已完成，但没有收到输出文件地址。',
-          );
+          _failGeneration(generation, '视频已经压缩，但暂时无法确认保存位置。');
           _logFlow(
             '压缩成功事件缺少输出 URI',
             level: AppLogLevel.error,
@@ -641,7 +658,7 @@ class _HomeScreenState extends State<HomeScreen> {
           event.errorMessage,
           fallback: '视频压缩失败，请稍后重试。',
         );
-        _failGeneration(generation, '[$code] $message');
+        _failGeneration(generation, message);
         _logFlow('M2 压缩任务失败', level: AppLogLevel.error, details: event.toMap());
       case TaskState.cancelled:
         _terminalEventHandled = true;
@@ -651,7 +668,7 @@ class _HomeScreenState extends State<HomeScreen> {
           event.errorMessage,
           fallback: '压缩任务已取消。',
         );
-        _failGeneration(generation, '[$code] $message');
+        _failGeneration(generation, message);
         _logFlow(
           'M2 压缩任务被引擎取消',
           level: AppLogLevel.warning,
@@ -696,7 +713,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _flow.update(() {
         _finishing = false;
         _processing = false;
-        _errorText = '[OUTPUT_METADATA_UNAVAILABLE] 压缩文件已保存到系统相册，但无法读取输出信息。';
+        _errorText = '压缩文件已经保存到相册，但暂时无法显示文件信息。';
       });
       _activeGeneration = null;
       _logError(
@@ -726,7 +743,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _terminalEventHandled = true;
     _failGeneration(
       generation,
-      _errorTextFor(error, fallback: '压缩进度通道发生错误，请重新尝试。'),
+      _errorTextFor(error, fallback: '无法继续获取处理状态，请重新尝试。'),
     );
     _logError(
       '压缩进度流错误',
@@ -749,7 +766,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     _terminalEventHandled = true;
-    _failGeneration(generation, '[PROGRESS_STREAM_CLOSED] 进度通道已关闭，请重启应用后再压缩。');
+    _failGeneration(generation, '处理状态连接已中断，请重启应用后再压缩。');
     _logFlow(
       '活动任务期间进度流关闭',
       level: AppLogLevel.error,
@@ -845,6 +862,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _percent = 0;
       _elapsed = Duration.zero;
       _remaining = null;
+      _taskPhase = TaskPhase.preparing;
+      _etaStalled = false;
       _selectedUri = null;
       _taskId = null;
       _errorText = null;
@@ -1035,7 +1054,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       statusText: _picking
                           ? '正在等待系统选择器…'
                           : _readingMetadata
-                          ? '正在读取视频技术信息…'
+                          ? '正在读取视频信息…'
                           : null,
                       onGallery: _interactionLocked
                           ? null
@@ -1084,11 +1103,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       capabilitiesLoading: _capabilitiesLoading,
                       hdrSource: sourceInfo.isHdr,
                       disabledReason: _progressStreamClosed
-                          ? '进度通道已关闭，请重启应用后再压缩。'
+                          ? '处理状态连接已中断，请重启应用后再压缩。'
                           : !_capabilitiesLoading && _capabilities == null
-                          ? '无法检测设备硬件编码器，请重新选择视频或重启应用。'
+                          ? '无法检查手机的处理能力，请重新选择视频或重启应用。'
                           : _compressionPlan?.isSupported == false
-                          ? '当前设备没有可用的 H.264/HEVC 硬件编码器。'
+                          ? '当前手机没有可用的兼容处理方式。'
                           : null,
                       onPresetChanged: (value) =>
                           _changeSettings(() => _selectedPreset = value),
@@ -1116,15 +1135,21 @@ class _HomeScreenState extends State<HomeScreen> {
                       percent: _percent,
                       elapsed: _elapsed,
                       remaining: _remaining,
+                      etaStalled: _etaStalled,
+                      phase: _finishing ? TaskPhase.finished : _taskPhase,
                       cancelling: _cancelling,
                       onCancel: _processing && _taskId != null && !_cancelling
                           ? _cancelTask
                           : null,
-                      message: _preparing
-                          ? '正在创建前台处理任务…'
-                          : _finishing
-                          ? '压缩完成，正在读取输出信息…'
-                          : '正在本机压缩，可切换应用或熄屏',
+                      message: _finishing
+                          ? '正在确认保存结果…'
+                          : switch (_taskPhase) {
+                              TaskPhase.preparing => '正在准备视频…',
+                              TaskPhase.encoding => '正在压缩视频，可以切换应用或熄屏',
+                              TaskPhase.publishing => '正在保存到系统相册…',
+                              TaskPhase.cancelling => '正在取消并清理未完成文件…',
+                              TaskPhase.finished => '正在确认保存结果…',
+                            },
                     ),
                   ],
                   if (_outputPublished &&
@@ -1250,7 +1275,7 @@ class _ImportCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '系统相册使用 Photo Picker；文件选择使用 SAF。取消选择不会产生错误。',
+              '可以从系统相册或文件中选择；取消选择不会产生任何更改。',
               style: Theme.of(
                 context,
               ).textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
@@ -1412,6 +1437,8 @@ class _ProgressCard extends StatelessWidget {
     required this.message,
     required this.elapsed,
     required this.remaining,
+    required this.etaStalled,
+    required this.phase,
     required this.cancelling,
     required this.onCancel,
   });
@@ -1420,6 +1447,8 @@ class _ProgressCard extends StatelessWidget {
   final String message;
   final Duration elapsed;
   final Duration? remaining;
+  final bool etaStalled;
+  final TaskPhase phase;
   final bool cancelling;
   final VoidCallback? onCancel;
 
@@ -1427,6 +1456,22 @@ class _ProgressCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final safePercent = percent.clamp(0, 100).toDouble();
+    final remainingText = switch (phase) {
+      TaskPhase.preparing => '正在准备',
+      TaskPhase.publishing => '正在保存到相册',
+      TaskPhase.cancelling => '正在取消',
+      TaskPhase.finished => '正在确认保存结果',
+      TaskPhase.encoding when etaStalled => '正在重新估算',
+      TaskPhase.encoding when remaining == null => '正在估算剩余时间',
+      TaskPhase.encoding => '预计剩余 ${_formatEtaRange(remaining!)}',
+    };
+    final title = switch (phase) {
+      TaskPhase.preparing => '正在准备',
+      TaskPhase.encoding => '正在压缩',
+      TaskPhase.publishing => '正在保存',
+      TaskPhase.cancelling => '正在取消',
+      TaskPhase.finished => '正在确认',
+    };
     return Card(
       color: colors.surface,
       shape: RoundedRectangleBorder(
@@ -1442,7 +1487,7 @@ class _ProgressCard extends StatelessWidget {
               children: <Widget>[
                 Expanded(
                   child: Text(
-                    '正在压缩',
+                    title,
                     style: Theme.of(context).textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.w800,
                     ),
@@ -1481,16 +1526,14 @@ class _ProgressCard extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  remaining == null
-                      ? '预计剩余 计算中'
-                      : '预计剩余 ${formatDuration(remaining!.inMilliseconds)}',
+                  remainingText,
                   key: const ValueKey<String>('remaining-time'),
                 ),
               ],
             ),
             const SizedBox(height: 12),
             Text(
-              '前台服务和 Partial WakeLock 会在任务期间保持处理；Android 15+ 仍受系统媒体处理时限约束。',
+              '处理期间可以熄屏或切换应用，请不要移动或删除原视频。',
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
@@ -1512,6 +1555,16 @@ class _ProgressCard extends StatelessWidget {
       ),
     );
   }
+}
+
+String _formatEtaRange(Duration remaining) {
+  final seconds = remaining.inSeconds < 0 ? 0 : remaining.inSeconds;
+  final minutes = ((seconds + 59) ~/ 60).clamp(1, 24 * 60);
+  if (minutes <= 2) return '约 $minutes 分钟';
+  final spread = ((minutes + 5) ~/ 6).clamp(1, 60);
+  final lower = (minutes - spread).clamp(1, minutes);
+  final upper = minutes + spread;
+  return '$lower–$upper 分钟';
 }
 
 class _ErrorCard extends StatelessWidget {
@@ -1622,7 +1675,7 @@ class _PublishedResultFallbackCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              '输出技术信息暂时无法读取，但文件已经发布；不会重新执行压缩。',
+              '暂时无法显示文件信息，但视频已经保存；不会重新压缩。',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -1812,9 +1865,9 @@ class _ResultRow extends StatelessWidget {
 String _errorTextFor(Object error, {required String fallback}) {
   if (error is VideoEngineException) {
     final code = _stableCode(error.code);
-    return '[$code] ${_messageForCode(code, error.message, fallback: fallback)}';
+    return _messageForCode(code, error.message, fallback: fallback);
   }
-  return '[UNKNOWN] $fallback';
+  return fallback;
 }
 
 String _stableCode(String? raw, {String fallback = 'UNKNOWN'}) {
@@ -1825,17 +1878,17 @@ String _stableCode(String? raw, {String fallback = 'UNKNOWN'}) {
   return normalized.replaceAll(RegExp(r'[^A-Z0-9_\-]'), '_');
 }
 
-String _messageForCode(String code, String? raw, {required String fallback}) {
-  final normalized = raw?.trim();
-  if (normalized != null &&
-      normalized.isNotEmpty &&
-      RegExp(r'[\u3400-\u9fff]').hasMatch(normalized)) {
-    return normalized;
-  }
+String _messageForCode(String code, String? _, {required String fallback}) {
   return switch (code) {
     'INSUFFICIENT_STORAGE' => '存储空间不足，请释放空间后重试。',
-    'ENCODER_UNAVAILABLE' => '设备没有可用的 HEVC 硬件编码器。',
-    'SOURCE_CORRUPTED' => '无法处理源视频，文件可能损坏或格式不受支持。',
+    'ENCODER_UNAVAILABLE' => '当前手机没有可用的兼容处理方式。',
+    'SOURCE_CORRUPTED' => '无法处理这个视频，文件可能损坏或格式不受支持。',
+    'SOURCE_PERMISSION_LOST' => '无法继续读取这个视频，请重新选择文件。',
+    'SOURCE_UNAVAILABLE' => '所选视频已移动、删除或暂时不可用。',
+    'SOURCE_PROVIDER_FAILED' => '手机无法持续读取这个视频，请重新选择或稍后重试。',
+    'VIDEO_DECODING_FAILED' => '手机在读取视频时中途停止，原视频没有被修改。',
+    'VIDEO_FORMAT_UNSUPPORTED' => '这台手机暂时无法读取这种视频格式。',
+    'VIDEO_ENCODING_FAILED' => '手机没能按当前设置完成压缩，可以改用兼容模式重试。',
     'CANCELLED' => '压缩任务已取消。',
     'PICKER_BUSY' => '已有视频选择请求正在进行，请稍后再试。',
     _ => fallback,

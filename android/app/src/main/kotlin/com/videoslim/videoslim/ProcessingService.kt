@@ -256,6 +256,7 @@ internal class ProcessingService : Service() {
                 taskId = publicTaskId,
                 percent = event.percent,
                 state = state,
+                phase = event.phase,
                 outputUri = event.outputUri,
                 errorCode =
                     if (timeoutRequested && state == TaskRuntimeSnapshot.STATE_FAILED) {

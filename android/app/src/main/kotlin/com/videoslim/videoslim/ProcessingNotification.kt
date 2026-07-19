@@ -21,19 +21,12 @@ internal data class ProcessingNotificationText(
         fun from(snapshot: TaskRuntimeSnapshot): ProcessingNotificationText {
             val progress = snapshot.percent.roundToInt().coerceIn(0, 100)
             return when (snapshot.state) {
-                TaskRuntimeSnapshot.STATE_RUNNING ->
-                    ProcessingNotificationText(
-                        title = "正在压缩视频",
-                        body = "已完成 $progress%",
-                        progress = progress,
-                        ongoing = true,
-                        showCancel = true,
-                    )
+                TaskRuntimeSnapshot.STATE_RUNNING -> running(snapshot, progress)
 
                 TaskRuntimeSnapshot.STATE_SUCCESS ->
                     ProcessingNotificationText(
-                        title = "压缩完成",
-                        body = "已保存到 Movies/VideoSlim/${snapshot.outputFileName}",
+                        title = "视频已压缩并保存",
+                        body = "可在系统相册的 VideoSlim 文件夹中查看",
                         progress = 100,
                         ongoing = false,
                         showCancel = false,
@@ -41,8 +34,8 @@ internal data class ProcessingNotificationText(
 
                 TaskRuntimeSnapshot.STATE_FAILED ->
                     ProcessingNotificationText(
-                        title = "压缩失败",
-                        body = snapshot.errorMessage ?: "处理失败，请打开 VideoSlim 查看详情",
+                        title = "没能完成压缩",
+                        body = failureBody(snapshot.errorCode),
                         progress = progress,
                         ongoing = false,
                         showCancel = false,
@@ -50,8 +43,8 @@ internal data class ProcessingNotificationText(
 
                 TaskRuntimeSnapshot.STATE_CANCELLED ->
                     ProcessingNotificationText(
-                        title = "任务已取消",
-                        body = "没有生成输出文件",
+                        title = "压缩已取消",
+                        body = "原视频没有被修改",
                         progress = progress,
                         ongoing = false,
                         showCancel = false,
@@ -60,6 +53,68 @@ internal data class ProcessingNotificationText(
                 else -> throw IllegalArgumentException("Unknown task state: ${snapshot.state}")
             }
         }
+
+        private fun running(
+            snapshot: TaskRuntimeSnapshot,
+            progress: Int,
+        ): ProcessingNotificationText =
+            when (snapshot.phase) {
+                TaskRuntimeSnapshot.PHASE_PREPARING ->
+                    ProcessingNotificationText(
+                        title = "正在准备视频",
+                        body = "即将开始压缩",
+                        progress = progress,
+                        ongoing = true,
+                        showCancel = true,
+                    )
+                TaskRuntimeSnapshot.PHASE_ENCODING ->
+                    ProcessingNotificationText(
+                        title = "正在压缩视频",
+                        body = "已完成 $progress%",
+                        progress = progress,
+                        ongoing = true,
+                        showCancel = true,
+                    )
+                TaskRuntimeSnapshot.PHASE_PUBLISHING ->
+                    ProcessingNotificationText(
+                        title = "正在保存视频",
+                        body = "压缩已完成，正在保存到系统相册",
+                        progress = progress,
+                        ongoing = true,
+                        showCancel = true,
+                    )
+                TaskRuntimeSnapshot.PHASE_CANCELLING ->
+                    ProcessingNotificationText(
+                        title = "正在取消",
+                        body = "正在清理未完成文件",
+                        progress = progress,
+                        ongoing = true,
+                        showCancel = false,
+                    )
+                TaskRuntimeSnapshot.PHASE_FINISHED ->
+                    ProcessingNotificationText(
+                        title = "正在确认保存结果",
+                        body = "请稍候",
+                        progress = progress,
+                        ongoing = true,
+                        showCancel = false,
+                    )
+                else -> throw IllegalArgumentException("Unknown task phase: ${snapshot.phase}")
+            }
+
+        private fun failureBody(errorCode: String?): String =
+            when (errorCode) {
+                EngineErrorCode.INSUFFICIENT_STORAGE.wireName -> "存储空间不足，请释放空间后重试"
+                EngineErrorCode.SOURCE_PERMISSION_LOST.wireName -> "无法继续读取视频，请打开 VideoSlim 重新选择"
+                EngineErrorCode.SOURCE_UNAVAILABLE.wireName -> "所选视频已移动、删除或暂时不可用"
+                EngineErrorCode.SOURCE_PROVIDER_FAILED.wireName -> "手机无法持续读取视频，请重新选择或稍后重试"
+                EngineErrorCode.SOURCE_CORRUPTED.wireName -> "无法处理这个视频，文件可能损坏或格式不受支持"
+                EngineErrorCode.VIDEO_DECODING_FAILED.wireName -> "手机在读取视频时中途停止，请重新尝试"
+                EngineErrorCode.VIDEO_FORMAT_UNSUPPORTED.wireName -> "这台手机暂时无法读取这种视频格式"
+                EngineErrorCode.VIDEO_ENCODING_FAILED.wireName -> "当前设置未能完成，可打开 VideoSlim 改用兼容模式"
+                EngineErrorCode.ENCODER_UNAVAILABLE.wireName -> "当前手机没有可用的兼容处理方式"
+                else -> "处理失败，请打开 VideoSlim 查看详情"
+            }
     }
 }
 

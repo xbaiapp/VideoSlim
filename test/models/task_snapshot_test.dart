@@ -8,6 +8,7 @@ void main() {
       final snapshot = TaskSnapshot.fromMap(<Object?, Object?>{
         'taskId': 'task-42',
         'state': 'failed',
+        'phase': 'finished',
         'percent': 72,
         'sourceUri': 'content://media/video/42',
         'outputFileName': 'trip_slim.mp4',
@@ -19,6 +20,7 @@ void main() {
 
       expect(snapshot.taskId, 'task-42');
       expect(snapshot.state, TaskState.failed);
+      expect(snapshot.phase, TaskPhase.finished);
       expect(snapshot.percent, 72.0);
       expect(snapshot.sourceUri, 'content://media/video/42');
       expect(snapshot.outputFileName, 'trip_slim.mp4');
@@ -45,6 +47,7 @@ void main() {
       expect(snapshot.toMap(), <String, Object?>{
         'taskId': 'task-running',
         'state': 'running',
+        'phase': 'encoding',
         'percent': 3.5,
         'sourceUri': 'content://source',
         'outputFileName': 'output.mp4',
@@ -60,6 +63,7 @@ void main() {
       Map<Object?, Object?> valid() => <Object?, Object?>{
         'taskId': 'task-1',
         'state': 'running',
+        'phase': 'preparing',
         'percent': 10,
         'sourceUri': 'content://source',
         'outputFileName': 'output.mp4',

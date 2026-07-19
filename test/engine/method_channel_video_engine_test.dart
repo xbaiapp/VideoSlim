@@ -52,6 +52,7 @@ void main() {
           return <String, Object?>{
             'taskId': 'task-snapshot',
             'state': 'running',
+            'phase': 'preparing',
             'percent': 12,
             'sourceUri': 'content://source/snapshot',
             'outputFileName': 'snapshot_slim.mp4',
@@ -468,6 +469,7 @@ void main() {
           'taskId': 'task-7',
           'percent': 37,
           'state': 'running',
+          'phase': 'encoding',
           'outputUri': null,
           'errorCode': null,
           'errorMessage': null,
@@ -479,6 +481,7 @@ void main() {
         expect(event.taskId, 'task-7');
         expect(event.percent, 37.0);
         expect(event.state, TaskState.running);
+        expect(event.phase, TaskPhase.encoding);
         await subscription.cancel();
         expect(cancelled.isCompleted, isFalse);
         await secondSubscription.cancel();
@@ -490,6 +493,7 @@ void main() {
           'taskId': 'task-7',
           'percent': 37,
           'state': 'running',
+          'phase': 'encoding',
           'outputUri': null,
           'errorCode': null,
           'errorMessage': null,

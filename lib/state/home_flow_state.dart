@@ -30,6 +30,8 @@ final class HomeFlowState extends ChangeNotifier {
   bool sourceDeleted = false;
   bool mediaActionBusy = false;
   bool capabilitiesLoading = false;
+  bool etaStalled = false;
+  TaskPhase taskPhase = TaskPhase.preparing;
   double percent = 0;
   Duration elapsed = Duration.zero;
   Duration? remaining;

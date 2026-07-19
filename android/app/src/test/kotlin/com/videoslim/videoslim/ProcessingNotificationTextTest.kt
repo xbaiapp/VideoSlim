@@ -7,8 +7,15 @@ import org.junit.Test
 
 class ProcessingNotificationTextTest {
     @Test
-    fun `running notification is monotonic bounded and cancellable`() {
-        val text = ProcessingNotificationText.from(snapshot(state = "running", percent = 37.6))
+    fun `encoding notification is bounded and cancellable`() {
+        val text =
+            ProcessingNotificationText.from(
+                snapshot(
+                    state = "running",
+                    percent = 37.6,
+                    phase = TaskRuntimeSnapshot.PHASE_ENCODING,
+                ),
+            )
 
         assertEquals("正在压缩视频", text.title)
         assertEquals("已完成 38%", text.body)
@@ -18,45 +25,99 @@ class ProcessingNotificationTextTest {
     }
 
     @Test
-    fun `success notification names the public destination`() {
+    fun `running phases use truthful plain language`() {
+        val preparing =
+            ProcessingNotificationText.from(
+                snapshot("running", 0.0, TaskRuntimeSnapshot.PHASE_PREPARING),
+            )
+        val publishing =
+            ProcessingNotificationText.from(
+                snapshot("running", 99.0, TaskRuntimeSnapshot.PHASE_PUBLISHING),
+            )
+        val cancelling =
+            ProcessingNotificationText.from(
+                snapshot("running", 42.0, TaskRuntimeSnapshot.PHASE_CANCELLING),
+            )
+
+        assertEquals("正在准备视频", preparing.title)
+        assertEquals("正在保存视频", publishing.title)
+        assertTrue(publishing.body.contains("系统相册"))
+        assertEquals("正在取消", cancelling.title)
+        assertFalse(cancelling.showCancel)
+    }
+
+    @Test
+    fun `success notification names the user-visible destination`() {
         val text =
             ProcessingNotificationText.from(
                 snapshot(
                     state = "success",
                     percent = 100.0,
+                    phase = TaskRuntimeSnapshot.PHASE_FINISHED,
                     outputUri = "content://media/output/1",
                 ),
             )
 
-        assertEquals("压缩完成", text.title)
-        assertEquals("已保存到 Movies/VideoSlim/source_slim.mp4", text.body)
+        assertEquals("视频已压缩并保存", text.title)
+        assertEquals("可在系统相册的 VideoSlim 文件夹中查看", text.body)
         assertEquals(100, text.progress)
         assertFalse(text.ongoing)
         assertFalse(text.showCancel)
     }
 
     @Test
-    fun `failed and cancelled states remain readable`() {
+    fun `failed notification never exposes raw technical errors`() {
         val failed =
             ProcessingNotificationText.from(
                 snapshot(
                     state = "failed",
                     percent = 42.0,
-                    errorCode = "ENCODER_UNAVAILABLE",
-                    errorMessage = "设备没有可用编码器",
+                    phase = TaskRuntimeSnapshot.PHASE_FINISHED,
+                    errorCode = "UNKNOWN",
+                    errorMessage = "Media3 ERROR_CODE 7001 CodecException",
                 ),
             )
-        val cancelled = ProcessingNotificationText.from(snapshot(state = "cancelled", percent = 22.0))
+        val known =
+            ProcessingNotificationText.from(
+                snapshot(
+                    state = "failed",
+                    percent = 42.0,
+                    phase = TaskRuntimeSnapshot.PHASE_FINISHED,
+                    errorCode = EngineErrorCode.VIDEO_ENCODING_FAILED.wireName,
+                    errorMessage = "Media3 4002 encoder failed",
+                ),
+            )
 
-        assertEquals("压缩失败", failed.title)
-        assertEquals("设备没有可用编码器", failed.body)
-        assertEquals("任务已取消", cancelled.title)
-        assertEquals("没有生成输出文件", cancelled.body)
+        assertEquals("没能完成压缩", failed.title)
+        assertEquals("处理失败，请打开 VideoSlim 查看详情", failed.body)
+        assertTrue(known.body.contains("兼容模式"))
+        listOf(failed.body, known.body).forEach { body ->
+            assertFalse(body.contains("Media3"))
+            assertFalse(body.contains("Codec"))
+            assertFalse(body.contains("4002"))
+            assertFalse(body.contains("7001"))
+        }
+    }
+
+    @Test
+    fun `cancelled state remains readable`() {
+        val cancelled =
+            ProcessingNotificationText.from(
+                snapshot(
+                    state = "cancelled",
+                    percent = 22.0,
+                    phase = TaskRuntimeSnapshot.PHASE_FINISHED,
+                ),
+            )
+
+        assertEquals("压缩已取消", cancelled.title)
+        assertEquals("原视频没有被修改", cancelled.body)
     }
 
     private fun snapshot(
         state: String,
         percent: Double,
+        phase: String = TaskRuntimeSnapshot.PHASE_ENCODING,
         outputUri: String? = null,
         errorCode: String? = null,
         errorMessage: String? = null,
@@ -65,6 +126,7 @@ class ProcessingNotificationTextTest {
             taskId = "task-1",
             percent = percent,
             state = state,
+            phase = phase,
             sourceUri = "content://media/source/1",
             outputFileName = "source_slim.mp4",
             startedAtEpochMs = 1_000L,

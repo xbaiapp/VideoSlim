@@ -1,6 +1,28 @@
 /// Lifecycle state for a processing task.
 enum TaskState { idle, running, success, failed, cancelled }
 
+/// Current user-visible phase inside a processing task.
+enum TaskPhase { preparing, encoding, publishing, cancelling, finished }
+
+extension TaskPhaseWireName on TaskPhase {
+  String get wireName => switch (this) {
+    TaskPhase.preparing => 'preparing',
+    TaskPhase.encoding => 'encoding',
+    TaskPhase.publishing => 'publishing',
+    TaskPhase.cancelling => 'cancelling',
+    TaskPhase.finished => 'finished',
+  };
+}
+
+TaskPhase taskPhaseFromWireName(Object? value) => switch (value) {
+  'preparing' => TaskPhase.preparing,
+  'encoding' => TaskPhase.encoding,
+  'publishing' => TaskPhase.publishing,
+  'cancelling' => TaskPhase.cancelling,
+  'finished' => TaskPhase.finished,
+  _ => throw FormatException('Unknown TaskPhase wire name: $value'),
+};
+
 /// Strict platform-channel encoding for [TaskState].
 extension TaskStateWireName on TaskState {
   /// Lowercase state name used by the platform contract.
@@ -30,6 +52,7 @@ class ProgressEvent {
     required this.taskId,
     required this.percent,
     required this.state,
+    this.phase = TaskPhase.encoding,
     this.outputUri,
     this.outputFileName,
     this.errorCode,
@@ -49,6 +72,7 @@ class ProgressEvent {
       taskId: map['taskId'] as String,
       percent: (map['percent'] as num).toDouble(),
       state: state,
+      phase: taskPhaseFromWireName(map['phase']),
       outputUri: map['outputUri'] as String?,
       outputFileName: map['outputFileName'] as String?,
       errorCode: map['errorCode'] as String?,
@@ -64,6 +88,9 @@ class ProgressEvent {
 
   /// Current lifecycle state.
   final TaskState state;
+
+  /// Current preparation, compression, save, or cancellation phase.
+  final TaskPhase phase;
 
   /// Published output URI after success, when available.
   final String? outputUri;
@@ -82,6 +109,7 @@ class ProgressEvent {
     'taskId': taskId,
     'percent': percent,
     'state': state.wireName,
+    'phase': phase.wireName,
     'outputUri': outputUri,
     'outputFileName': outputFileName,
     'errorCode': errorCode,

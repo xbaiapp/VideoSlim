@@ -25,6 +25,7 @@ class ProcessingRegistryTest {
                 "taskId" to "task-1",
                 "percent" to 0.0,
                 "state" to "running",
+                "phase" to "preparing",
                 "outputUri" to null,
                 "outputFileName" to "source_slim.mp4",
                 "errorCode" to null,
@@ -61,6 +62,30 @@ class ProcessingRegistryTest {
         assertEquals(60.0, registry.snapshot()!!.percent, 0.0)
         assertRejected { registry.apply("one", -1.0, "running") }
         assertRejected { registry.apply("one", 101.0, "running") }
+    }
+
+    @Test
+    fun `running phase changes are preserved independently of percent`() {
+        val registry = ProcessingRegistry()
+        registry.reserve("one", "content://one", "one.mp4", 1L)
+
+        assertTrue(
+            registry.apply(
+                taskId = "one",
+                percent = 0.0,
+                state = "running",
+                phase = TaskRuntimeSnapshot.PHASE_ENCODING,
+            ),
+        )
+        assertEquals(TaskRuntimeSnapshot.PHASE_ENCODING, registry.snapshot()!!.phase)
+        assertRejected {
+            registry.apply(
+                taskId = "one",
+                percent = 0.0,
+                state = "running",
+                phase = "invalid",
+            )
+        }
     }
 
     @Test

@@ -1,8 +1,8 @@
 package com.videoslim.videoslim
 
 import android.content.Context
+import android.media.MediaCodec
 import android.media.MediaCodecInfo
-import android.media.MediaCodecList
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
@@ -11,11 +11,17 @@ import android.os.StatFs
 import android.os.SystemClock
 import android.os.storage.StorageManager
 import androidx.media3.common.C
+import androidx.media3.common.util.Clock
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaLibraryInfo
 import androidx.media3.common.MimeTypes
+import androidx.media3.datasource.DataSourceBitmapLoader
 import androidx.media3.effect.Presentation
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.transformer.AudioEncoderSettings
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultAssetLoaderFactory
+import androidx.media3.transformer.DefaultDecoderFactory
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.DefaultMuxer
 import androidx.media3.transformer.EditedMediaItem
@@ -36,6 +42,7 @@ internal data class EngineProgressEvent(
     val taskId: String,
     val percent: Double,
     val state: String,
+    val phase: String,
     val outputUri: String? = null,
     val errorCode: String? = null,
     val errorMessage: String? = null,
@@ -45,6 +52,7 @@ internal data class EngineProgressEvent(
             "taskId" to taskId,
             "percent" to percent,
             "state" to state,
+            "phase" to phase,
             "outputUri" to outputUri,
             "errorCode" to errorCode,
             "errorMessage" to errorMessage,
@@ -60,6 +68,8 @@ internal class TranscodeEngine(
     private val metadataReader: VideoMetadataReader = VideoMetadataReader(context),
     private val mediaStoreSaver: MediaStoreSaver = MediaStoreSaver(context),
     private val recoveryStore: TaskRecoveryStore = TaskRecoveryStore(context),
+    private val sourceAccessProbe: SourceAccessProbe = SourceAccessProbe(context),
+    private val codecCatalog: HardwareCodecCatalog = HardwareCodecCatalog(),
     private val logger: (String) -> Unit = {},
     private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor(),
 ) {
@@ -72,8 +82,8 @@ internal class TranscodeEngine(
 
     fun getCapabilities(): Map<String, Boolean> =
         mapOf(
-            "hevcEncoder" to hasHardwareEncoder(MimeTypes.VIDEO_H265),
-            "h264Encoder" to hasHardwareEncoder(MimeTypes.VIDEO_H264),
+            "hevcEncoder" to codecCatalog.hasHardwareEncoder(MimeTypes.VIDEO_H265),
+            "h264Encoder" to codecCatalog.hasHardwareEncoder(MimeTypes.VIDEO_H264),
         )
 
     fun start(request: ProcessRequest, listener: EngineProgressListener): String {
@@ -85,7 +95,7 @@ internal class TranscodeEngine(
             )
         }
         val requestedVideoMime = videoMimeType(request.videoCodec)
-        if (!hasHardwareEncoder(requestedVideoMime)) {
+        if (!codecCatalog.hasHardwareEncoder(requestedVideoMime)) {
             throw EngineOperationException(EngineFailure(EngineErrorCode.ENCODER_UNAVAILABLE))
         }
         if (!tempDirectory.exists() && !tempDirectory.mkdirs()) {
@@ -133,10 +143,13 @@ internal class TranscodeEngine(
                 EngineFailure(EngineErrorCode.CANCELLED, "任务 ID 不匹配或已结束"),
             )
         }
+        val wasPublishing = task.stage == Stage.PUBLISHING
         task.cancelRequested = true
+        task.stage = Stage.CANCELLING
+        emit(task, task.lastPercent, STATE_RUNNING)
         mainHandler.removeCallbacks(task.progressPoller)
         runCatching { task.transformer?.cancel() }
-        if (task.stage != Stage.PUBLISHING) {
+        if (!wasPublishing) {
             finishCancelled(task)
         }
     }
@@ -158,8 +171,78 @@ internal class TranscodeEngine(
     private fun prepare(task: ActiveTask) {
         try {
             if (task.cancelRequested) return
+            log(
+                "task=${task.id} environment manufacturer=${Build.MANUFACTURER} " +
+                    "model=${Build.MODEL} device=${Build.DEVICE} sdk=${Build.VERSION.SDK_INT} " +
+                    "release=${Build.VERSION.RELEASE} securityPatch=${Build.VERSION.SECURITY_PATCH} " +
+                    "app=${appVersionName()} media3=${MediaLibraryInfo.VERSION}",
+            )
+            val sourceAccess = sourceAccessProbe.probe(task.request.sourceUri)
+            task.sourceAccessAtStart = sourceAccess
+            log("task=${task.id} source access before metadata ${sourceAccess.toLogString()}")
+            sourceAccess.toEngineFailure()?.let { failure ->
+                throw EngineOperationException(failure)
+            }
             val metadata = metadataReader.read(task.request.sourceUri)
+            if (
+                sourceAccess.statSize != null &&
+                metadata.fileSizeBytes > 0L &&
+                sourceAccess.statSize != metadata.fileSizeBytes
+            ) {
+                throw EngineOperationException(
+                    EngineFailure(
+                        EngineErrorCode.SOURCE_UNAVAILABLE,
+                        "所选视频在处理前发生了变化，请重新选择文件",
+                    ),
+                )
+            }
             val plan = TranscodePlan.create(task.request, metadata, Build.VERSION.SDK_INT)
+            val outputMime = videoMimeType(task.request.videoCodec)
+            val compatibleDecoders =
+                codecCatalog.compatibleVideoDecoderInfos(
+                    mimeType = metadata.videoMime,
+                    width = metadata.storageWidth,
+                    height = metadata.storageHeight,
+                    frameRate = metadata.frameRate,
+                    profile = metadata.videoProfile,
+                    level = metadata.videoLevel,
+                )
+            val compatibleEncoders =
+                codecCatalog.compatibleVideoEncoderInfos(
+                    mimeType = outputMime,
+                    width = plan.outputDimensions.width,
+                    height = plan.outputDimensions.height,
+                    frameRate = metadata.frameRate,
+                    bitrate = task.request.videoBitrate,
+                )
+            log(
+                "task=${task.id} decoder inventory " +
+                    codecCatalog.candidateSummary(metadata.videoMime, encoder = false),
+            )
+            log(
+                "task=${task.id} encoder inventory " +
+                    codecCatalog.candidateSummary(outputMime, encoder = true),
+            )
+            log(
+                "task=${task.id} compatible hardware decoder=" +
+                    compatibleDecoders.joinToString { it.name } +
+                    " input=${metadata.storageWidth}x${metadata.storageHeight}@${metadata.frameRate}" +
+                    " profile=${metadata.videoProfile} level=${metadata.videoLevel}" +
+                    " encoder=${compatibleEncoders.joinToString { it.name }}",
+            )
+            if (compatibleDecoders.isEmpty()) {
+                throw EngineOperationException(
+                    EngineFailure(
+                        EngineErrorCode.VIDEO_FORMAT_UNSUPPORTED,
+                        "这台手机没有可用于这个视频的硬件读取方式",
+                    ),
+                )
+            }
+            if (compatibleEncoders.isEmpty()) {
+                throw EngineOperationException(EngineFailure(EngineErrorCode.ENCODER_UNAVAILABLE))
+            }
+            task.compatibleDecoderNames = compatibleDecoders.mapTo(linkedSetOf()) { it.name }
+            task.compatibleEncoderNames = compatibleEncoders.mapTo(linkedSetOf()) { it.name }
             if (task.request.audioMode == AudioMode.COPY) {
                 metadata.audioMime?.let { audioMime ->
                     val supportedAudio =
@@ -203,8 +286,15 @@ internal class TranscodeEngine(
                     .build()
             val encoderFactoryBuilder =
                 DefaultEncoderFactory.Builder(appContext)
+                    .setVideoEncoderSelector(
+                        HardwareVideoEncoderSelector(
+                            catalog = codecCatalog,
+                            allowedCodecNames = task.compatibleEncoderNames,
+                            logger = ::log,
+                        ),
+                    )
                     .setRequestedVideoEncoderSettings(settings)
-                    .setEnableFallback(false)
+                    .setEnableFallback(true)
             if (task.request.audioMode == AudioMode.REENCODE) {
                 encoderFactoryBuilder.setRequestedAudioEncoderSettings(
                     AudioEncoderSettings.Builder()
@@ -212,9 +302,38 @@ internal class TranscodeEngine(
                         .build(),
                 )
             }
+            val encoderFactory =
+                LoggingEncoderFactory(
+                    delegate = encoderFactoryBuilder.build(),
+                    logger = ::log,
+                )
+            val decoderFactory =
+                DefaultDecoderFactory.Builder(appContext)
+                    .setMediaCodecSelector(
+                        HardwareVideoDecoderSelector(
+                            allowedCodecNames = task.compatibleDecoderNames,
+                            logger = ::log,
+                        ),
+                    )
+                    .setEnableDecoderFallback(true)
+                    .setListener { codecName, initializationFailures ->
+                        log(
+                            "actual decoder name=$codecName " +
+                                "priorInitializationFailures=${initializationFailures.size}",
+                        )
+                    }.build()
+            val assetLoaderFactory =
+                DefaultAssetLoaderFactory(
+                    appContext,
+                    decoderFactory,
+                    Clock.DEFAULT,
+                    DefaultMediaSourceFactory(appContext),
+                    DataSourceBitmapLoader(appContext),
+                )
             val transformerBuilder =
                 Transformer.Builder(appContext)
-                    .setEncoderFactory(encoderFactoryBuilder.build())
+                    .setAssetLoaderFactory(assetLoaderFactory)
+                    .setEncoderFactory(encoderFactory)
                     .setVideoMimeType(videoMimeType(task.request.videoCodec))
             if (task.request.audioMode == AudioMode.REENCODE) {
                 transformerBuilder.setAudioMimeType(MimeTypes.AUDIO_AAC)
@@ -235,14 +354,13 @@ internal class TranscodeEngine(
                                 exportResult: ExportResult,
                                 exportException: ExportException,
                             ) {
-                                val failure =
-                                    EngineErrorMapper.fromExportErrorCode(
-                                        errorCode = exportException.errorCode,
-                                        wasHdrToneMapping =
-                                            plan.hdrMode ==
-                                                HdrMode.TONE_MAP_HDR_TO_SDR_USING_OPEN_GL,
-                                    )
-                                fail(task, failure, exportException)
+                                handleTransformerError(
+                                    task = task,
+                                    exportException = exportException,
+                                    wasHdrToneMapping =
+                                        plan.hdrMode ==
+                                            HdrMode.TONE_MAP_HDR_TO_SDR_USING_OPEN_GL,
+                                )
                             }
                         },
                     ).build()
@@ -308,6 +426,7 @@ internal class TranscodeEngine(
             return
         }
         mainHandler.removeCallbacks(task.progressPoller)
+        task.transformer = null
         if (task.cancelRequested) {
             finishCancelled(task)
             return
@@ -359,6 +478,35 @@ internal class TranscodeEngine(
                 } else {
                     postToMain { fail(task, EngineErrorMapper.fromThrowable(error), error) }
                 }
+            }
+        }
+    }
+
+    private fun handleTransformerError(
+        task: ActiveTask,
+        exportException: ExportException,
+        wasHdrToneMapping: Boolean,
+    ) {
+        requireMainThread()
+        if (!isCurrent(task) || task.failureProbeStarted) return
+        task.failureProbeStarted = true
+        mainHandler.removeCallbacks(task.progressPoller)
+        log("task=${task.id} ${exportFailureDiagnostic(task, exportException)}")
+        ioExecutor.execute {
+            val sourceAccess = sourceAccessProbe.probe(task.request.sourceUri)
+            postToMain {
+                if (!isCurrent(task)) return@postToMain
+                log(
+                    "task=${task.id} source access after export failure " +
+                        sourceAccess.toLogString(),
+                )
+                val failure =
+                    sourceAccess.toFailureAtExport(task.sourceAccessAtStart)
+                        ?: EngineErrorMapper.fromExportErrorCode(
+                            errorCode = exportException.errorCode,
+                            wasHdrToneMapping = wasHdrToneMapping,
+                        )
+                fail(task, failure, exportException)
             }
         }
     }
@@ -415,9 +563,12 @@ internal class TranscodeEngine(
         failure: EngineFailure? = null,
     ) {
         val monotonic = max(task.lastPercent, percent.coerceIn(0.0, 100.0))
+        val phase = task.stage.wireName
         if (state == STATE_RUNNING) {
             val now = SystemClock.elapsedRealtime()
+            val phaseChanged = phase != task.lastEmittedPhase
             if (
+                !phaseChanged &&
                 task.lastRunningEventAtMs != NO_RUNNING_EVENT &&
                 now - task.lastRunningEventAtMs < PROGRESS_INTERVAL_MS
             ) {
@@ -426,12 +577,14 @@ internal class TranscodeEngine(
             task.lastRunningEventAtMs = now
         }
         task.lastPercent = monotonic
+        task.lastEmittedPhase = phase
         runCatching {
             task.listener.onEvent(
                 EngineProgressEvent(
                     taskId = task.id,
                     percent = monotonic,
                     state = state,
+                    phase = phase,
                     outputUri = outputUri,
                     errorCode = failure?.code?.wireName,
                     errorMessage = failure?.message,
@@ -487,22 +640,40 @@ internal class TranscodeEngine(
                 if (error.code == VideoMetadataException.SOURCE_CORRUPTED) {
                     EngineFailure(EngineErrorCode.SOURCE_CORRUPTED, error.message)
                 } else {
-                    EngineFailure(EngineErrorCode.UNKNOWN, error.message)
+                    sourceAccessFailureFrom(error)
+                        ?: EngineFailure(EngineErrorCode.UNKNOWN, error.message)
                 }
             else -> EngineErrorMapper.fromThrowable(error)
         }
 
-    private fun hasHardwareEncoder(mimeType: String): Boolean =
-        runCatching {
-            MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { info ->
-                info.isEncoder &&
-                    info.supportedTypes.any { it.equals(mimeType, ignoreCase = true) } &&
-                    isHardwareCodec(info)
+    private fun exportFailureDiagnostic(
+        task: ActiveTask,
+        error: ExportException,
+    ): String {
+        val codec = error.codecInfo
+        val codecText =
+            if (codec == null) {
+                "none"
+            } else {
+                "name=${codec.name},video=${codec.isVideo},decoder=${codec.isDecoder}," +
+                    "format=${codec.configurationFormat}"
             }
-        }.getOrElse { error ->
-            log("capability detection failed ${error.stackTraceToString()}")
-            false
-        }
+        val causes = generateSequence<Throwable>(error) { it.cause }.take(MAX_CAUSE_DEPTH).toList()
+        val causeText =
+            causes.joinToString(separator = " <- ") { cause ->
+                "${cause.javaClass.name}:${cause.message.orEmpty().replace('\n', ' ')}"
+            }
+        val platformCodecText =
+            causes
+                .filterIsInstance<MediaCodec.CodecException>()
+                .joinToString(separator = ";") { cause ->
+                    "diagnostic=${cause.diagnosticInfo},recoverable=${cause.isRecoverable}," +
+                        "transient=${cause.isTransient}"
+                }.ifEmpty { "none" }
+        return "export failure code=${error.errorCode} name=${error.errorCodeName} " +
+            "phase=${task.stage.wireName} percent=${task.lastPercent} codec={$codecText} " +
+            "platformCodec={$platformCodecText} causes={$causeText}"
+    }
 
     private fun videoMimeType(codec: VideoCodec): String =
         when (codec) {
@@ -510,23 +681,22 @@ internal class TranscodeEngine(
             VideoCodec.H264 -> MimeTypes.VIDEO_H264
         }
 
-    private fun isHardwareCodec(info: MediaCodecInfo): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            return info.isHardwareAccelerated
-        }
-        val name = info.name.lowercase()
-        return !name.startsWith("omx.google.") &&
-            !name.startsWith("c2.android.") &&
-            !name.contains("software") &&
-            !name.contains("ffmpeg") &&
-            !name.endsWith(".sw")
-    }
 
     private fun isCurrent(task: ActiveTask): Boolean = !disposed && activeTask === task
 
     private fun postToMain(action: () -> Unit) {
         if (!disposed) mainHandler.post { if (!disposed) action() }
     }
+
+    @Suppress("DEPRECATION")
+    private fun appVersionName(): String =
+        runCatching {
+            appContext.packageManager
+                .getPackageInfo(appContext.packageName, 0)
+                .versionName
+                .orEmpty()
+                .ifEmpty { "unknown" }
+        }.getOrDefault("unknown")
 
     private fun log(message: String) {
         runCatching { logger(message) }
@@ -589,14 +759,25 @@ internal class TranscodeEngine(
         @Volatile var recoveryStarted: Boolean = false
         @Volatile var retainRecovery: Boolean = false
         var plan: TranscodePlan? = null
+        var sourceAccessAtStart: SourceAccessProbeResult? = null
+        var compatibleDecoderNames: Set<String> = emptySet()
+        var compatibleEncoderNames: Set<String> = emptySet()
         var transformer: Transformer? = null
+        var failureProbeStarted: Boolean = false
         var stage: Stage = Stage.PREPARING
         var lastPercent: Double = 0.0
+        var lastEmittedPhase: String? = null
         var lastRunningEventAtMs: Long = NO_RUNNING_EVENT
         val progressPoller = Runnable { scheduleProgress(this) }
     }
 
-    private enum class Stage { PREPARING, TRANSFORMING, PUBLISHING, FINISHED }
+    private enum class Stage(val wireName: String) {
+        PREPARING("preparing"),
+        TRANSFORMING("encoding"),
+        PUBLISHING("publishing"),
+        CANCELLING("cancelling"),
+        FINISHED("finished"),
+    }
 
     private companion object {
         const val STATE_RUNNING = "running"
@@ -607,5 +788,6 @@ internal class TranscodeEngine(
         const val NO_RUNNING_EVENT = -1L
         const val PUBLISHING_PERCENT = 99.0
         const val MEBIBYTE = 1024L * 1024L
+        const val MAX_CAUSE_DEPTH = 12
     }
 }

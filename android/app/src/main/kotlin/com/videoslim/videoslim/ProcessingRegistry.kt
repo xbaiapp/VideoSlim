@@ -4,6 +4,7 @@ internal data class TaskRuntimeSnapshot(
     val taskId: String,
     val percent: Double,
     val state: String,
+    val phase: String,
     val sourceUri: String,
     val outputFileName: String,
     val startedAtEpochMs: Long,
@@ -16,6 +17,7 @@ internal data class TaskRuntimeSnapshot(
             "taskId" to taskId,
             "percent" to percent,
             "state" to state,
+            "phase" to phase,
             "outputUri" to outputUri,
             "outputFileName" to outputFileName,
             "errorCode" to errorCode,
@@ -37,6 +39,11 @@ internal data class TaskRuntimeSnapshot(
         const val STATE_SUCCESS = "success"
         const val STATE_FAILED = "failed"
         const val STATE_CANCELLED = "cancelled"
+        const val PHASE_PREPARING = "preparing"
+        const val PHASE_ENCODING = "encoding"
+        const val PHASE_PUBLISHING = "publishing"
+        const val PHASE_CANCELLING = "cancelling"
+        const val PHASE_FINISHED = "finished"
     }
 }
 
@@ -70,6 +77,7 @@ internal class ProcessingRegistry {
                     taskId = taskId,
                     percent = 0.0,
                     state = TaskRuntimeSnapshot.STATE_RUNNING,
+                    phase = TaskRuntimeSnapshot.PHASE_PREPARING,
                     sourceUri = sourceUri,
                     outputFileName = outputFileName,
                     startedAtEpochMs = startedAtEpochMs,
@@ -88,9 +96,11 @@ internal class ProcessingRegistry {
         outputUri: String? = null,
         errorCode: String? = null,
         errorMessage: String? = null,
+        phase: String? = null,
     ): Boolean {
         require(percent.isFinite() && percent in 0.0..100.0) { "percent must be finite and in range" }
         require(state in ALLOWED_STATES) { "Unknown task state: $state" }
+        require(phase == null || phase in ALLOWED_PHASES) { "Unknown task phase: $phase" }
         val updated: TaskRuntimeSnapshot
         val listeners: List<(TaskRuntimeSnapshot) -> Unit>
         synchronized(lock) {
@@ -107,6 +117,7 @@ internal class ProcessingRegistry {
                 previous.copy(
                     percent = monotonicPercent,
                     state = state,
+                    phase = phase ?: previous.phase,
                     outputUri = outputUri,
                     errorCode = errorCode,
                     errorMessage = errorMessage,
@@ -220,6 +231,14 @@ internal class ProcessingRegistry {
                 TaskRuntimeSnapshot.STATE_SUCCESS,
                 TaskRuntimeSnapshot.STATE_FAILED,
                 TaskRuntimeSnapshot.STATE_CANCELLED,
+            )
+        val ALLOWED_PHASES =
+            setOf(
+                TaskRuntimeSnapshot.PHASE_PREPARING,
+                TaskRuntimeSnapshot.PHASE_ENCODING,
+                TaskRuntimeSnapshot.PHASE_PUBLISHING,
+                TaskRuntimeSnapshot.PHASE_CANCELLING,
+                TaskRuntimeSnapshot.PHASE_FINISHED,
             )
     }
 }

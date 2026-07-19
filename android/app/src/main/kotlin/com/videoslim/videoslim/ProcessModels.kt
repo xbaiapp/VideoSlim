@@ -19,8 +19,14 @@ enum class EngineErrorCode(
     val defaultMessage: String,
 ) {
     INSUFFICIENT_STORAGE("INSUFFICIENT_STORAGE", "存储空间不足，请释放空间后重试"),
-    ENCODER_UNAVAILABLE("ENCODER_UNAVAILABLE", "设备没有可用的所选视频硬件编码器"),
+    ENCODER_UNAVAILABLE("ENCODER_UNAVAILABLE", "当前手机没有可用的兼容处理方式"),
     SOURCE_CORRUPTED("SOURCE_CORRUPTED", "无法处理源视频，文件可能已损坏或格式不受支持"),
+    SOURCE_PERMISSION_LOST("SOURCE_PERMISSION_LOST", "无法继续读取这个视频，请重新选择文件"),
+    SOURCE_UNAVAILABLE("SOURCE_UNAVAILABLE", "所选视频已移动、删除或暂时不可用"),
+    SOURCE_PROVIDER_FAILED("SOURCE_PROVIDER_FAILED", "手机无法持续读取这个视频，请重新选择或稍后重试"),
+    VIDEO_DECODING_FAILED("VIDEO_DECODING_FAILED", "手机在读取视频时中途停止，原视频没有被修改"),
+    VIDEO_FORMAT_UNSUPPORTED("VIDEO_FORMAT_UNSUPPORTED", "这台手机暂时无法读取这种视频格式"),
+    VIDEO_ENCODING_FAILED("VIDEO_ENCODING_FAILED", "手机没能按当前设置完成压缩，可以改用兼容模式重试"),
     CANCELLED("CANCELLED", "任务已取消"),
     UNKNOWN("UNKNOWN", "处理失败，请稍后重试"),
 }
@@ -215,7 +221,7 @@ internal data class ProcessRequest(
 }
 
 internal object EngineErrorMapper {
-    private val decoderErrorCodes = setOf(3001, 3002, 3003)
+    private val decoderRuntimeErrorCodes = setOf(3001, 3002)
     private val unavailableEncoderErrorCodes = setOf(4001, 4003)
 
     fun fromExportErrorCode(
@@ -224,20 +230,26 @@ internal object EngineErrorMapper {
     ): EngineFailure {
         val baseFailure =
             when (errorCode) {
-                in decoderErrorCodes -> EngineFailure(EngineErrorCode.SOURCE_CORRUPTED)
+                in decoderRuntimeErrorCodes -> EngineFailure(EngineErrorCode.VIDEO_DECODING_FAILED)
+                3003 -> EngineFailure(EngineErrorCode.VIDEO_FORMAT_UNSUPPORTED)
                 in unavailableEncoderErrorCodes -> EngineFailure(EngineErrorCode.ENCODER_UNAVAILABLE)
+                4002 -> EngineFailure(EngineErrorCode.VIDEO_ENCODING_FAILED)
                 else ->
                     EngineFailure(
                         code = EngineErrorCode.UNKNOWN,
-                        message = "视频处理失败（Media3 错误码 $errorCode）",
+                        message = EngineErrorCode.UNKNOWN.defaultMessage,
                     )
             }
-        if (!wasHdrToneMapping || baseFailure.code == EngineErrorCode.SOURCE_CORRUPTED) {
+        if (
+            !wasHdrToneMapping ||
+            baseFailure.code == EngineErrorCode.VIDEO_DECODING_FAILED ||
+            baseFailure.code == EngineErrorCode.VIDEO_FORMAT_UNSUPPORTED
+        ) {
             return baseFailure
         }
         return EngineFailure(
             code = baseFailure.code,
-            message = "设备无法完成 HDR 到 SDR 色调映射（Media3 错误码 $errorCode）",
+            message = "手机无法完成这个 HDR 视频的画面转换",
         )
     }
 

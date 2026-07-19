@@ -389,11 +389,50 @@ void main() {
       _app(engine: engine, picker: picker, logger: _logger(backend)),
     );
     await _selectGallery(tester, engine, picker);
-    expect(find.textContaining('已自动改用 H.264'), findsOneWidget);
+    expect(find.textContaining('已改用 H.264 兼容模式'), findsOneWidget);
     await _tapCompression(tester);
+    expect(find.text('开始前请确认'), findsOneWidget);
+    expect(find.textContaining('将改用兼容模式'), findsOneWidget);
+    expect(engine.lastRequest, isNull);
+    await tester.tap(find.byKey(const ValueKey<String>('confirm-compression')));
+    await tester.pump();
 
     expect(engine.lastRequest?.videoCodec, 'h264');
     expect(engine.lastRequest?.videoBitrate, 3750000);
+  });
+
+  testWidgets('custom HEVC fallback requires explicit confirmation', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine()
+      ..capabilities = const DeviceCapabilities(
+        hevcEncoder: false,
+        h264Encoder: true,
+      );
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    final custom = find.byKey(const ValueKey<String>('preset-custom'));
+    await tester.ensureVisible(custom);
+    await tester.tap(custom);
+    await tester.pump();
+
+    await _tapCompression(tester);
+    expect(find.textContaining('你选择的 HEVC'), findsOneWidget);
+    expect(engine.lastRequest, isNull);
+    await tester.tap(find.text('返回调整'));
+    await tester.pump();
+    expect(engine.lastRequest, isNull);
+
+    await _tapCompression(tester);
+    await tester.tap(find.byKey(const ValueKey<String>('confirm-compression')));
+    await tester.pump();
+    expect(engine.lastRequest?.videoCodec, 'h264');
   });
 
   testWidgets(
@@ -426,6 +465,44 @@ void main() {
       expect(find.text('37%'), findsOneWidget);
     },
   );
+
+  testWidgets('native phases drive truthful progress labels', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapCompression(tester);
+
+    Future<void> emit(TaskPhase phase, double percent) async {
+      engine.progress.add(
+        ProgressEvent(
+          taskId: 'task-1',
+          percent: percent,
+          state: TaskState.running,
+          phase: phase,
+        ),
+      );
+      await tester.pump();
+    }
+
+    await emit(TaskPhase.preparing, 0);
+    expect(find.text('正在准备'), findsWidgets);
+    await emit(TaskPhase.encoding, 42);
+    expect(find.text('正在压缩'), findsOneWidget);
+    await emit(TaskPhase.publishing, 42);
+    expect(find.text('正在保存'), findsOneWidget);
+    expect(find.text('正在保存到相册'), findsOneWidget);
+    expect(find.textContaining('预计还需'), findsNothing);
+    await emit(TaskPhase.cancelling, 42);
+    expect(find.text('正在取消'), findsWidgets);
+  });
 
   testWidgets(
     'fixed request, progress, success metadata, and savings are shown',
@@ -524,7 +601,7 @@ void main() {
     },
   );
 
-  testWidgets('failed progress displays stable code and readable message', (
+  testWidgets('failed progress displays only a readable user message', (
     WidgetTester tester,
   ) async {
     final engine = _FakeEngine();
@@ -549,10 +626,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(
-      find.text('[INSUFFICIENT_STORAGE] 存储空间不足，请释放空间后重试。'),
-      findsOneWidget,
-    );
+    expect(find.text('存储空间不足，请释放空间后重试。'), findsOneWidget);
   });
 
   testWidgets('stream error invalidates a pending process future', (
@@ -575,13 +649,13 @@ void main() {
       StackTrace.fromString('progress stream failure'),
     );
     await tester.pump();
-    expect(find.text('[UNKNOWN] 进度通道暂时不可用'), findsOneWidget);
+    expect(find.text('无法继续获取处理状态，请重新尝试。'), findsOneWidget);
 
     engine.processCompleter!.complete('task-1');
     await tester.pump();
     await tester.pump();
 
-    expect(find.text('[UNKNOWN] 进度通道暂时不可用'), findsOneWidget);
+    expect(find.text('无法继续获取处理状态，请重新尝试。'), findsOneWidget);
     expect(find.text('正在压缩'), findsNothing);
   });
 
@@ -610,7 +684,7 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('压缩完成，正在读取输出信息…'), findsOneWidget);
+    expect(find.text('正在确认保存结果…'), findsOneWidget);
 
     engine.progress.addError(
       const VideoEngineException(code: 'UNKNOWN', message: '终态后的迟到错误'),
@@ -656,7 +730,7 @@ void main() {
     await tester.pump();
     await _selectGallery(tester, engine, picker);
 
-    expect(find.textContaining('进度通道已关闭，请重启应用后再压缩'), findsOneWidget);
+    expect(find.textContaining('处理状态连接已中断，请重启应用后再压缩'), findsOneWidget);
     final button = tester.widget<FilledButton>(
       find.byKey(const ValueKey<String>('start-m2-compression')),
     );
@@ -698,7 +772,7 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.textContaining('压缩文件已保存到系统相册'), findsOneWidget);
+    expect(find.textContaining('压缩文件已经保存到相册'), findsOneWidget);
     expect(
       find.text('系统相册 > Movies > VideoSlim > actual-collision-name.mp4'),
       findsOneWidget,
@@ -727,7 +801,7 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.textContaining('压缩文件已保存到系统相册'), findsOneWidget);
+    expect(find.textContaining('压缩文件已经保存到相册'), findsOneWidget);
     expect(
       find.byKey(const ValueKey<String>('start-m2-compression')),
       findsNothing,
@@ -756,7 +830,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.textContaining('[OUTPUT_URI_MISSING]'), findsOneWidget);
+    expect(find.textContaining('视频已经压缩，但暂时无法确认保存位置'), findsOneWidget);
     expect(find.text('重试压缩'), findsNothing);
     expect(find.text('重新选择'), findsOneWidget);
   });

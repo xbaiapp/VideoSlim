@@ -28,6 +28,8 @@ internal data class VideoMetadata(
     val audioSampleRate: Int?,
     val audioBitrate: Int?,
     val isHdr: Boolean,
+    val videoProfile: Int? = null,
+    val videoLevel: Int? = null,
 ) {
     fun toChannelMap(): Map<String, Any?> =
         linkedMapOf(
@@ -176,6 +178,8 @@ internal class VideoMetadataReader(context: Context) {
                 isHdr =
                     colorTransfer == MediaFormat.COLOR_TRANSFER_HLG ||
                         colorTransfer == MediaFormat.COLOR_TRANSFER_ST2084,
+                videoProfile = requiredVideoFormat.intValue(MediaFormat.KEY_PROFILE),
+                videoLevel = requiredVideoFormat.intValue(MediaFormat.KEY_LEVEL),
             )
         } catch (exception: VideoMetadataException) {
             throw exception

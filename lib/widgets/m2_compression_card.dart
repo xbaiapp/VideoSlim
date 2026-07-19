@@ -105,7 +105,7 @@ class M2CompressionCard extends StatelessWidget {
             ],
             const SizedBox(height: 18),
             if (capabilitiesLoading)
-              const _Notice(icon: Icons.memory_outlined, text: '正在检测设备硬件编码器…')
+              const _Notice(icon: Icons.memory_outlined, text: '正在检查手机兼容性…')
             else if (plan != null)
               _PlanSummary(plan: plan!),
             if (hdrSource) ...<Widget>[
@@ -314,7 +314,7 @@ class _PlanSummary extends StatelessWidget {
           const SizedBox(height: 10),
           const _Notice(
             icon: Icons.swap_horiz_rounded,
-            text: '设备无 HEVC 硬件编码器，已自动改用 H.264 并提高目标码率。',
+            text: '当前手机无法使用 HEVC，已改用 H.264 兼容模式并适当提高目标码率。',
             warning: true,
           ),
         ],
@@ -330,7 +330,7 @@ class _PlanSummary extends StatelessWidget {
           const SizedBox(height: 10),
           const _Notice(
             icon: Icons.warning_amber_rounded,
-            text: '超出已验证的 6 小时 / 50 GB 范围，仅按 best-effort 尝试。',
+            text: '视频超出已验证的 6 小时 / 50 GB 范围，可能无法一次完成。',
             warning: true,
           ),
         ],

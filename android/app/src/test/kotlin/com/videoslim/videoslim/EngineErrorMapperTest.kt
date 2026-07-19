@@ -7,13 +7,17 @@ import org.junit.Test
 
 class EngineErrorMapperTest {
     @Test
-    fun `maps Media3 decoder failures to source corrupted`() {
-        listOf(3001, 3002, 3003).forEach { errorCode ->
+    fun `maps Media3 decoder runtime failures without blaming the source`() {
+        listOf(3001, 3002).forEach { errorCode ->
             assertEquals(
-                EngineErrorCode.SOURCE_CORRUPTED,
+                EngineErrorCode.VIDEO_DECODING_FAILED,
                 EngineErrorMapper.fromExportErrorCode(errorCode).code,
             )
         }
+        assertEquals(
+            EngineErrorCode.VIDEO_FORMAT_UNSUPPORTED,
+            EngineErrorMapper.fromExportErrorCode(3003).code,
+        )
     }
 
     @Test
@@ -27,8 +31,12 @@ class EngineErrorMapperTest {
     }
 
     @Test
-    fun `keeps runtime encoding muxing IO and unknown export failures stable UNKNOWN`() {
-        listOf(1000, 1001, 2000, 2005, 2006, 2008, 4002, 5001, 6001, 7001, 7002, 9999)
+    fun `maps runtime encoding failure separately from other unknown export failures`() {
+        assertEquals(
+            EngineErrorCode.VIDEO_ENCODING_FAILED,
+            EngineErrorMapper.fromExportErrorCode(4002).code,
+        )
+        listOf(1000, 1001, 2000, 2005, 2006, 2008, 5001, 6001, 7001, 7002, 9999)
             .forEach { errorCode ->
                 assertEquals(
                     EngineErrorCode.UNKNOWN,
@@ -45,8 +53,8 @@ class EngineErrorMapperTest {
                 wasHdrToneMapping = true,
             )
         assertEquals(EngineErrorCode.UNKNOWN, frameProcessing.code)
-        check(frameProcessing.message.contains("HDR"))
-        check(frameProcessing.message.contains("SDR"))
+        assertEquals("手机无法完成这个 HDR 视频的画面转换", frameProcessing.message)
+        check(!frameProcessing.message.contains("Media3"))
 
         val encoderInit =
             EngineErrorMapper.fromExportErrorCode(
@@ -57,7 +65,7 @@ class EngineErrorMapperTest {
         check(encoderInit.message.contains("HDR"))
 
         assertEquals(
-            EngineErrorCode.SOURCE_CORRUPTED.defaultMessage,
+            EngineErrorCode.VIDEO_DECODING_FAILED.defaultMessage,
             EngineErrorMapper.fromExportErrorCode(
                 errorCode = 3002,
                 wasHdrToneMapping = true,
@@ -95,6 +103,7 @@ class EngineErrorMapperTest {
                 "taskId" to "task-1",
                 "percent" to 100.0,
                 "state" to "success",
+                "phase" to "finished",
                 "outputUri" to "content://media/output/7",
                 "errorCode" to null,
                 "errorMessage" to null,
@@ -103,6 +112,7 @@ class EngineErrorMapperTest {
                 taskId = "task-1",
                 percent = 100.0,
                 state = "success",
+                phase = "finished",
                 outputUri = "content://media/output/7",
             ).toChannelMap(),
         )

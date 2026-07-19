@@ -14,48 +14,109 @@ void main() {
 
     expect(timing.elapsed, const Duration(seconds: 2));
     expect(timing.remaining, isNull);
+    expect(timing.isStalled, isFalse);
   });
 
-  test('uses elapsed average after enough progress and time', () {
+  test('estimates staircase progress from cumulative elapsed time', () {
     final estimator = EtaEstimator(startedAt: start);
+    for (var percent = 1; percent <= 3; percent++) {
+      estimator.update(
+        percent: percent.toDouble(),
+        now: start.add(Duration(milliseconds: 8500 * percent)),
+      );
+    }
 
     final timing = estimator.update(
+      percent: 4,
+      now: start.add(const Duration(seconds: 34)),
+    );
+
+    expect(timing.remaining, const Duration(minutes: 13, seconds: 36));
+  });
+
+  test(
+    'same-percent timer refreshes do not replace the progress sample baseline',
+    () {
+      final estimator = EtaEstimator(startedAt: start);
+      for (var percent = 1; percent <= 10; percent++) {
+        estimator.update(
+          percent: percent.toDouble(),
+          now: start.add(Duration(milliseconds: 8500 * percent)),
+        );
+      }
+      estimator.update(
+        percent: 10,
+        now: start.add(const Duration(seconds: 90)),
+      );
+
+      final timing = estimator.update(
+        percent: 11,
+        now: start.add(const Duration(seconds: 93)),
+      );
+
+      expect(timing.remaining, isNotNull);
+      expect(timing.remaining!.inMinutes, greaterThanOrEqualTo(12));
+      expect(timing.remaining!.inMinutes, lessThanOrEqualTo(14));
+    },
+  );
+
+  test('hides ETA after progress has stalled for thirty seconds', () {
+    final estimator = EtaEstimator(startedAt: start);
+    for (var percent = 1; percent <= 10; percent++) {
+      estimator.update(
+        percent: percent.toDouble(),
+        now: start.add(Duration(milliseconds: 8500 * percent)),
+      );
+    }
+
+    final stalled = estimator.update(
       percent: 10,
-      now: start.add(const Duration(seconds: 10)),
+      now: start.add(const Duration(seconds: 116)),
     );
 
-    expect(timing.elapsed, const Duration(seconds: 10));
-    expect(timing.remaining, const Duration(seconds: 90));
+    expect(stalled.remaining, isNull);
+    expect(stalled.isStalled, isTrue);
   });
 
-  test('smooths subsequent samples instead of replacing rate abruptly', () {
+  test('resumes with a conservative estimate after a stall', () {
     final estimator = EtaEstimator(startedAt: start);
-    estimator.update(percent: 10, now: start.add(const Duration(seconds: 10)));
+    for (var percent = 1; percent <= 10; percent++) {
+      estimator.update(
+        percent: percent.toDouble(),
+        now: start.add(Duration(milliseconds: 8500 * percent)),
+      );
+    }
+    estimator.update(percent: 10, now: start.add(const Duration(seconds: 116)));
 
-    final timing = estimator.update(
-      percent: 12,
-      now: start.add(const Duration(seconds: 11)),
+    final resumed = estimator.update(
+      percent: 11,
+      now: start.add(const Duration(seconds: 124)),
     );
 
-    // Previous average was 1%/s and the new sample is 2%/s. EMA rate is
-    // 1.25%/s, so 88% remaining takes about 70.4 seconds.
-    expect(timing.remaining, const Duration(milliseconds: 70400));
+    expect(resumed.isStalled, isFalse);
+    expect(resumed.remaining, isNotNull);
+    expect(resumed.remaining!.inMinutes, greaterThanOrEqualTo(14));
   });
 
   test('ignores regressive progress and reports zero at completion', () {
     final estimator = EtaEstimator(startedAt: start);
-    estimator.update(percent: 20, now: start.add(const Duration(seconds: 10)));
+    for (var percent = 1; percent <= 4; percent++) {
+      estimator.update(
+        percent: percent.toDouble(),
+        now: start.add(Duration(seconds: 10 * percent)),
+      );
+    }
     final regressive = estimator.update(
-      percent: 15,
-      now: start.add(const Duration(seconds: 11)),
+      percent: 3,
+      now: start.add(const Duration(seconds: 41)),
     );
     final completed = estimator.update(
       percent: 100,
-      now: start.add(const Duration(seconds: 20)),
+      now: start.add(const Duration(seconds: 1000)),
     );
 
     expect(regressive.remaining, isNotNull);
-    expect(completed.elapsed, const Duration(seconds: 20));
+    expect(completed.elapsed, const Duration(seconds: 1000));
     expect(completed.remaining, Duration.zero);
   });
 
