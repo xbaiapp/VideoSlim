@@ -1,5 +1,6 @@
 package com.videoslim.videoslim
 
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import io.flutter.plugin.common.BinaryMessenger
@@ -10,12 +11,15 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 internal typealias LegacyWritePermissionRequester = ((Boolean) -> Unit) -> Unit
+internal typealias NotificationPermissionRequester = ((Boolean) -> Unit) -> Unit
 
 internal class EngineChannel(
+    private val context: Context,
     messenger: BinaryMessenger,
     private val metadataReader: VideoMetadataReader,
     private val transcodeEngine: TranscodeEngine,
     private val requestLegacyWritePermission: LegacyWritePermissionRequester,
+    private val requestNotificationPermission: NotificationPermissionRequester,
     private val logger: (String) -> Unit = {},
     private val metadataExecutor: ExecutorService = Executors.newSingleThreadExecutor(),
 ) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
@@ -23,9 +27,14 @@ internal class EngineChannel(
     private val eventChannel = EventChannel(messenger, EVENT_CHANNEL)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var eventSink: EventChannel.EventSink? = null
-    private var lastTerminalEvent: EngineProgressEvent? = null
     private var waitingForLegacyPermission = false
+    private var waitingForNotificationPermission = false
     private var disposed = false
+    private val registryObserver: (TaskRuntimeSnapshot) -> Unit = { snapshot ->
+        runCatching { eventSink?.success(snapshot.toProgressMap()) }
+            .onFailure { error -> log("progress delivery failed ${error.stackTraceToString()}") }
+        log("progress=${snapshot.toProgressMap()}")
+    }
 
     init {
         methodChannel.setMethodCallHandler(this)
@@ -41,6 +50,7 @@ internal class EngineChannel(
         when (call.method) {
             "getVideoInfo" -> getVideoInfo(call.arguments, result)
             "getCapabilities" -> getCapabilities(call.arguments, result)
+            "getTaskSnapshot" -> getTaskSnapshot(call.arguments, result)
             "process" -> process(call.arguments, result)
             "extractAudio" ->
                 replyError(
@@ -54,11 +64,13 @@ internal class EngineChannel(
     }
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+        ProcessingRuntime.registry.removeObserver(registryObserver)
         eventSink = events
-        lastTerminalEvent?.let { terminal -> runCatching { events.success(terminal.toChannelMap()) } }
+        ProcessingRuntime.registry.addObserver(registryObserver)
     }
 
     override fun onCancel(arguments: Any?) {
+        ProcessingRuntime.registry.removeObserver(registryObserver)
         eventSink = null
     }
 
@@ -66,6 +78,8 @@ internal class EngineChannel(
         if (disposed) return
         disposed = true
         waitingForLegacyPermission = false
+        waitingForNotificationPermission = false
+        ProcessingRuntime.registry.removeObserver(registryObserver)
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
         eventSink = null
@@ -114,6 +128,15 @@ internal class EngineChannel(
         }
     }
 
+    private fun getTaskSnapshot(arguments: Any?, result: MethodChannel.Result) {
+        try {
+            requireExactMap(arguments, emptySet())
+            result.success(ProcessingRuntime.registry.snapshot()?.toSnapshotMap())
+        } catch (error: Throwable) {
+            replyError(result, EngineFailure(EngineErrorCode.UNKNOWN), error)
+        }
+    }
+
     private fun process(arguments: Any?, result: MethodChannel.Result) {
         val request =
             try {
@@ -125,17 +148,17 @@ internal class EngineChannel(
                 replyError(result, EngineFailure(EngineErrorCode.UNKNOWN, "压缩参数无效"), error)
                 return
             }
-        if (waitingForLegacyPermission) {
+        if (waitingForLegacyPermission || waitingForNotificationPermission) {
             replyError(
                 result,
-                EngineFailure(EngineErrorCode.UNKNOWN, "正在等待系统存储权限，请勿重复提交"),
+                EngineFailure(EngineErrorCode.UNKNOWN, "正在等待系统权限，请勿重复提交"),
                 null,
             )
             return
         }
         waitingForLegacyPermission = true
-        requestLegacyWritePermission { granted ->
-            if (disposed) return@requestLegacyWritePermission
+        requestLegacyWritePermission legacyPermission@{ granted ->
+            if (disposed) return@legacyPermission
             waitingForLegacyPermission = false
             if (!granted) {
                 replyError(
@@ -146,17 +169,33 @@ internal class EngineChannel(
                     ),
                     null,
                 )
-                return@requestLegacyWritePermission
+                return@legacyPermission
             }
-            try {
-                val taskId = transcodeEngine.start(request, ::emitProgress)
-                val response = mapOf("taskId" to taskId)
-                log("method=process response=$response")
-                result.success(response)
-            } catch (error: EngineOperationException) {
-                replyError(result, error.failure, error)
-            } catch (error: Throwable) {
-                replyError(result, EngineErrorMapper.fromThrowable(error), error)
+            waitingForNotificationPermission = true
+            requestNotificationPermission notificationPermission@{ notificationGranted ->
+                if (disposed) return@notificationPermission
+                waitingForNotificationPermission = false
+                if (!notificationGranted) {
+                    replyError(
+                        result,
+                        EngineFailure(
+                            EngineErrorCode.UNKNOWN,
+                            "后台压缩需要通知权限，请在系统设置中允许通知",
+                        ),
+                        null,
+                    )
+                    return@notificationPermission
+                }
+                try {
+                    val taskId = ProcessingRuntime.launch(context, arguments, request)
+                    val response = mapOf("taskId" to taskId)
+                    log("method=process response=$response")
+                    result.success(response)
+                } catch (error: EngineOperationException) {
+                    replyError(result, error.failure, error)
+                } catch (error: Throwable) {
+                    replyError(result, EngineErrorMapper.fromThrowable(error), error)
+                }
             }
         }
     }
@@ -171,24 +210,11 @@ internal class EngineChannel(
                 return
             }
         try {
-            transcodeEngine.cancel(taskId)
+            ProcessingRuntime.cancel(context, taskId)
             result.success(emptyMap<String, Any?>())
-        } catch (error: EngineOperationException) {
-            replyError(result, error.failure, error)
         } catch (error: Throwable) {
             replyError(result, EngineErrorMapper.fromThrowable(error), error)
         }
-    }
-
-    private fun emitProgress(event: EngineProgressEvent) {
-        if (event.state == STATE_RUNNING) {
-            if (lastTerminalEvent?.taskId != event.taskId) lastTerminalEvent = null
-        } else {
-            lastTerminalEvent = event
-        }
-        runCatching { eventSink?.success(event.toChannelMap()) }
-            .onFailure { error -> log("progress delivery failed ${error.stackTraceToString()}") }
-        log("progress=${event.toChannelMap()}")
     }
 
     private fun replyError(

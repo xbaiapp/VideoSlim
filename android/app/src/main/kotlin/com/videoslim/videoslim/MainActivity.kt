@@ -64,10 +64,12 @@ class MainActivity : FlutterFragmentActivity() {
             )
         engineChannel =
             EngineChannel(
+                context = this,
                 messenger = messenger,
                 metadataReader = metadataReader,
                 transcodeEngine = transcodeEngine,
                 requestLegacyWritePermission = ::requestLegacyWritePermission,
+                requestNotificationPermission = ::requestNotificationPermission,
                 logger = ::appendNativeLog,
             )
         mediaActionsChannel =
