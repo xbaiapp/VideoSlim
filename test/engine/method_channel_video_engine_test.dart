@@ -8,6 +8,7 @@ import 'package:videoslim/engine/video_engine.dart';
 import 'package:videoslim/logging/app_logger.dart';
 import 'package:videoslim/models/process_request.dart';
 import 'package:videoslim/models/progress_event.dart';
+import 'package:videoslim/models/task_snapshot.dart';
 
 const MethodChannel _engineChannel = MethodChannel('videoslim/engine');
 const MethodChannel _pickerChannel = MethodChannel('videoslim/picker');
@@ -39,6 +40,78 @@ void main() {
   });
 
   group('MethodChannelVideoEngine method calls', () {
+    test('gets a strict nullable task snapshot with empty arguments', () async {
+      final calls = <MethodCall>[];
+      var invocation = 0;
+      messenger.setMockMethodCallHandler(_engineChannel, (
+        MethodCall call,
+      ) async {
+        calls.add(call);
+        invocation += 1;
+        if (invocation == 1) {
+          return <String, Object?>{
+            'taskId': 'task-snapshot',
+            'state': 'running',
+            'percent': 12,
+            'sourceUri': 'content://source/snapshot',
+            'outputFileName': 'snapshot_slim.mp4',
+            'startedAtEpochMs': 1784419200000.0,
+            'outputUri': null,
+            'errorCode': null,
+            'errorMessage': null,
+          };
+        }
+        return null;
+      });
+      final engine = MethodChannelVideoEngine(logger: logger);
+
+      final snapshot = await engine.getTaskSnapshot();
+      final absent = await engine.getTaskSnapshot();
+
+      expect(snapshot, isA<TaskSnapshot>());
+      expect(snapshot!.taskId, 'task-snapshot');
+      expect(snapshot.percent, 12.0);
+      expect(snapshot.startedAtEpochMs, 1784419200000);
+      expect(absent, isNull);
+      expect(calls.map((call) => call.method), <String>[
+        'getTaskSnapshot',
+        'getTaskSnapshot',
+      ]);
+      expect(calls.every((call) => call.arguments is Map), isTrue);
+      expect(calls[0].arguments, <String, Object?>{});
+      expect(calls[1].arguments, <String, Object?>{});
+      expect(logger.entries, hasLength(2));
+    });
+
+    test(
+      'normalizes malformed task snapshots instead of leaking casts',
+      () async {
+        messenger.setMockMethodCallHandler(_engineChannel, (
+          MethodCall call,
+        ) async {
+          expect(call.method, 'getTaskSnapshot');
+          return <String, Object?>{
+            'taskId': 'task-bad',
+            'state': 'paused',
+            'percent': 12,
+            'sourceUri': 'content://source',
+            'outputFileName': 'out.mp4',
+            'startedAtEpochMs': 1000,
+          };
+        });
+        final engine = MethodChannelVideoEngine(logger: logger);
+
+        final error = await _captureEngineException(engine.getTaskSnapshot());
+
+        expect(error.code, 'UNKNOWN');
+        expect(error.message, contains('平台返回数据异常'));
+        expect(error, isNot(isA<TypeError>()));
+        final details = error.details! as Map<String, Object?>;
+        expect(details['rawResponse'], isA<Map<Object?, Object?>>());
+        expect(details['error'], contains('paused'));
+      },
+    );
+
     test(
       'uses exact channel, methods, arguments, and parses numeric maps',
       () async {

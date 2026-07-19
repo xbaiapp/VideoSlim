@@ -6,6 +6,7 @@ import '../logging/app_logger.dart';
 import '../models/device_capabilities.dart';
 import '../models/process_request.dart';
 import '../models/progress_event.dart';
+import '../models/task_snapshot.dart';
 import '../models/video_info.dart';
 import 'video_engine.dart';
 import 'video_picker.dart';
@@ -45,6 +46,21 @@ final class MethodChannelVideoEngine implements VideoEngine {
       arguments: arguments,
       parse: (Object? response) =>
           DeviceCapabilities.fromMap(_requireMap(response)),
+    );
+  }
+
+  @override
+  Future<TaskSnapshot?> getTaskSnapshot() {
+    final arguments = <String, Object?>{};
+    return _invoker.invoke<TaskSnapshot?>(
+      'getTaskSnapshot',
+      arguments: arguments,
+      parse: (Object? response) {
+        if (response == null) {
+          return null;
+        }
+        return TaskSnapshot.fromMap(_requireMap(response));
+      },
     );
   }
 

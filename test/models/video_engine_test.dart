@@ -5,6 +5,7 @@ import 'package:videoslim/engine/video_engine.dart';
 import 'package:videoslim/models/device_capabilities.dart';
 import 'package:videoslim/models/process_request.dart';
 import 'package:videoslim/models/progress_event.dart';
+import 'package:videoslim/models/task_snapshot.dart';
 import 'package:videoslim/models/video_info.dart';
 
 void main() {
@@ -35,6 +36,7 @@ void main() {
       expect(engine.cancelledTaskId, 'process-task');
       expect(await engine.progressStream.toList(), isEmpty);
       expect((await engine.getCapabilities()).hevcEncoder, isTrue);
+      expect(await engine.getTaskSnapshot(), isNull);
     },
   );
 
@@ -68,6 +70,9 @@ class _FakeVideoEngine implements VideoEngine {
   @override
   Future<DeviceCapabilities> getCapabilities() async =>
       const DeviceCapabilities(hevcEncoder: true, h264Encoder: true);
+
+  @override
+  Future<TaskSnapshot?> getTaskSnapshot() async => null;
 
   @override
   Future<VideoInfo> getVideoInfo(String uri) async => VideoInfo(

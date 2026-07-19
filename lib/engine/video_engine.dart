@@ -1,6 +1,7 @@
 import '../models/device_capabilities.dart';
 import '../models/process_request.dart';
 import '../models/progress_event.dart';
+import '../models/task_snapshot.dart';
 import '../models/video_info.dart';
 
 /// Platform-independent interface for VideoSlim's media engine.
@@ -22,6 +23,9 @@ abstract class VideoEngine {
 
   /// Detects the device's supported hardware encoders.
   Future<DeviceCapabilities> getCapabilities();
+
+  /// Returns the active or most recent terminal task, if one is reconnectable.
+  Future<TaskSnapshot?> getTaskSnapshot();
 }
 
 /// Engine failure normalized for UI and platform-channel error handling.

@@ -1,0 +1,130 @@
+import 'progress_event.dart';
+
+/// Reconnectable snapshot of an active or terminal processing task.
+final class TaskSnapshot {
+  /// Creates an immutable task snapshot.
+  const TaskSnapshot({
+    required this.taskId,
+    required this.state,
+    required this.percent,
+    required this.sourceUri,
+    required this.outputFileName,
+    required this.startedAtEpochMs,
+    this.outputUri,
+    this.errorCode,
+    this.errorMessage,
+  }) : assert(taskId != ''),
+       assert(state != TaskState.idle),
+       assert(percent >= 0 && percent <= 100),
+       assert(sourceUri != ''),
+       assert(outputFileName != ''),
+       assert(startedAtEpochMs >= 0);
+
+  /// Strictly parses the platform-channel snapshot map.
+  factory TaskSnapshot.fromMap(Map<Object?, Object?> map) {
+    final state = taskStateFromWireName(map['state']);
+    if (state == TaskState.idle) {
+      throw const FormatException('A task snapshot cannot have idle state');
+    }
+
+    final percent = _requiredDouble(map, 'percent');
+    if (!percent.isFinite || percent < 0 || percent > 100) {
+      throw FormatException('Invalid task snapshot percent: $percent');
+    }
+
+    final startedAtEpochMs = _requiredWholeInt(map, 'startedAtEpochMs');
+    if (startedAtEpochMs < 0) {
+      throw FormatException(
+        'Invalid task snapshot startedAtEpochMs: $startedAtEpochMs',
+      );
+    }
+
+    return TaskSnapshot(
+      taskId: _requiredNonEmptyString(map, 'taskId'),
+      state: state,
+      percent: percent,
+      sourceUri: _requiredNonEmptyString(map, 'sourceUri'),
+      outputFileName: _requiredNonEmptyString(map, 'outputFileName'),
+      startedAtEpochMs: startedAtEpochMs,
+      outputUri: _optionalString(map, 'outputUri'),
+      errorCode: _optionalString(map, 'errorCode'),
+      errorMessage: _optionalString(map, 'errorMessage'),
+    );
+  }
+
+  /// Engine task identifier.
+  final String taskId;
+
+  /// Current task lifecycle state.
+  final TaskState state;
+
+  /// Latest completion percentage in the inclusive range 0–100.
+  final double percent;
+
+  /// Source content URI retained for same-process UI reconstruction.
+  final String sourceUri;
+
+  /// Requested public output display name.
+  final String outputFileName;
+
+  /// Task start time as Unix epoch milliseconds.
+  final int startedAtEpochMs;
+
+  /// Published output URI after success, when available.
+  final String? outputUri;
+
+  /// Stable engine error code after failure, when available.
+  final String? errorCode;
+
+  /// Human-readable engine error after failure, when available.
+  final String? errorMessage;
+
+  /// Task start time in the local time zone.
+  DateTime get startedAt =>
+      DateTime.fromMillisecondsSinceEpoch(startedAtEpochMs);
+
+  /// Converts this snapshot to the exact platform-channel map.
+  Map<String, Object?> toMap() => <String, Object?>{
+    'taskId': taskId,
+    'state': state.wireName,
+    'percent': percent,
+    'sourceUri': sourceUri,
+    'outputFileName': outputFileName,
+    'startedAtEpochMs': startedAtEpochMs,
+    'outputUri': outputUri,
+    'errorCode': errorCode,
+    'errorMessage': errorMessage,
+  };
+}
+
+String _requiredNonEmptyString(Map<Object?, Object?> map, String key) {
+  final value = map[key];
+  if (value is String && value.isNotEmpty) {
+    return value;
+  }
+  throw FormatException('Expected non-empty String for $key, got $value');
+}
+
+double _requiredDouble(Map<Object?, Object?> map, String key) {
+  final value = map[key];
+  if (value is num) {
+    return value.toDouble();
+  }
+  throw FormatException('Expected numeric $key, got $value');
+}
+
+int _requiredWholeInt(Map<Object?, Object?> map, String key) {
+  final value = map[key];
+  if (value is num && value.isFinite && value == value.toInt()) {
+    return value.toInt();
+  }
+  throw FormatException('Expected whole numeric $key, got $value');
+}
+
+String? _optionalString(Map<Object?, Object?> map, String key) {
+  final value = map[key];
+  if (value == null || value is String) {
+    return value as String?;
+  }
+  throw FormatException('Expected nullable String for $key, got $value');
+}
