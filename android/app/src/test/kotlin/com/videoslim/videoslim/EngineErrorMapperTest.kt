@@ -38,6 +38,34 @@ class EngineErrorMapperTest {
     }
 
     @Test
+    fun `HDR processing failures remain stable but explain tone mapping`() {
+        val frameProcessing =
+            EngineErrorMapper.fromExportErrorCode(
+                errorCode = 5001,
+                wasHdrToneMapping = true,
+            )
+        assertEquals(EngineErrorCode.UNKNOWN, frameProcessing.code)
+        check(frameProcessing.message.contains("HDR"))
+        check(frameProcessing.message.contains("SDR"))
+
+        val encoderInit =
+            EngineErrorMapper.fromExportErrorCode(
+                errorCode = 4001,
+                wasHdrToneMapping = true,
+            )
+        assertEquals(EngineErrorCode.ENCODER_UNAVAILABLE, encoderInit.code)
+        check(encoderInit.message.contains("HDR"))
+
+        assertEquals(
+            EngineErrorCode.SOURCE_CORRUPTED.defaultMessage,
+            EngineErrorMapper.fromExportErrorCode(
+                errorCode = 3002,
+                wasHdrToneMapping = true,
+            ).message,
+        )
+    }
+
+    @Test
     fun `maps cancellation and no-space throwable chains before generic errors`() {
         assertEquals(
             EngineErrorCode.CANCELLED,

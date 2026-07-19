@@ -12,10 +12,14 @@ import android.os.SystemClock
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.effect.Presentation
+import androidx.media3.transformer.AudioEncoderSettings
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.DefaultMuxer
 import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.EditedMediaItemSequence
+import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
@@ -78,7 +82,8 @@ internal class TranscodeEngine(
                 EngineFailure(EngineErrorCode.UNKNOWN, "已有视频处理任务正在进行中"),
             )
         }
-        if (!hasHardwareEncoder(MimeTypes.VIDEO_H265)) {
+        val requestedVideoMime = videoMimeType(request.videoCodec)
+        if (!hasHardwareEncoder(requestedVideoMime)) {
             throw EngineOperationException(EngineFailure(EngineErrorCode.ENCODER_UNAVAILABLE))
         }
         if (!tempDirectory.exists() && !tempDirectory.mkdirs()) {
@@ -138,24 +143,24 @@ internal class TranscodeEngine(
         try {
             if (task.cancelRequested) return
             val metadata = metadataReader.read(task.request.sourceUri)
-            if (metadata.isHdr) {
-                throw EngineOperationException(
-                    EngineFailure(EngineErrorCode.UNKNOWN, "M1 暂不支持 HDR 视频，请选择 SDR 视频"),
-                )
-            }
-            metadata.audioMime?.let { audioMime ->
-                val supportedAudio =
-                    DefaultMuxer.Factory().getSupportedSampleMimeTypes(C.TRACK_TYPE_AUDIO)
-                if (audioMime !in supportedAudio) {
-                    throw EngineOperationException(
-                        EngineFailure(
-                            EngineErrorCode.UNKNOWN,
-                            "源视频音频格式无法原样复制到 MP4，M1 已停止处理",
-                        ),
-                    )
+            val plan = TranscodePlan.create(task.request, metadata, Build.VERSION.SDK_INT)
+            if (task.request.audioMode == AudioMode.COPY) {
+                metadata.audioMime?.let { audioMime ->
+                    val supportedAudio =
+                        DefaultMuxer.Factory().getSupportedSampleMimeTypes(C.TRACK_TYPE_AUDIO)
+                    if (audioMime !in supportedAudio) {
+                        throw EngineOperationException(
+                            EngineFailure(
+                                EngineErrorCode.UNKNOWN,
+                                "源视频音频格式无法原样复制到 MP4，请选择 AAC 重编码或移除音轨",
+                            ),
+                        )
+                    }
                 }
             }
-            ensureStorage(metadata, task.request.videoBitrate)
+            ensureStorage(plan.storageEstimate)
+            task.plan = plan
+            log("task=${task.id} plan=$plan")
             postToMain {
                 if (!isCurrent(task)) return@postToMain
                 if (task.cancelRequested) {
@@ -173,20 +178,32 @@ internal class TranscodeEngine(
         requireMainThread()
         try {
             task.stage = Stage.TRANSFORMING
+            val plan = checkNotNull(task.plan) { "Transcode plan is missing" }
             val settings =
                 VideoEncoderSettings.Builder()
                     .setBitrate(task.request.videoBitrate)
                     .setBitrateMode(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
                     .build()
-            val encoderFactory =
+            val encoderFactoryBuilder =
                 DefaultEncoderFactory.Builder(appContext)
                     .setRequestedVideoEncoderSettings(settings)
                     .setEnableFallback(false)
-                    .build()
-            val transformer =
+            if (task.request.audioMode == AudioMode.REENCODE) {
+                encoderFactoryBuilder.setRequestedAudioEncoderSettings(
+                    AudioEncoderSettings.Builder()
+                        .setBitrate(checkNotNull(task.request.audioBitrate))
+                        .build(),
+                )
+            }
+            val transformerBuilder =
                 Transformer.Builder(appContext)
-                    .setEncoderFactory(encoderFactory)
-                    .setVideoMimeType(MimeTypes.VIDEO_H265)
+                    .setEncoderFactory(encoderFactoryBuilder.build())
+                    .setVideoMimeType(videoMimeType(task.request.videoCodec))
+            if (task.request.audioMode == AudioMode.REENCODE) {
+                transformerBuilder.setAudioMimeType(MimeTypes.AUDIO_AAC)
+            }
+            val transformer =
+                transformerBuilder
                     .addListener(
                         object : Transformer.Listener {
                             override fun onCompleted(
@@ -202,14 +219,46 @@ internal class TranscodeEngine(
                                 exportException: ExportException,
                             ) {
                                 val failure =
-                                    EngineErrorMapper.fromExportErrorCode(exportException.errorCode)
+                                    EngineErrorMapper.fromExportErrorCode(
+                                        errorCode = exportException.errorCode,
+                                        wasHdrToneMapping =
+                                            plan.hdrMode ==
+                                                HdrMode.TONE_MAP_HDR_TO_SDR_USING_OPEN_GL,
+                                    )
                                 fail(task, failure, exportException)
                             }
                         },
                     ).build()
             task.transformer = transformer
-            val editedItem = EditedMediaItem.Builder(MediaItem.fromUri(task.request.sourceUri)).build()
-            transformer.start(editedItem, task.tempFile.absolutePath)
+
+            val editedItemBuilder =
+                EditedMediaItem.Builder(MediaItem.fromUri(task.request.sourceUri))
+                    .setRemoveAudio(task.request.audioMode == AudioMode.REMOVE)
+            if (plan.presentationRequired) {
+                editedItemBuilder.setEffects(
+                    Effects(
+                        emptyList(),
+                        listOf(
+                            Presentation.createForWidthAndHeight(
+                                plan.outputDimensions.width,
+                                plan.outputDimensions.height,
+                                Presentation.LAYOUT_SCALE_TO_FIT,
+                            ),
+                        ),
+                    ),
+                )
+            }
+            val sequence = EditedMediaItemSequence.Builder(editedItemBuilder.build()).build()
+            val composition =
+                Composition.Builder(sequence)
+                    .setHdrMode(
+                        if (plan.hdrMode == HdrMode.TONE_MAP_HDR_TO_SDR_USING_OPEN_GL) {
+                            Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL
+                        } else {
+                            Composition.HDR_MODE_KEEP_HDR
+                        },
+                    ).build()
+            transformer.start(composition, task.tempFile.absolutePath)
             scheduleProgress(task)
             log("task=${task.id} transformer started temp=${task.tempFile.name}")
         } catch (error: Throwable) {
@@ -361,20 +410,18 @@ internal class TranscodeEngine(
         }.onFailure { error -> log("task=${task.id} event callback failed ${error.stackTraceToString()}") }
     }
 
-    private fun ensureStorage(metadata: VideoMetadata, bitrate: Int) {
-        val videoBytes = safeMultiply(metadata.durationMs, bitrate.toLong()) / BITS_PER_MILLISECOND
-        val overhead = max(MIN_OVERHEAD_BYTES, metadata.fileSizeBytes / SOURCE_OVERHEAD_DIVISOR)
-        val oneOutput = safeAdd(videoBytes, overhead)
-        val cacheRequired = safeAdd(safeMultiply(oneOutput, 2L), STORAGE_HEADROOM_BYTES)
-        val publicRequired = safeAdd(oneOutput, STORAGE_HEADROOM_BYTES)
+    private fun ensureStorage(estimate: StorageEstimate) {
         val cacheAvailable = StatFs(appContext.cacheDir.absolutePath).availableBytes
         val publicAvailable = StatFs(publicStorageRoot().absolutePath).availableBytes
-        if (cacheAvailable < cacheRequired || publicAvailable < publicRequired) {
+        if (
+            cacheAvailable < estimate.cacheRequiredBytes ||
+            publicAvailable < estimate.publicRequiredBytes
+        ) {
             throw EngineOperationException(
                 EngineFailure(
                     EngineErrorCode.INSUFFICIENT_STORAGE,
-                    "存储空间不足：应用缓存需 ${cacheRequired / MEBIBYTE} MiB，" +
-                        "系统影片目录需 ${publicRequired / MEBIBYTE} MiB 可用空间",
+                    "存储空间不足：应用缓存需 ${estimate.cacheRequiredBytes / MEBIBYTE} MiB，" +
+                        "系统影片目录需 ${estimate.publicRequiredBytes / MEBIBYTE} MiB 可用空间",
                 ),
             )
         }
@@ -389,6 +436,7 @@ internal class TranscodeEngine(
     private fun mapPreparationFailure(error: Throwable): EngineFailure =
         when (error) {
             is EngineOperationException -> error.failure
+            is TranscodePlanException -> error.failure
             is VideoMetadataException ->
                 if (error.code == VideoMetadataException.SOURCE_CORRUPTED) {
                     EngineFailure(EngineErrorCode.SOURCE_CORRUPTED, error.message)
@@ -408,6 +456,12 @@ internal class TranscodeEngine(
         }.getOrElse { error ->
             log("capability detection failed ${error.stackTraceToString()}")
             false
+        }
+
+    private fun videoMimeType(codec: VideoCodec): String =
+        when (codec) {
+            VideoCodec.HEVC -> MimeTypes.VIDEO_H265
+            VideoCodec.H264 -> MimeTypes.VIDEO_H264
         }
 
     private fun isHardwareCodec(info: MediaCodecInfo): Boolean {
@@ -438,14 +492,6 @@ internal class TranscodeEngine(
         }
     }
 
-    private fun safeMultiply(left: Long, right: Long): Long =
-        if (left <= 0L || right <= 0L) 0L
-        else if (left > Long.MAX_VALUE / right) Long.MAX_VALUE
-        else left * right
-
-    private fun safeAdd(left: Long, right: Long): Long =
-        if (Long.MAX_VALUE - left < right) Long.MAX_VALUE else left + right
-
     private inner class ActiveTask(
         val id: String,
         val request: ProcessRequest,
@@ -453,6 +499,7 @@ internal class TranscodeEngine(
         val listener: EngineProgressListener,
     ) {
         @Volatile var cancelRequested: Boolean = false
+        var plan: TranscodePlan? = null
         var transformer: Transformer? = null
         var stage: Stage = Stage.PREPARING
         var lastPercent: Double = 0.0
@@ -470,10 +517,6 @@ internal class TranscodeEngine(
         const val PROGRESS_INTERVAL_MS = 500L
         const val NO_RUNNING_EVENT = -1L
         const val PUBLISHING_PERCENT = 99.0
-        const val BITS_PER_MILLISECOND = 8_000L
-        const val SOURCE_OVERHEAD_DIVISOR = 20L
-        const val MIN_OVERHEAD_BYTES = 16L * 1024L * 1024L
-        const val STORAGE_HEADROOM_BYTES = 32L * 1024L * 1024L
         const val MEBIBYTE = 1024L * 1024L
     }
 }
