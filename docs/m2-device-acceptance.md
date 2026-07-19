@@ -1,6 +1,11 @@
 # VideoSlim M2 真机验收矩阵
 
-> 状态：待 M2 APK 构建后由项目所有者在真机执行。本文只定义验收，不代表已通过。
+> 状态：M2 自动化质量门禁和 arm64 Release APK 构建已完成；以下项目仍待项目所有者在真机执行，勾选前不代表已通过。
+>
+> - 验收 APK：`VideoSlim-M2-arm64-v1.2.0.apk`（`1.2.0+3`）
+> - SHA-256：`abdc4b08d6622aeba0aff3151b7de1083420e73c48595f87b93f819cfd8133b7`
+> - 本机路径：`/root/artifacts/videoslim/m2/VideoSlim-M2-arm64-v1.2.0.apk`
+> - 签名：debug certificate，仅用于当前私有真机验收。
 
 ## 1. 测试前记录
 
