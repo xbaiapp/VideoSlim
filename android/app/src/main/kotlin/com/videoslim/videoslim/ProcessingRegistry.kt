@@ -169,11 +169,22 @@ internal class ProcessingRegistry {
         errorMessage: String?,
     ) {
         when (state) {
-            TaskRuntimeSnapshot.STATE_RUNNING,
-            TaskRuntimeSnapshot.STATE_CANCELLED,
-            -> require(outputUri == null && errorCode == null && errorMessage == null) {
-                "$state must not contain output or error fields"
-            }
+            TaskRuntimeSnapshot.STATE_RUNNING ->
+                require(outputUri == null && errorCode == null && errorMessage == null) {
+                    "running must not contain output or error fields"
+                }
+
+            TaskRuntimeSnapshot.STATE_CANCELLED ->
+                require(
+                    outputUri == null &&
+                        (
+                            (errorCode == null && errorMessage == null) ||
+                                (errorCode == EngineErrorCode.CANCELLED.wireName &&
+                                    !errorMessage.isNullOrBlank())
+                        ),
+                ) {
+                    "cancelled accepts no output and only an optional CANCELLED error pair"
+                }
 
             TaskRuntimeSnapshot.STATE_SUCCESS ->
                 require(!outputUri.isNullOrBlank() && errorCode == null && errorMessage == null) {

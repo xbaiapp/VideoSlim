@@ -58,6 +58,7 @@ internal class TranscodeEngine(
     context: Context,
     private val metadataReader: VideoMetadataReader = VideoMetadataReader(context),
     private val mediaStoreSaver: MediaStoreSaver = MediaStoreSaver(context),
+    private val recoveryStore: TaskRecoveryStore = TaskRecoveryStore(context),
     private val logger: (String) -> Unit = {},
     private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor(),
 ) {
@@ -99,6 +100,20 @@ internal class TranscodeEngine(
                 tempFile = File(tempDirectory, "${UUID.randomUUID()}.mp4"),
                 listener = listener,
             )
+        try {
+            recoveryStore.begin(
+                taskId = task.id,
+                tempFileName = task.tempFile.name,
+                expectedOutputDisplayName = request.outputFileName,
+            )
+            task.recoveryStarted = true
+        } catch (error: Throwable) {
+            runCatching { task.tempFile.delete() }
+            throw EngineOperationException(
+                EngineFailure(EngineErrorCode.UNKNOWN, "无法建立任务恢复日志，请重试"),
+                error,
+            )
+        }
         activeTask = task
         emit(task, 0.0, STATE_RUNNING)
         log("task=${task.id} prepare request=$request")
@@ -177,6 +192,7 @@ internal class TranscodeEngine(
     private fun beginTransformer(task: ActiveTask) {
         requireMainThread()
         try {
+            recoveryStore.updateStage(task.id, RecoveryStage.TRANSFORMING)
             task.stage = Stage.TRANSFORMING
             val plan = checkNotNull(task.plan) { "Transcode plan is missing" }
             val settings =
@@ -319,7 +335,7 @@ internal class TranscodeEngine(
                             if (!disposed && isCurrent(task)) finishCancelled(task)
                             return@post
                         }
-                        runCatching { task.tempFile.delete() }
+                        cleanupTempAndRecovery(task)
                         task.stage = Stage.FINISHED
                         activeTask = null
                         emit(task, 100.0, STATE_SUCCESS, outputUri = publishedUri)
@@ -345,7 +361,7 @@ internal class TranscodeEngine(
         }
         mainHandler.removeCallbacks(task.progressPoller)
         runCatching { task.transformer?.cancel() }
-        runCatching { task.tempFile.delete() }
+        cleanupTempAndRecovery(task)
         task.stage = Stage.FINISHED
         activeTask = null
         emit(
@@ -365,7 +381,7 @@ internal class TranscodeEngine(
         if (!isCurrent(task)) return
         mainHandler.removeCallbacks(task.progressPoller)
         runCatching { task.transformer?.cancel() }
-        runCatching { task.tempFile.delete() }
+        cleanupTempAndRecovery(task)
         task.stage = Stage.FINISHED
         activeTask = null
         emit(
@@ -486,6 +502,27 @@ internal class TranscodeEngine(
         runCatching { logger(message) }
     }
 
+    private fun cleanupTempAndRecovery(task: ActiveTask) {
+        val tempRemoved =
+            runCatching {
+                !task.tempFile.exists() || task.tempFile.delete() || !task.tempFile.exists()
+            }.getOrElse { error ->
+                log("task=${task.id} temp cleanup failed ${error.stackTraceToString()}")
+                false
+            }
+        if (!tempRemoved) {
+            log("task=${task.id} temp cleanup returned false; recovery journal retained")
+            return
+        }
+        if (task.recoveryStarted) {
+            runCatching { recoveryStore.clear(task.id) }
+                .onSuccess { task.recoveryStarted = false }
+                .onFailure { error ->
+                    log("task=${task.id} recovery clear failed ${error.stackTraceToString()}")
+                }
+        }
+    }
+
     private fun requireMainThread() {
         check(Looper.myLooper() == Looper.getMainLooper()) {
             "TranscodeEngine must be called on the main looper"
@@ -499,6 +536,7 @@ internal class TranscodeEngine(
         val listener: EngineProgressListener,
     ) {
         @Volatile var cancelRequested: Boolean = false
+        @Volatile var recoveryStarted: Boolean = false
         var plan: TranscodePlan? = null
         var transformer: Transformer? = null
         var stage: Stage = Stage.PREPARING

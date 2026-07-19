@@ -16,7 +16,7 @@
         tools:node="remove" />
     <application
         android:label="视频瘦身"
-        android:name="${applicationName}"
+        android:name=".VideoSlimApplication"
         android:icon="@mipmap/ic_launcher">
         <service
             android:name=".ProcessingService"

@@ -11,6 +11,7 @@ import 'package:videoslim/logging/app_logger.dart';
 import 'package:videoslim/models/device_capabilities.dart';
 import 'package:videoslim/models/process_request.dart';
 import 'package:videoslim/models/progress_event.dart';
+import 'package:videoslim/models/task_snapshot.dart';
 import 'package:videoslim/models/video_info.dart';
 import 'package:videoslim/state/home_flow_state.dart';
 
@@ -86,6 +87,9 @@ final class _FakeEngine implements VideoEngine {
 
   @override
   Stream<ProgressEvent> get progressStream => progress.stream;
+
+  @override
+  Future<TaskSnapshot?> getTaskSnapshot() async => null;
 
   @override
   Future<VideoInfo> getVideoInfo(String uri) async {

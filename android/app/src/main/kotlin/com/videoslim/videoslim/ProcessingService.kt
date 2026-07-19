@@ -13,10 +13,11 @@ internal class ProcessingService : Service() {
     private lateinit var notificationFactory: ProcessingNotificationFactory
     private lateinit var wakeLockGuard: WakeLockGuard
     private lateinit var transcodeEngine: TranscodeEngine
+    private lateinit var recoveryStore: TaskRecoveryStore
     private lateinit var logStore: AppLogStore
     private val logSequence = AtomicLong()
-    private var activeTaskId: String? = null
-    private var engineTaskId: String? = null
+    @Volatile private var activeTaskId: String? = null
+    @Volatile private var engineTaskId: String? = null
     private var terminalHandled = false
     private var timeoutRequested = false
     private var cancelRequested = false
@@ -41,9 +42,43 @@ internal class ProcessingService : Service() {
         notificationFactory = ProcessingNotificationFactory(this)
         wakeLockGuard = WakeLockGuard(AndroidPartialWakeLock(this))
         logStore = AppLogStore(this)
+        recoveryStore = TaskRecoveryStore(this, ::log)
+        runCatching { OrphanCleanup(this, recoveryStore, ::log).reconcile() }
+            .onFailure { error ->
+                log("service startup reconciliation failed ${error.stackTraceToString()}")
+            }
+        val publicationObserver =
+            object : PublicationObserver {
+                override fun onPublicationTargetAllocated(target: PublicationTarget) {
+                    val internalTaskId =
+                        engineTaskId
+                            ?: throw IllegalStateException("Publication started without an engine task")
+                    recoveryStore.recordPublicationTarget(
+                        taskId = internalTaskId,
+                        actualOutputDisplayName = target.actualDisplayName,
+                        mediaStoreUri = target.mediaStoreUri,
+                        canonicalLegacyOutputPath = target.canonicalLegacyOutputPath,
+                    )
+                    activeTaskId?.let { publicTaskId ->
+                        ProcessingRuntime.registry.updateOutputFileName(
+                            publicTaskId,
+                            target.actualDisplayName,
+                        )
+                    }
+                }
+
+                override fun onPublicationCompleted(target: PublicationTarget) {
+                    val internalTaskId =
+                        engineTaskId
+                            ?: throw IllegalStateException("Publication completed without an engine task")
+                    recoveryStore.markPublished(internalTaskId)
+                }
+            }
         transcodeEngine =
             TranscodeEngine(
                 context = this,
+                mediaStoreSaver = MediaStoreSaver(this, publicationObserver),
+                recoveryStore = recoveryStore,
                 logger = ::log,
             )
         ProcessingRuntime.registry.addObserver(registryObserver)

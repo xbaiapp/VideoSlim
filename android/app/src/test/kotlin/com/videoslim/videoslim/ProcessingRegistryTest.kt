@@ -91,6 +91,24 @@ class ProcessingRegistryTest {
     }
 
     @Test
+    fun `engine cancellation error pair is accepted without an output`() {
+        val registry = ProcessingRegistry()
+        registry.reserve("one", "content://one", "one.mp4", 1L)
+
+        assertTrue(
+            registry.apply(
+                taskId = "one",
+                percent = 45.0,
+                state = "cancelled",
+                errorCode = "CANCELLED",
+                errorMessage = "任务已取消",
+            ),
+        )
+        assertEquals("cancelled", registry.snapshot()!!.state)
+        assertEquals("CANCELLED", registry.snapshot()!!.errorCode)
+    }
+
+    @Test
     fun `observers receive the current snapshot and one notification per accepted update`() {
         val registry = ProcessingRegistry()
         val first = mutableListOf<TaskRuntimeSnapshot>()
