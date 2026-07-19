@@ -120,6 +120,27 @@ internal class ProcessingRegistry {
 
     fun snapshot(): TaskRuntimeSnapshot? = synchronized(lock) { current }
 
+    fun updateOutputFileName(
+        taskId: String,
+        outputFileName: String,
+    ): Boolean {
+        require(outputFileName.isNotBlank() && '/' !in outputFileName && '\\' !in outputFileName) {
+            "outputFileName must be a safe leaf name"
+        }
+        val updated: TaskRuntimeSnapshot
+        val listeners: List<(TaskRuntimeSnapshot) -> Unit>
+        synchronized(lock) {
+            val previous = current ?: return false
+            if (previous.taskId != taskId || previous.isTerminal) return false
+            if (previous.outputFileName == outputFileName) return true
+            updated = previous.copy(outputFileName = outputFileName)
+            current = updated
+            listeners = observers.toList()
+        }
+        notifyObservers(listeners, updated)
+        return true
+    }
+
     fun addObserver(observer: (TaskRuntimeSnapshot) -> Unit) {
         val snapshot: TaskRuntimeSnapshot?
         synchronized(lock) {

@@ -117,6 +117,19 @@ class ProcessingRegistryTest {
         assertNull(registry.snapshot())
     }
 
+    @Test
+    fun `published display name can replace the requested name before terminal`() {
+        val registry = ProcessingRegistry()
+        registry.reserve("one", "content://one", "requested.mp4", 1L)
+
+        assertFalse(registry.updateOutputFileName("other", "actual.mp4"))
+        assertTrue(registry.updateOutputFileName("one", "actual (1).mp4"))
+        assertEquals("actual (1).mp4", registry.snapshot()!!.outputFileName)
+        assertRejected { registry.updateOutputFileName("one", "folder/unsafe.mp4") }
+        registry.apply("one", 100.0, "success", "content://output/one")
+        assertFalse(registry.updateOutputFileName("one", "too-late.mp4"))
+    }
+
     private fun assertRejected(block: () -> Unit) {
         try {
             block()
