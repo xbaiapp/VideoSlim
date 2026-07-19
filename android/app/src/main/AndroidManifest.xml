@@ -4,12 +4,15 @@
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
-    <!-- M1 does not use networking or background wake locks; remove unused Media3 transitive declarations. -->
+    <!-- M2 keeps processing visible and alive with the narrow foreground-service permissions only. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- VideoSlim remains offline-only; remove Media3's unused transitive network declaration. -->
     <uses-permission
         android:name="android.permission.ACCESS_NETWORK_STATE"
-        tools:node="remove" />
-    <uses-permission
-        android:name="android.permission.WAKE_LOCK"
         tools:node="remove" />
     <application
         android:label="视频瘦身"
