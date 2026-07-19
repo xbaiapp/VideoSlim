@@ -1,9 +1,11 @@
 import 'package:flutter/foundation.dart';
 
+import '../models/compression_settings.dart';
+import '../models/device_capabilities.dart';
 import '../models/progress_event.dart';
 import '../models/video_info.dart';
 
-/// Provider-backed state for the complete M1 import/compression flow.
+/// Provider-backed user-visible snapshot for the complete M2 workflow.
 ///
 /// Platform orchestration stays in [HomeScreen]'s lifecycle owner while every
 /// user-visible flag and task snapshot lives here, so widgets rebuild through
@@ -20,15 +22,32 @@ final class HomeFlowState extends ChangeNotifier {
   bool preparing = false;
   bool processing = false;
   bool finishing = false;
+  bool restoringTask = true;
+  bool cancelling = false;
   bool progressStreamClosed = false;
   bool outputPublished = false;
+  bool selectedFromGallery = false;
+  bool sourceDeleted = false;
+  bool mediaActionBusy = false;
+  bool capabilitiesLoading = false;
   double percent = 0;
+  Duration elapsed = Duration.zero;
+  Duration? remaining;
 
   String? selectedUri;
   String? taskId;
   String? errorText;
+  String? publishedOutputUri;
+  String? publishedOutputFileName;
   VideoInfo? sourceInfo;
   VideoInfo? outputInfo;
+  DeviceCapabilities? capabilities;
+  CompressionPreset? selectedPreset = CompressionPreset.balanced;
+  CompressionResolution customResolution = CompressionResolution.original;
+  VideoCodec customCodec = VideoCodec.hevc;
+  int customVideoBitrate = 2500000;
+  CompressionAudioMode customAudioMode = CompressionAudioMode.copy;
+  int customAudioBitrate = 128000;
   Stopwatch? processStopwatch;
 
   bool get interactionLocked =>

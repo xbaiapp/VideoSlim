@@ -31,6 +31,7 @@ class ProgressEvent {
     required this.percent,
     required this.state,
     this.outputUri,
+    this.outputFileName,
     this.errorCode,
     this.errorMessage,
   }) : assert(taskId != ''),
@@ -49,6 +50,7 @@ class ProgressEvent {
       percent: (map['percent'] as num).toDouble(),
       state: state,
       outputUri: map['outputUri'] as String?,
+      outputFileName: map['outputFileName'] as String?,
       errorCode: map['errorCode'] as String?,
       errorMessage: map['errorMessage'] as String?,
     );
@@ -66,6 +68,9 @@ class ProgressEvent {
   /// Published output URI after success, when available.
   final String? outputUri;
 
+  /// Actual output display name allocated by MediaStore.
+  final String? outputFileName;
+
   /// Stable engine error code after failure, when available.
   final String? errorCode;
 
@@ -78,6 +83,7 @@ class ProgressEvent {
     'percent': percent,
     'state': state.wireName,
     'outputUri': outputUri,
+    'outputFileName': outputFileName,
     'errorCode': errorCode,
     'errorMessage': errorMessage,
   };

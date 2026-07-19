@@ -8,11 +8,14 @@ import '../engine/video_engine.dart';
 import '../engine/media_actions.dart';
 import '../engine/video_picker.dart';
 import '../logging/app_logger.dart';
-import '../models/process_request.dart';
+import '../logic/compression_planner.dart';
+import '../logic/eta_estimator.dart';
+import '../models/compression_settings.dart';
+import '../models/device_capabilities.dart';
 import '../models/progress_event.dart';
 import '../models/video_info.dart';
 import '../state/home_flow_state.dart';
-import '../widgets/m1_preset_card.dart';
+import '../widgets/m2_compression_card.dart';
 import '../widgets/video_info_card.dart';
 import 'debug_log_screen.dart';
 
@@ -41,9 +44,9 @@ enum _ImportSource { gallery, files }
 class _HomeScreenState extends State<HomeScreen> {
   late final StreamSubscription<ProgressEvent> _progressSubscription;
   late final HomeFlowState _flow;
-  bool _selectedFromGallery = false;
-  bool _sourceDeleted = false;
-  bool _mediaActionBusy = false;
+  final CompressionPlanner _planner = const CompressionPlanner();
+  EtaEstimator? _etaEstimator;
+  Timer? _timingTimer;
 
   int get _generation => _flow.generation;
   set _generation(int value) => _flow.generation = value;
@@ -65,12 +68,44 @@ class _HomeScreenState extends State<HomeScreen> {
   set _processing(bool value) => _flow.processing = value;
   bool get _finishing => _flow.finishing;
   set _finishing(bool value) => _flow.finishing = value;
+  bool get _restoringTask => _flow.restoringTask;
+  set _restoringTask(bool value) => _flow.restoringTask = value;
+  bool get _cancelling => _flow.cancelling;
+  set _cancelling(bool value) => _flow.cancelling = value;
   bool get _progressStreamClosed => _flow.progressStreamClosed;
   set _progressStreamClosed(bool value) => _flow.progressStreamClosed = value;
   bool get _outputPublished => _flow.outputPublished;
   set _outputPublished(bool value) => _flow.outputPublished = value;
   double get _percent => _flow.percent;
   set _percent(double value) => _flow.percent = value;
+  Duration get _elapsed => _flow.elapsed;
+  set _elapsed(Duration value) => _flow.elapsed = value;
+  Duration? get _remaining => _flow.remaining;
+  set _remaining(Duration? value) => _flow.remaining = value;
+  bool get _selectedFromGallery => _flow.selectedFromGallery;
+  set _selectedFromGallery(bool value) => _flow.selectedFromGallery = value;
+  bool get _sourceDeleted => _flow.sourceDeleted;
+  set _sourceDeleted(bool value) => _flow.sourceDeleted = value;
+  bool get _mediaActionBusy => _flow.mediaActionBusy;
+  set _mediaActionBusy(bool value) => _flow.mediaActionBusy = value;
+  bool get _capabilitiesLoading => _flow.capabilitiesLoading;
+  set _capabilitiesLoading(bool value) => _flow.capabilitiesLoading = value;
+  DeviceCapabilities? get _capabilities => _flow.capabilities;
+  set _capabilities(DeviceCapabilities? value) => _flow.capabilities = value;
+  CompressionPreset? get _selectedPreset => _flow.selectedPreset;
+  set _selectedPreset(CompressionPreset? value) => _flow.selectedPreset = value;
+  CompressionResolution get _customResolution => _flow.customResolution;
+  set _customResolution(CompressionResolution value) =>
+      _flow.customResolution = value;
+  VideoCodec get _customCodec => _flow.customCodec;
+  set _customCodec(VideoCodec value) => _flow.customCodec = value;
+  int get _customVideoBitrate => _flow.customVideoBitrate;
+  set _customVideoBitrate(int value) => _flow.customVideoBitrate = value;
+  CompressionAudioMode get _customAudioMode => _flow.customAudioMode;
+  set _customAudioMode(CompressionAudioMode value) =>
+      _flow.customAudioMode = value;
+  int get _customAudioBitrate => _flow.customAudioBitrate;
+  set _customAudioBitrate(int value) => _flow.customAudioBitrate = value;
 
   String? get _selectedUri => _flow.selectedUri;
   set _selectedUri(String? value) => _flow.selectedUri = value;
@@ -78,6 +113,11 @@ class _HomeScreenState extends State<HomeScreen> {
   set _taskId(String? value) => _flow.taskId = value;
   String? get _errorText => _flow.errorText;
   set _errorText(String? value) => _flow.errorText = value;
+  String? get _publishedOutputUri => _flow.publishedOutputUri;
+  set _publishedOutputUri(String? value) => _flow.publishedOutputUri = value;
+  String? get _publishedOutputFileName => _flow.publishedOutputFileName;
+  set _publishedOutputFileName(String? value) =>
+      _flow.publishedOutputFileName = value;
   VideoInfo? get _sourceInfo => _flow.sourceInfo;
   set _sourceInfo(VideoInfo? value) => _flow.sourceInfo = value;
   VideoInfo? get _outputInfo => _flow.outputInfo;
@@ -96,14 +136,180 @@ class _HomeScreenState extends State<HomeScreen> {
       onError: _onProgressError,
       onDone: _onProgressDone,
     );
-    _logFlow('M1 首页已启动，进度流已订阅');
+    _logFlow('M2 首页已启动，进度流已订阅');
+    unawaited(_restoreTaskSnapshot());
   }
 
   @override
   void dispose() {
+    _timingTimer?.cancel();
     unawaited(_progressSubscription.cancel());
     _flow.dispose();
     super.dispose();
+  }
+
+  DateTime _now() => (widget.now ?? DateTime.now)();
+
+  CompressionSettings get _compressionSettings {
+    final preset = _selectedPreset;
+    if (preset != null) return CompressionSettings.forPreset(preset);
+    return CompressionSettings.custom(
+      resolution: _customResolution,
+      videoCodec: _customCodec,
+      videoBitrate: _customVideoBitrate,
+      audioMode: _customAudioMode,
+      audioBitrate: _customAudioMode == CompressionAudioMode.reencode
+          ? _customAudioBitrate
+          : null,
+    );
+  }
+
+  CompressionPlan? get _compressionPlan {
+    final source = _sourceInfo;
+    final capabilities = _capabilities;
+    if (source == null || capabilities == null) return null;
+    return _planner.plan(
+      source: source,
+      settings: _compressionSettings,
+      capabilities: capabilities,
+    );
+  }
+
+  void _changeSettings(VoidCallback mutation) {
+    if (_interactionLocked) return;
+    _flow.update(mutation);
+  }
+
+  Future<void> _restoreTaskSnapshot() async {
+    final generation = ++_generation;
+    _activeGeneration = generation;
+    _awaitingTaskId = true;
+    _terminalEventHandled = false;
+    _bufferedProgress.clear();
+    try {
+      final snapshot = await widget.engine.getTaskSnapshot();
+      if (!_isCurrent(generation)) return;
+      if (snapshot == null) {
+        _flow.update(() {
+          _restoringTask = false;
+          _activeGeneration = null;
+          _awaitingTaskId = false;
+          _bufferedProgress.clear();
+        });
+        return;
+      }
+
+      VideoInfo? sourceInfo;
+      try {
+        sourceInfo = await widget.engine.getVideoInfo(snapshot.sourceUri);
+      } catch (error, stackTrace) {
+        _logError(
+          '恢复任务时无法读取源视频信息',
+          error,
+          stackTrace,
+          details: snapshot.toMap(),
+        );
+      }
+      if (!_isCurrent(generation)) return;
+
+      final buffered = List<ProgressEvent>.of(_bufferedProgress);
+      _bufferedProgress.clear();
+      _awaitingTaskId = false;
+      _processStopwatch = Stopwatch()..start();
+      _flow.update(() {
+        _restoringTask = false;
+        _selectedUri = snapshot.sourceUri;
+        _sourceInfo = sourceInfo;
+        _taskId = snapshot.taskId;
+        _publishedOutputUri = snapshot.outputUri;
+        _publishedOutputFileName = snapshot.outputFileName;
+        _percent = snapshot.percent;
+        _preparing = false;
+        _processing = true;
+        _finishing = false;
+        _selectedFromGallery = false;
+        _sourceDeleted = false;
+        _errorText = null;
+      });
+      _startTiming(snapshot.startedAt);
+      if (sourceInfo != null) {
+        unawaited(_loadCapabilities(generation));
+      }
+      _consumeProgress(
+        ProgressEvent(
+          taskId: snapshot.taskId,
+          percent: snapshot.percent,
+          state: snapshot.state,
+          outputUri: snapshot.outputUri,
+          outputFileName: snapshot.outputFileName,
+          errorCode: snapshot.errorCode,
+          errorMessage: snapshot.errorMessage,
+        ),
+        generation,
+      );
+      for (final event in buffered) {
+        if (!_isCurrent(generation) || _terminalEventHandled) break;
+        if (event.taskId == snapshot.taskId) {
+          _consumeProgress(event, generation);
+        }
+      }
+      _logFlow('已从原生任务快照恢复界面', details: snapshot.toMap());
+    } catch (error, stackTrace) {
+      if (!_isCurrent(generation)) return;
+      _flow.update(() {
+        _restoringTask = false;
+        _activeGeneration = null;
+        _awaitingTaskId = false;
+        _bufferedProgress.clear();
+      });
+      _logError('查询原生任务快照失败', error, stackTrace);
+    }
+  }
+
+  Future<void> _loadCapabilities(int generation) async {
+    if (!_isCurrent(generation)) return;
+    _flow.update(() => _capabilitiesLoading = true);
+    try {
+      final capabilities = await widget.engine.getCapabilities();
+      if (!_isCurrent(generation)) return;
+      _flow.update(() {
+        _capabilities = capabilities;
+        _capabilitiesLoading = false;
+      });
+      _logFlow('M2 编码能力检查完成', details: capabilities.toMap());
+    } catch (error, stackTrace) {
+      if (!_isCurrent(generation)) return;
+      _flow.update(() {
+        _capabilities = null;
+        _capabilitiesLoading = false;
+      });
+      _logError('M2 编码能力检查失败', error, stackTrace);
+    }
+  }
+
+  void _startTiming(DateTime startedAt) {
+    _timingTimer?.cancel();
+    _etaEstimator = EtaEstimator(startedAt: startedAt);
+    _updateTiming();
+    _timingTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _updateTiming(),
+    );
+  }
+
+  void _updateTiming() {
+    if (!mounted || _etaEstimator == null) return;
+    final timing = _etaEstimator!.update(percent: _percent, now: _now());
+    _flow.update(() {
+      _elapsed = timing.elapsed;
+      _remaining = timing.remaining;
+    });
+  }
+
+  void _stopTiming() {
+    _updateTiming();
+    _timingTimer?.cancel();
+    _timingTimer = null;
   }
 
   Future<void> _pick(_ImportSource source) async {
@@ -113,9 +319,13 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final generation = ++_generation;
+    _activeGeneration = null;
+    _awaitingTaskId = false;
+    _terminalEventHandled = false;
+    _bufferedProgress.clear();
     _flow.update(() {
+      _restoringTask = false;
       _picking = true;
-      _outputInfo = null;
     });
     _logFlow(
       '打开视频选择器',
@@ -145,12 +355,17 @@ class _HomeScreenState extends State<HomeScreen> {
         _readingMetadata = true;
         _selectedUri = uri;
         _sourceInfo = null;
+        _outputInfo = null;
         _errorText = null;
         _outputPublished = false;
+        _publishedOutputUri = null;
+        _publishedOutputFileName = null;
         _taskId = null;
         _percent = 0;
         _selectedFromGallery = source == _ImportSource.gallery;
         _sourceDeleted = false;
+        _capabilities = null;
+        _capabilitiesLoading = false;
       });
       _logFlow(
         '已选择视频，开始读取技术信息',
@@ -176,6 +391,7 @@ class _HomeScreenState extends State<HomeScreen> {
           'isHdr': info.isHdr,
         },
       );
+      unawaited(_loadCapabilities(generation));
     } catch (error, stackTrace) {
       if (!_isCurrent(generation)) {
         return;
@@ -199,12 +415,15 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _compress() async {
     final info = _sourceInfo;
     final uri = _selectedUri;
-    if (_interactionLocked || info == null || uri == null) {
+    final plan = _compressionPlan;
+    if (_interactionLocked || info == null || uri == null || plan == null) {
       _logFlow('忽略无效压缩点击');
       return;
     }
-    if (info.isHdr) {
-      _logFlow('阻止 M1 HDR 压缩', details: <String, Object?>{'uri': uri});
+    if (!plan.isSupported) {
+      _flow.update(() {
+        _errorText = '[ENCODER_UNAVAILABLE] 当前设备没有可用的 H.264/HEVC 硬件编码器。';
+      });
       return;
     }
     if (_outputPublished) {
@@ -218,8 +437,12 @@ class _HomeScreenState extends State<HomeScreen> {
       _logFlow('阻止压缩：进度通道已关闭', level: AppLogLevel.error);
       return;
     }
+    if (!await _confirmPlan(plan, hdrSource: info.isHdr) || !mounted) {
+      return;
+    }
 
     final generation = ++_generation;
+    final startedAt = _now();
     _activeGeneration = generation;
     _terminalEventHandled = false;
     _bufferedProgress.clear();
@@ -228,55 +451,27 @@ class _HomeScreenState extends State<HomeScreen> {
       _preparing = true;
       _processing = false;
       _finishing = false;
+      _cancelling = false;
       _percent = 0;
       _errorText = null;
       _outputInfo = null;
       _outputPublished = false;
+      _publishedOutputUri = null;
+      _publishedOutputFileName = null;
       _taskId = null;
     });
-    _logFlow('开始检查 M1 HEVC 硬件编码能力', details: <String, Object?>{'uri': uri});
+    _startTiming(startedAt);
 
+    final request = plan.toProcessRequest(
+      uri: uri,
+      outputFileName: _buildOutputFileName(info.fileName, startedAt),
+    );
+    _publishedOutputFileName = request.outputFileName;
     try {
-      final capabilities = await widget.engine.getCapabilities();
-      if (!_isCurrent(generation)) {
-        return;
-      }
-      _logFlow('编码能力检查完成', details: capabilities.toMap());
-      if (!capabilities.hevcEncoder) {
-        _failGeneration(
-          generation,
-          '[ENCODER_UNAVAILABLE] 当前设备没有可用的 HEVC 硬件编码器，M1 无法开始压缩。',
-        );
-        _logFlow(
-          '阻止压缩：缺少 HEVC 硬件编码器',
-          level: AppLogLevel.warning,
-          details: capabilities.toMap(),
-        );
-        return;
-      }
-
-      final request = ProcessRequest(
-        uri: uri,
-        outputFileName: _buildOutputFileName(
-          info.fileName,
-          (widget.now ?? DateTime.now)(),
-        ),
-        videoCodec: 'hevc',
-        videoBitrate: 2500000,
-        longEdge: null,
-        crop: null,
-        trimStartMs: null,
-        trimEndMs: null,
-        audioMode: 'copy',
-        audioBitrate: null,
-      );
       _awaitingTaskId = true;
-      _logFlow('提交 M1 压缩任务', details: request.toChannelMap());
-
+      _logFlow('提交 M2 压缩任务', details: request.toChannelMap());
       final taskId = await widget.engine.process(request);
-      if (!_isCurrent(generation)) {
-        return;
-      }
+      if (!_isCurrent(generation)) return;
       _awaitingTaskId = false;
       _taskId = taskId;
       final buffered = List<ProgressEvent>.of(_bufferedProgress);
@@ -286,10 +481,11 @@ class _HomeScreenState extends State<HomeScreen> {
         _processing = true;
       });
       _logFlow(
-        'M1 压缩任务已创建',
+        'M2 压缩任务已创建',
         details: <String, Object?>{
           'taskId': taskId,
           'request': request.toChannelMap(),
+          'estimatedOutputBytes': plan.estimatedOutputBytes,
         },
       );
 
@@ -307,9 +503,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
     } catch (error, stackTrace) {
-      if (!_isCurrent(generation)) {
-        return;
-      }
+      if (!_isCurrent(generation)) return;
       _awaitingTaskId = false;
       _bufferedProgress.clear();
       _failGeneration(
@@ -317,12 +511,44 @@ class _HomeScreenState extends State<HomeScreen> {
         _errorTextFor(error, fallback: '压缩任务无法启动，请稍后重试。'),
       );
       _logError(
-        'M1 压缩任务启动失败',
+        'M2 压缩任务启动失败',
         error,
         stackTrace,
         details: <String, Object?>{'uri': uri},
       );
     }
+  }
+
+  Future<bool> _confirmPlan(
+    CompressionPlan plan, {
+    required bool hdrSource,
+  }) async {
+    final warnings = <String>[
+      if (plan.hasLowSavings) '该视频码率已较低，压缩收益有限。',
+      if (plan.isOutsideVerifiedRange)
+        '视频超出已验证的 6 小时 / 50 GB 范围，只能按 best-effort 尝试。',
+      if (hdrSource) 'HDR 视频将色调映射为 SDR，颜色表现取决于设备。',
+    ];
+    if (warnings.isEmpty) return true;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('开始前请确认'),
+        content: Text(warnings.join('\n\n')),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('返回调整'),
+          ),
+          FilledButton(
+            key: const ValueKey<String>('confirm-compression'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('仍然开始'),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
   }
 
   void _onProgress(ProgressEvent event) {
@@ -376,9 +602,11 @@ class _HomeScreenState extends State<HomeScreen> {
               _percent = nextPercent;
             }
           });
+          _updateTiming();
         }
       case TaskState.success:
         _terminalEventHandled = true;
+        _stopTiming();
         _outputPublished = true;
         final outputUri = event.outputUri?.trim();
         if (outputUri == null || outputUri.isEmpty) {
@@ -393,10 +621,15 @@ class _HomeScreenState extends State<HomeScreen> {
           );
           return;
         }
+        final actualName = event.outputFileName?.trim();
         _flow.update(() {
           _processing = false;
           _finishing = true;
           _percent = 100;
+          _publishedOutputUri = outputUri;
+          if (actualName != null && actualName.isNotEmpty) {
+            _publishedOutputFileName = actualName;
+          }
         });
         _logFlow('收到压缩成功事件，读取输出信息', details: event.toMap());
         unawaited(_loadOutputInfo(outputUri, generation));
@@ -409,7 +642,7 @@ class _HomeScreenState extends State<HomeScreen> {
           fallback: '视频压缩失败，请稍后重试。',
         );
         _failGeneration(generation, '[$code] $message');
-        _logFlow('M1 压缩任务失败', level: AppLogLevel.error, details: event.toMap());
+        _logFlow('M2 压缩任务失败', level: AppLogLevel.error, details: event.toMap());
       case TaskState.cancelled:
         _terminalEventHandled = true;
         final code = _stableCode(event.errorCode, fallback: 'CANCELLED');
@@ -420,7 +653,7 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         _failGeneration(generation, '[$code] $message');
         _logFlow(
-          'M1 压缩任务被引擎取消',
+          'M2 压缩任务被引擎取消',
           level: AppLogLevel.warning,
           details: event.toMap(),
         );
@@ -440,11 +673,13 @@ class _HomeScreenState extends State<HomeScreen> {
       _flow.update(() {
         _finishing = false;
         _outputInfo = outputInfo;
+        _publishedOutputUri = outputInfo.uri;
+        _publishedOutputFileName = outputInfo.fileName;
         _errorText = null;
       });
       _activeGeneration = null;
       _logFlow(
-        'M1 压缩任务完成',
+        'M2 压缩任务完成',
         details: <String, Object?>{
           'taskId': _taskId,
           'outputUri': outputUri,
@@ -527,17 +762,66 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     _generation += 1;
+    _stopTiming();
     _processStopwatch?.stop();
     _flow.update(() {
       _preparing = false;
       _processing = false;
       _finishing = false;
+      _cancelling = false;
       _errorText = message;
     });
     _awaitingTaskId = false;
     _terminalEventHandled = true;
     _bufferedProgress.clear();
     _activeGeneration = null;
+  }
+
+  Future<void> _cancelTask() async {
+    final taskId = _taskId;
+    final generation = _activeGeneration;
+    if (taskId == null || generation == null || !_processing || _cancelling) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('取消压缩？'),
+        content: const Text('将停止当前任务，并清理临时文件和未完成输出。'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('继续压缩'),
+          ),
+          FilledButton.tonal(
+            key: const ValueKey<String>('confirm-cancel-task'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('取消任务'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !_isCurrent(generation)) return;
+    _flow.update(() => _cancelling = true);
+    try {
+      await widget.engine.cancel(taskId);
+      _logFlow('已向前台服务请求取消任务', details: <String, Object?>{'taskId': taskId});
+    } catch (error, stackTrace) {
+      if (mounted && generation == _generation) {
+        _flow.update(() => _cancelling = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_errorTextFor(error, fallback: '无法取消任务，请稍后重试。')),
+          ),
+        );
+      }
+      _logError(
+        '取消 M2 任务失败',
+        error,
+        stackTrace,
+        details: <String, Object?>{'taskId': taskId},
+      );
+    }
   }
 
   void _reset() {
@@ -549,34 +833,44 @@ class _HomeScreenState extends State<HomeScreen> {
     _awaitingTaskId = false;
     _terminalEventHandled = false;
     _bufferedProgress.clear();
+    _stopTiming();
+    _etaEstimator = null;
     _flow.update(() {
       _picking = false;
       _readingMetadata = false;
       _preparing = false;
       _processing = false;
       _finishing = false;
+      _cancelling = false;
       _percent = 0;
+      _elapsed = Duration.zero;
+      _remaining = null;
       _selectedUri = null;
       _taskId = null;
       _errorText = null;
       _sourceInfo = null;
       _outputInfo = null;
       _outputPublished = false;
+      _publishedOutputUri = null;
+      _publishedOutputFileName = null;
       _selectedFromGallery = false;
       _sourceDeleted = false;
       _mediaActionBusy = false;
+      _capabilities = null;
+      _capabilitiesLoading = false;
+      _selectedPreset = CompressionPreset.balanced;
     });
-    _logFlow('重置 M1 流程，等待选择新视频');
+    _logFlow('重置 M2 流程，等待选择新视频');
   }
 
   Future<void> _openOutput() async {
-    final uri = _outputInfo?.uri;
+    final uri = _publishedOutputUri ?? _outputInfo?.uri;
     if (uri == null || _mediaActionBusy) return;
     await _runMediaAction(() => widget.mediaActions.openMedia(uri));
   }
 
   Future<void> _shareOutput() async {
-    final uri = _outputInfo?.uri;
+    final uri = _publishedOutputUri ?? _outputInfo?.uri;
     if (uri == null || _mediaActionBusy) return;
     await _runMediaAction(() => widget.mediaActions.shareMedia(uri));
   }
@@ -589,6 +883,25 @@ class _HomeScreenState extends State<HomeScreen> {
         _mediaActionBusy) {
       return;
     }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除原视频？'),
+        content: const Text('压缩结果会保留。Android 可能再次显示系统删除确认。'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('保留原视频'),
+          ),
+          FilledButton.tonal(
+            key: const ValueKey<String>('confirm-delete-original'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('继续删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || _mediaActionBusy) return;
     await _runMediaAction(() async {
       final deleted = await widget.mediaActions.deleteSource(uri);
       if (!deleted || !mounted) return;
@@ -709,6 +1022,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
                   const _PrivacyHeader(),
+                  if (_restoringTask) ...<Widget>[
+                    const SizedBox(height: 16),
+                    const LinearProgressIndicator(),
+                    const SizedBox(height: 8),
+                    const Text('正在检查后台任务…', textAlign: TextAlign.center),
+                  ],
                   if (showImport) ...<Widget>[
                     const SizedBox(height: 16),
                     _ImportCard(
@@ -736,7 +1055,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       message: _errorText!,
                       canRetry:
                           sourceInfo != null &&
-                          !sourceInfo.isHdr &&
+                          _compressionPlan?.isSupported == true &&
                           !_outputPublished &&
                           !_progressStreamClosed,
                       onRetry: _interactionLocked ? null : _compress,
@@ -754,27 +1073,72 @@ class _HomeScreenState extends State<HomeScreen> {
                       !_finishing &&
                       !_preparing) ...<Widget>[
                     const SizedBox(height: 16),
-                    M1PresetCard(
-                      busy: false,
-                      disabledReason: sourceInfo.isHdr
-                          ? '检测到 HDR 视频。M1 暂不支持 HDR 色调映射，为避免颜色异常，已禁用压缩。'
-                          : _progressStreamClosed
-                          ? '进度通道已关闭。为避免启动无法观察的任务，请重启应用后再压缩。'
+                    M2CompressionCard(
+                      selectedPreset: _selectedPreset,
+                      customResolution: _customResolution,
+                      customCodec: _customCodec,
+                      customVideoBitrate: _customVideoBitrate,
+                      customAudioMode: _customAudioMode,
+                      customAudioBitrate: _customAudioBitrate,
+                      plan: _compressionPlan,
+                      capabilitiesLoading: _capabilitiesLoading,
+                      hdrSource: sourceInfo.isHdr,
+                      disabledReason: _progressStreamClosed
+                          ? '进度通道已关闭，请重启应用后再压缩。'
+                          : !_capabilitiesLoading && _capabilities == null
+                          ? '无法检测设备硬件编码器，请重新选择视频或重启应用。'
+                          : _compressionPlan?.isSupported == false
+                          ? '当前设备没有可用的 H.264/HEVC 硬件编码器。'
                           : null,
-                      onCompress: sourceInfo.isHdr || _progressStreamClosed
-                          ? null
-                          : _compress,
+                      onPresetChanged: (value) =>
+                          _changeSettings(() => _selectedPreset = value),
+                      onResolutionChanged: (value) =>
+                          _changeSettings(() => _customResolution = value),
+                      onCodecChanged: (value) =>
+                          _changeSettings(() => _customCodec = value),
+                      onVideoBitrateChanged: (value) =>
+                          _changeSettings(() => _customVideoBitrate = value),
+                      onAudioModeChanged: (value) =>
+                          _changeSettings(() => _customAudioMode = value),
+                      onAudioBitrateChanged: (value) =>
+                          _changeSettings(() => _customAudioBitrate = value),
+                      onCompress:
+                          !_progressStreamClosed &&
+                              !_capabilitiesLoading &&
+                              _compressionPlan?.isSupported == true
+                          ? _compress
+                          : null,
                     ),
                   ],
                   if (_preparing || _processing || _finishing) ...<Widget>[
                     const SizedBox(height: 16),
                     _ProgressCard(
                       percent: _percent,
+                      elapsed: _elapsed,
+                      remaining: _remaining,
+                      cancelling: _cancelling,
+                      onCancel: _processing && _taskId != null && !_cancelling
+                          ? _cancelTask
+                          : null,
                       message: _preparing
-                          ? '正在检查 HEVC 编码能力并创建任务…'
+                          ? '正在创建前台处理任务…'
                           : _finishing
                           ? '压缩完成，正在读取输出信息…'
-                          : '正在本机压缩，请保持应用开启',
+                          : '正在本机压缩，可切换应用或熄屏',
+                    ),
+                  ],
+                  if (_outputPublished &&
+                      outputInfo == null &&
+                      !_finishing &&
+                      _publishedOutputUri != null &&
+                      _publishedOutputFileName != null) ...<Widget>[
+                    const SizedBox(height: 16),
+                    _PublishedResultFallbackCard(
+                      outputFileName: _publishedOutputFileName!,
+                      busy: _mediaActionBusy,
+                      onOpen: _openOutput,
+                      onShare: _shareOutput,
+                      onAgain: _reset,
                     ),
                   ],
                   if (sourceInfo != null && outputInfo != null) ...<Widget>[
@@ -1043,10 +1407,21 @@ class _DisabledFeatureCard extends StatelessWidget {
 }
 
 class _ProgressCard extends StatelessWidget {
-  const _ProgressCard({required this.percent, required this.message});
+  const _ProgressCard({
+    required this.percent,
+    required this.message,
+    required this.elapsed,
+    required this.remaining,
+    required this.cancelling,
+    required this.onCancel,
+  });
 
   final double percent;
   final String message;
+  final Duration elapsed;
+  final Duration? remaining;
+  final bool cancelling;
+  final VoidCallback? onCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -1097,11 +1472,40 @@ class _ProgressCard extends StatelessWidget {
               ).textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
             ),
             const SizedBox(height: 4),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    '已用 ${formatDuration(elapsed.inMilliseconds)}',
+                    key: const ValueKey<String>('elapsed-time'),
+                  ),
+                ),
+                Text(
+                  remaining == null
+                      ? '预计剩余 计算中'
+                      : '预计剩余 ${formatDuration(remaining!.inMilliseconds)}',
+                  key: const ValueKey<String>('remaining-time'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
             Text(
-              'M1 暂不提供后台运行或用户取消。',
+              '前台服务和 Partial WakeLock 会在任务期间保持处理；Android 15+ 仍受系统媒体处理时限约束。',
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+            ),
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              key: const ValueKey<String>('cancel-processing'),
+              onPressed: onCancel,
+              icon: cancelling
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.stop_circle_outlined),
+              label: Text(cancelling ? '正在取消…' : '取消任务'),
             ),
           ],
         ),
@@ -1172,6 +1576,82 @@ class _ErrorCard extends StatelessWidget {
   }
 }
 
+class _PublishedResultFallbackCard extends StatelessWidget {
+  const _PublishedResultFallbackCard({
+    required this.outputFileName,
+    required this.busy,
+    required this.onOpen,
+    required this.onShare,
+    required this.onAgain,
+  });
+
+  final String outputFileName;
+  final bool busy;
+  final VoidCallback onOpen;
+  final VoidCallback onShare;
+  final VoidCallback onAgain;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Card(
+      key: const ValueKey<String>('published-result-fallback'),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Icon(Icons.check_circle_rounded, color: colors.primary, size: 48),
+            const SizedBox(height: 10),
+            Text(
+              '压缩文件已保存',
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '系统相册 > Movies > VideoSlim > $outputFileName',
+              key: const ValueKey<String>('published-output-path'),
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: colors.primary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '输出技术信息暂时无法读取，但文件已经发布；不会重新执行压缩。',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 18),
+            FilledButton.icon(
+              key: const ValueKey<String>('open-output-fallback'),
+              onPressed: busy ? null : onOpen,
+              icon: const Icon(Icons.play_arrow_rounded),
+              label: const Text('打开 / 播放'),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const ValueKey<String>('share-output-fallback'),
+              onPressed: busy ? null : onShare,
+              icon: const Icon(Icons.share_outlined),
+              label: const Text('分享'),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: busy ? null : onAgain,
+              child: const Text('压缩另一个视频'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SuccessCard extends StatelessWidget {
   const _SuccessCard({
     required this.sourceInfo,
@@ -1234,7 +1714,7 @@ class _SuccessCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '文件已保存到 Movies/VideoSlim/${outputInfo.fileName}',
+              '系统相册 > Movies > VideoSlim > ${outputInfo.fileName}',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: colors.primary,

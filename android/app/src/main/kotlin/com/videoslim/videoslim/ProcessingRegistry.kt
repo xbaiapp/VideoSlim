@@ -17,6 +17,7 @@ internal data class TaskRuntimeSnapshot(
             "percent" to percent,
             "state" to state,
             "outputUri" to outputUri,
+            "outputFileName" to outputFileName,
             "errorCode" to errorCode,
             "errorMessage" to errorMessage,
         )

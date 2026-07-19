@@ -26,6 +26,7 @@ class ProcessingRegistryTest {
                 "percent" to 0.0,
                 "state" to "running",
                 "outputUri" to null,
+                "outputFileName" to "source_slim.mp4",
                 "errorCode" to null,
                 "errorMessage" to null,
             ),

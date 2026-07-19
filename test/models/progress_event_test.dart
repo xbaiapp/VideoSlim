@@ -21,6 +21,7 @@ void main() {
         'percent': 40,
         'state': 'running',
         'outputUri': null,
+        'outputFileName': null,
         'errorCode': null,
         'errorMessage': null,
       });
@@ -29,6 +30,7 @@ void main() {
       expect(event.percent, 40.0);
       expect(event.state, TaskState.running);
       expect(event.outputUri, isNull);
+      expect(event.outputFileName, isNull);
       expect(event.errorCode, isNull);
       expect(event.errorMessage, isNull);
     });
@@ -39,6 +41,7 @@ void main() {
         percent: 100,
         state: TaskState.success,
         outputUri: 'content://media/output/2',
+        outputFileName: 'actual-output.mp4',
       );
 
       final map = event.toMap();
@@ -48,6 +51,7 @@ void main() {
         'percent': 100.0,
         'state': 'success',
         'outputUri': 'content://media/output/2',
+        'outputFileName': 'actual-output.mp4',
         'errorCode': null,
         'errorMessage': null,
       });
