@@ -1,6 +1,6 @@
 # VideoSlim M2 自动化完成与真机交接报告
 
-> 结论：M2 代码实现和 VPS 自动化质量门禁已完成；Release APK 已构建并完成静态核验。后台、熄屏、通知、硬件编码、HDR、超长/超大文件和异常退出清理仍必须按 `m2-device-acceptance.md` 在 Android 真机验收。真机验收通过前不进入 M3。
+> 历史结论（已撤销当前验收身份）：M2 代码实现和 VPS 自动化质量门禁已完成，`1.2.0+3` Release APK 已构建并完成静态核验；但该 APK 随后在 Pixel 10 Pro / GrapheneOS / Android 17 真机出现阻塞性 Google Codec2 Released-state 失败，不能继续作为当前验收包。修复计划见 `plans/2026-07-19-m2-pixel-grapheneos-compatibility-repair.md`。真机验收通过前不进入 M3。
 
 ## 1. 交付身份
 
@@ -90,6 +90,19 @@ VPS 无 Android 设备或模拟器，以下不能由编译、JVM 测试或静态
 8. 实际输出码率、分辨率、音轨、时长误差和音画同步。
 
 执行标准和记录模板见 `docs/m2-device-acceptance.md`。这些测试未通过前，6 小时/50 GB 仍是待验证支持目标，而不是已经正式保证的能力。
+
+## 4.1 Pixel / GrapheneOS 阻塞事故记录
+
+同一段约 98 分钟的 SDR H.264/AAC 视频在 Pixel 10 Pro、GrapheneOS、Android 17 上得到以下证据：
+
+- `c2.google.hevc.encoder` 在 M1 21%、M2 38% 和 M2 96% 进入 Released state；
+- `c2.google.avc.decoder` 在 M2 64% 进入 Released state；
+- M1 另一次相同参数完整成功，说明故障具有运行时/时序性质；
+- M2 的 decoder 失败被错误映射为 `SOURCE_CORRUPTED`，encoder 4002 被错误映射为 `UNKNOWN`；
+- 当前 capability 只证明存在某个硬件 encoder，没有约束 Media3 的实际 decoder/encoder 选择；
+- SAF 日志只证明尝试持久化读取授权，尚未证明失败瞬间 URI/Provider 仍可重新打开。
+
+因此 `1.2.0+3` 的自动化结果继续作为历史构建证据保留，但该 APK 的真机验收状态为 **FAIL / 已撤销**。修复必须同时覆盖 SAF 证据、硬件视频 Codec 选择、稳定错误分类、ETA 和普通用户文案。
 
 ## 5. M2 主提交链
 

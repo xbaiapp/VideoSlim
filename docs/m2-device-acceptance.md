@@ -1,8 +1,8 @@
 # VideoSlim M2 真机验收矩阵
 
-> 状态：M2 自动化质量门禁和 arm64 Release APK 构建已完成；以下项目仍待项目所有者在真机执行，勾选前不代表已通过。
+> 状态：原 M2 自动化质量门禁和 arm64 Release APK 构建已完成，但 `1.2.0+3` 已在 Pixel 10 Pro / GrapheneOS / Android 17 真机暴露阻塞性 Codec2 运行失败，不再作为当前验收包。兼容性修复计划见 `plans/2026-07-19-m2-pixel-grapheneos-compatibility-repair.md`；新 APK 生成前以下项目均不代表已通过。
 >
-> - 验收 APK：`VideoSlim-M2-arm64-v1.2.0.apk`（`1.2.0+3`）
+> - 已撤销验收 APK：`VideoSlim-M2-arm64-v1.2.0.apk`（`1.2.0+3`）
 > - SHA-256：`7767ec5613a4185f61fa7f10ba67b1a641092332100b785474a0b59e2ac6893a`
 > - 本机路径：`/root/artifacts/videoslim/m2/VideoSlim-M2-arm64-v1.2.0.apk`
 > - 签名：debug certificate，仅用于当前私有真机验收。
@@ -29,6 +29,18 @@
 - [ ] Android 13+ 首次任务按需申请通知权限；拒绝后给出可理解说明且不启动不可见任务。
 - [ ] 文件信息与 MediaInfo 基本一致，竖拍显示方向正确。
 - [ ] F19 日志查看、复制、分享正常。
+
+### 2.1 Pixel / GrapheneOS SAF 与 Codec 回归
+
+- [ ] 记录 Pixel 10 Pro、GrapheneOS、Android 17 的完整构建/安全补丁信息。
+- [ ] Photo Picker 与 SAF 返回后，F19 明确记录当前读取授权与持久读取授权状态，不再只写“已尝试”。
+- [ ] 任务开始前源 URI 可重新打开，文件大小与 metadata 阶段一致；本地 DocumentsProvider 文件可 seek。
+- [ ] 人为移除授权、移动或删除源文件后，分别得到“需要重新选择”“文件已不可用”，不得显示“文件损坏”。
+- [ ] 发生 Media3 失败时，F19 记录失败瞬间 URI 重开结果，用于区分权限/Provider 与 Codec 故障。
+- [ ] F19 记录 AVC decoder 与 HEVC/H.264 encoder 的候选、硬件/软件/vendor 属性及实际选择。
+- [ ] 有支持的硬件候选时，实际视频 Codec 不得为 `c2.google.*`、`c2.android.*` 或 `OMX.google.*`。
+- [ ] 无支持的硬件视频 Codec 时在开始阶段快速、明确失败，不进行数分钟至数十分钟的软件长任务。
+- [ ] 以失败基线视频分别验证前台、后台和锁屏；短片通过后只执行一次完整约 98 分钟长片。
 
 ## 3. F3 压缩参数
 
