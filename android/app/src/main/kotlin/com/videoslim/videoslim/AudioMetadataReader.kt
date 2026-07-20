@@ -29,6 +29,7 @@ internal data class AudioMetadata(
     val sampleCount: Long,
     val sampleBytes: Long,
     val sampleTimesMonotonic: Boolean,
+    val maxSampleDeltaUs: Long?,
     val audioTrackIndex: Int = 0,
     val audioProfile: Int? = null,
 ) {
@@ -190,6 +191,7 @@ internal class AudioMetadataReader(context: Context) {
                 sampleCount = timing.sampleCount,
                 sampleBytes = timing.sampleBytes,
                 sampleTimesMonotonic = timing.monotonic,
+                maxSampleDeltaUs = timing.maxSampleDeltaUs,
                 audioTrackIndex = firstAudioTrack,
                 audioProfile = audioFormat.intValue(MediaFormat.KEY_AAC_PROFILE),
             )
@@ -313,6 +315,7 @@ internal data class AudioSampleTiming(
     val sampleCount: Long,
     val sampleBytes: Long,
     val monotonic: Boolean,
+    val maxSampleDeltaUs: Long?,
 )
 
 internal fun scanAudioSampleMetadata(
@@ -327,12 +330,20 @@ internal fun scanAudioSampleMetadata(
     var count = 0L
     var totalBytes = 0L
     var monotonic = true
+    var maxSampleDeltaUs: Long? = null
     while (true) {
         checkAudioMetadataCancellation(shouldCancel)
         val sampleTime = sampleTimeUs()
         if (sampleTime < 0L) break
         if (first == null) first = sampleTime
-        if (previous != null && sampleTime <= previous) monotonic = false
+        if (previous != null) {
+            val delta = sampleTime - previous
+            if (delta <= 0L) {
+                monotonic = false
+            } else if (maxSampleDeltaUs == null || delta > maxSampleDeltaUs) {
+                maxSampleDeltaUs = delta
+            }
+        }
         previous = sampleTime
         last = sampleTime
         count += 1L
@@ -345,7 +356,7 @@ internal fun scanAudioSampleMetadata(
         if (!advance()) break
     }
     checkAudioMetadataCancellation(shouldCancel)
-    return AudioSampleTiming(first, last, count, totalBytes, monotonic)
+    return AudioSampleTiming(first, last, count, totalBytes, monotonic, maxSampleDeltaUs)
 }
 
 /**

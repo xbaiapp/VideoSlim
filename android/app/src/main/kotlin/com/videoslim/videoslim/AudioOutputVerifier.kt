@@ -43,6 +43,7 @@ internal object AudioOutputVerifier {
             throw IOException("Published audio sample payload exceeds its physical file size")
         }
         if (!metadata.sampleTimesMonotonic) throw IOException("Published audio sample timestamps are not monotonic")
+        requireSampleCadence(metadata)
         val firstSampleTimeUs = metadata.firstSampleTimeUs ?: throw IOException("Published audio has no first timestamp")
         if (firstSampleTimeUs < 0L || firstSampleTimeUs > MAX_START_OFFSET_US) {
             throw IOException("Published audio does not start near zero")
@@ -120,6 +121,25 @@ internal object AudioOutputVerifier {
             return observed
         }
         return maximumFrameDurationUs(metadata)
+    }
+
+    private fun requireSampleCadence(metadata: AudioMetadata) {
+        if (metadata.sampleCount <= 1L) {
+            if (metadata.maxSampleDeltaUs != null) {
+                throw IOException("Single-sample audio has inconsistent cadence metadata")
+            }
+            return
+        }
+        val maximumObserved =
+            metadata.maxSampleDeltaUs
+                ?: throw IOException("Audio sample cadence evidence is missing")
+        if (
+            maximumObserved <= 0L ||
+            maximumObserved >
+            saturatedAdd(maximumFrameDurationUs(metadata), FRAME_TIMESTAMP_ROUNDING_US)
+        ) {
+            throw IOException("Audio sample cadence contains an internal missing or sparse frame gap")
+        }
     }
 
     private fun maximumFrameDurationUs(metadata: AudioMetadata): Long {

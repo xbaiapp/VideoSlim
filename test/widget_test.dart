@@ -39,6 +39,8 @@ final class _FakePicker implements VideoPicker {
   int fileCalls = 0;
   OutputLocation outputLocation = OutputLocation.defaultGallery;
   OutputLocation? chooseOutputResult;
+  Completer<OutputLocation?>? chooseOutputCompleter;
+  int chooseOutputCalls = 0;
   Completer<OutputLocation>? outputLocationCompleter;
   int outputLocationCalls = 0;
 
@@ -62,7 +64,10 @@ final class _FakePicker implements VideoPicker {
 
   @override
   Future<OutputLocation?> chooseOutputFolder() async {
-    final result = chooseOutputResult;
+    chooseOutputCalls += 1;
+    final result = chooseOutputCompleter == null
+        ? chooseOutputResult
+        : await chooseOutputCompleter!.future;
     if (result != null) outputLocation = result;
     return result;
   }
@@ -1862,6 +1867,95 @@ void main() {
     expect(find.text('处理状态连接已中断，请重启应用后再提取音频。'), findsOneWidget);
     expect(find.textContaining('再压缩'), findsNothing);
   });
+
+  testWidgets(
+    'pending destination selection locks extraction compression and reselection',
+    (WidgetTester tester) async {
+      const destination = OutputLocation(
+        kind: OutputLocationKind.customFolder,
+        label: '自定义文件夹 > Audio',
+        writable: true,
+        treeUri:
+            'content://com.android.externalstorage.documents/tree/primary%3AAudio',
+      );
+      final engine = _FakeEngine();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      final destinationResult = Completer<OutputLocation?>();
+      picker.chooseOutputCompleter = destinationResult;
+      final capturedDestinationChange = tester
+          .widget<OutlinedButton>(
+            find.byKey(const ValueKey<String>('choose-output-location')),
+          )
+          .onPressed!;
+      final capturedExtraction = tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey<String>('extract-audio')),
+          )
+          .onPressed!;
+      final capturedCompression = tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey<String>('start-m2-compression')),
+          )
+          .onPressed!;
+      final capturedGalleryReselection = tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey<String>('pick-gallery')),
+          )
+          .onPressed!;
+
+      capturedDestinationChange();
+      await tester.pump();
+
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('extract-audio'))),
+        listen: false,
+      );
+      expect(picker.chooseOutputCalls, 1);
+      expect(flow.selectingOutputLocation, isTrue);
+      expect(flow.interactionLocked, isTrue);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey<String>('extract-audio')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey<String>('start-m2-compression')),
+            )
+            .onPressed,
+        isNull,
+      );
+
+      capturedExtraction();
+      capturedCompression();
+      capturedGalleryReselection();
+      await tester.pump();
+
+      expect(engine.audioProcessRequests, isEmpty);
+      expect(engine.processRequests, isEmpty);
+      expect(picker.galleryCalls, 1);
+      destinationResult.complete(destination);
+      await tester.pump();
+      await tester.pump();
+
+      expect(flow.selectingOutputLocation, isFalse);
+      expect(flow.interactionLocked, isFalse);
+      expect(find.text('保存到：自定义文件夹 > Audio'), findsOneWidget);
+      expect(engine.audioProcessRequests, isEmpty);
+      expect(engine.processRequests, isEmpty);
+    },
+  );
 
   testWidgets(
     'initial audio destination preflight is visibly single-flight under double tap',

@@ -30,7 +30,7 @@
 
 - [ ] 扩展名 `.m4a`，resolver MIME 为 `audio/mp4`，系统播放器可播放；
 - [ ] 实际文件名、用户可读保存位置、输出 URI、bytes 与回读 metadata 一致；
-- [ ] 输出只有第一条音轨对应的 AAC 音轨，无视频轨；逐 sample 物理读回完整，payload bytes 不超过物理文件 bytes；输出声明时长、sample 覆盖时长和源音轨覆盖时长满足 AAC frame/编码延迟/时间取整边界，短片不得使用固定 1 秒容差放过近乎完全截断；
+- [ ] 输出只有第一条音轨对应的 AAC 音轨，无视频轨；逐 sample 物理读回完整，payload bytes 不超过物理文件 bytes；输出声明时长、sample 覆盖时长、源音轨覆盖时长以及最大相邻 sample gap 均满足 AAC profile/sample-rate frame、编码延迟和时间取整边界，短片不得使用固定 1 秒容差或平均间隔掩盖近乎完全截断/内部稀疏缺口；
 - [ ] 无爆音、无变速；普通页面/通知不显示 Codec 名称、原始异常或技术错误栈；
 - [ ] 成功后可直接打开和分享；metadata 回读失败时不回滚已发布成功，仍保留实际文件名、位置、打开与分享入口；
 - [ ] 任务终态后无残留 WakeLock、临时文件、`IS_PENDING` 行、自定义 SAF 半成品或重复通知。

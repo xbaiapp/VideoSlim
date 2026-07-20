@@ -22,6 +22,7 @@ final class HomeFlowState extends ChangeNotifier {
 
   bool picking = false;
   bool readingMetadata = false;
+  bool selectingOutputLocation = false;
   bool validatingDestination = false;
   bool preparing = false;
   bool processing = false;
@@ -64,6 +65,7 @@ final class HomeFlowState extends ChangeNotifier {
   bool get interactionLocked =>
       picking ||
       readingMetadata ||
+      selectingOutputLocation ||
       validatingDestination ||
       preparing ||
       processing ||

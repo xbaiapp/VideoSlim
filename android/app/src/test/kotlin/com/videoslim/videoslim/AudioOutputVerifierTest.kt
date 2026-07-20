@@ -90,6 +90,7 @@ class AudioOutputVerifierTest {
                 lastSampleTimeUs = 0L,
                 sampleCount = 1L,
                 sampleBytes = 400L,
+                maxSampleDeltaUs = null,
             )
 
         assertThrows(IOException::class.java) {
@@ -109,6 +110,23 @@ class AudioOutputVerifierTest {
                     lastSampleTimeUs = 436_000L,
                     sampleCount = 2L,
                     sampleBytes = 800L,
+                    maxSampleDeltaUs = 436_000L,
+                ),
+                AudioOutputVerifier.AAC_MIME,
+                AudioOutputVerifier.COPY_AAC_PROFILES,
+            )
+        }
+    }
+
+    @Test
+    fun `frame-aware verification rejects a hidden internal sparse gap`() {
+        assertThrows(IOException::class.java) {
+            AudioOutputVerifier.requireValid(
+                shortValidMetadata().copy(
+                    lastSampleTimeUs = 458_000L,
+                    sampleCount = 22L,
+                    sampleBytes = 7_000L,
+                    maxSampleDeltaUs = 457_980L,
                 ),
                 AudioOutputVerifier.AAC_MIME,
                 AudioOutputVerifier.COPY_AAC_PROFILES,
@@ -129,7 +147,12 @@ class AudioOutputVerifierTest {
 
         assertThrows(IOException::class.java) {
             AudioOutputVerifier.requireValid(
-                completeCopy.copy(lastSampleTimeUs = 0L, sampleCount = 1L, sampleBytes = 400L),
+                completeCopy.copy(
+                    lastSampleTimeUs = 0L,
+                    sampleCount = 1L,
+                    sampleBytes = 400L,
+                    maxSampleDeltaUs = null,
+                ),
                 AudioOutputVerifier.AAC_MIME,
                 AudioOutputVerifier.COPY_AAC_PROFILES,
                 expectedSource = source,
@@ -145,8 +168,14 @@ class AudioOutputVerifierTest {
                 audioProfile = null,
                 sampleCount = 26L,
                 lastSampleTimeUs = 480_000L,
+                maxSampleDeltaUs = 19_200L,
             )
-        val completeTranscode = shortValidMetadata().copy(lastSampleTimeUs = 469_333L, sampleCount = 23L)
+        val completeTranscode =
+            shortValidMetadata().copy(
+                lastSampleTimeUs = 469_333L,
+                sampleCount = 23L,
+                maxSampleDeltaUs = 21_334L,
+            )
         AudioOutputVerifier.requireValid(
             completeTranscode,
             AudioOutputVerifier.AAC_MIME,
@@ -156,7 +185,12 @@ class AudioOutputVerifierTest {
 
         assertThrows(IOException::class.java) {
             AudioOutputVerifier.requireValid(
-                completeTranscode.copy(lastSampleTimeUs = 0L, sampleCount = 1L, sampleBytes = 400L),
+                completeTranscode.copy(
+                    lastSampleTimeUs = 0L,
+                    sampleCount = 1L,
+                    sampleBytes = 400L,
+                    maxSampleDeltaUs = null,
+                ),
                 AudioOutputVerifier.AAC_MIME,
                 AudioOutputVerifier.TRANSCODE_AAC_PROFILES,
                 expectedSource = source,
@@ -202,6 +236,7 @@ class AudioOutputVerifierTest {
             sampleCount = 24L,
             sampleBytes = 8_000L,
             sampleTimesMonotonic = true,
+            maxSampleDeltaUs = 21_334L,
             audioProfile = AudioOutputVerifier.AAC_PROFILE_LC,
         )
 
@@ -223,6 +258,7 @@ class AudioOutputVerifierTest {
             sampleCount = 2_812L,
             sampleBytes = 990_000L,
             sampleTimesMonotonic = true,
+            maxSampleDeltaUs = 21_337L,
             audioProfile = AudioOutputVerifier.AAC_PROFILE_LC,
         )
 }

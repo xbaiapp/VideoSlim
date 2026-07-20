@@ -32,6 +32,7 @@ class AudioMetadataScanPolicyTest {
         assertEquals(1_500L, result.lastSampleTimeUs)
         assertEquals(3L, result.sampleCount)
         assertEquals(600L, result.sampleBytes)
+        assertEquals(1_000L, result.maxSampleDeltaUs)
         assertFalse(result.monotonic)
     }
 

@@ -58,7 +58,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _timingTimer;
   OutputLocation _outputLocation = OutputLocation.defaultGallery;
   bool _outputLocationLoading = true;
-  bool _selectingOutputLocation = false;
   String _taskOutputLocationLabel = OutputLocation.defaultGallery.label;
   ActualVideoEncodingMode _actualVideoEncodingMode =
       ActualVideoEncodingMode.unknown;
@@ -82,6 +81,9 @@ class _HomeScreenState extends State<HomeScreen> {
   set _picking(bool value) => _flow.picking = value;
   bool get _readingMetadata => _flow.readingMetadata;
   set _readingMetadata(bool value) => _flow.readingMetadata = value;
+  bool get _selectingOutputLocation => _flow.selectingOutputLocation;
+  set _selectingOutputLocation(bool value) =>
+      _flow.selectingOutputLocation = value;
   set _validatingDestination(bool value) => _flow.validatingDestination = value;
   bool get _preparing => _flow.preparing;
   set _preparing(bool value) => _flow.preparing = value;
