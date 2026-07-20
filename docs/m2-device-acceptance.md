@@ -1,10 +1,10 @@
 # VideoSlim M2 真机验收矩阵
 
-> **当前验收包：** `VideoSlim-M2-arm64-v1.3.1.apk`（`1.3.1+10`）
-> **SHA-256：** `ad58955e2e0a8e4fae43634a4b10095c535fd452712c0012358da768a93b048a`
-> **本机路径：** `/root/artifacts/videoslim/m2/VideoSlim-M2-arm64-v1.3.1.apk`
+> **当前验收包：** `VideoSlim-M2-arm64-v1.3.2.apk`（`1.3.2+11`）
+> **SHA-256：** `4e3f8425308d10f8af5b5f00928adfd3b2ffd0290aa172abbc09e6be735c7a7c`
+> **本机路径：** `/root/artifacts/videoslim/m2/VideoSlim-M2-arm64-v1.3.2.apk`
 > **签名：** Android debug certificate，仅用于当前私有验收。
-> `1.3.0+9`（SHA-256 `71645ffd…`）已因发布恢复复审发现而撤销；旧 `1.2.x` 也不用于本轮事故验收。服务器自动化和 APK 静态核验已通过；Pixel 10 Pro / Android 17 A/B/C 与兼容模式仍待真机执行，因此本表没有预先标记 PASS。
+> `1.3.0+9`（SHA-256 `71645ffd…`）已因发布恢复复审发现而撤销；`1.3.1+10` 为交付前文案过渡包，也已被替代。服务器自动化和 APK 静态核验已通过；Pixel 10 Pro / Android 17 A/B/C 与兼容模式仍待真机执行，因此本表没有预先标记 PASS。
 
 ## 1. 测试前记录
 
