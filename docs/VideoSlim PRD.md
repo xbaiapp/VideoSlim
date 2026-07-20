@@ -4,7 +4,7 @@
 |---|---|
 | 文档版本 | v1.6（M3 音频提取实现与验收契约冻结） |
 | 日期 | 2026-07-20 |
-| 状态 | M2 `ACCEPTED — private scope`；M3 实现已完成，私有 APK 发布门禁与真机验收待最终证据 |
+| 状态 | M2 `ACCEPTED — private scope`；M3 非真机发布证据按精确 SHA 归档，Pixel/硬件验收在无连接设备时保持未认领 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
@@ -169,13 +169,14 @@
 **模式 A：AAC copy（默认）**
 - 只接受 AAC-LC 或 HE-AAC，Android 轨道 MIME 必须为 `audio/mp4a-latm`；其他音频编码稳定返回 `AUDIO_COPY_UNSUPPORTED`，提示用户显式改用 AAC 模式，不得静默降级。
 - 使用 `MediaExtractor` 选中第一音轨，逐 sample 写入 `MediaMuxer` 的 MPEG-4 容器形成 `.m4a`；这是纯 sample copy，**不创建音频 Decoder 或 Encoder**，零转码、零质量损失。
-- 保留 sample 相对时间戳并把第一条有效音频 sample 归零；发布前确认输出非空、只有可识别 AAC 音轨且时长有效。
+- 保留 sample 相对时间戳并把第一条有效音频 sample 归零；发布前逐 sample 使用有界 `readSampleData` 证明索引 payload 可完整物理读取，拒绝失败/短读/超界读，并确认 payload bytes 不超过物理文件 bytes。
 
 **模式 B：AAC 强制重编码**
 - 固定提供 AAC-LC `192 / 128 / 96 / 64 kbps` 四档，对应请求值 `192000 / 128000 / 96000 / 64000` bps；默认 128 kbps。
 - 使用 Media3 Transformer 的 **audio-only** 管线，移除视频并强制走音频 Decoder → AAC Encoder；即使源轨已经是 AAC，也不得 transmux 或忽略目标码率。
 - 允许可被 Media3 音频 Decoder 读取的非 AAC 源（例如 Opus WebM）由用户显式选择本模式后转为 AAC-LC。F19 必须记录实际音频 Decoder、实际 AAC Encoder、请求码率、源/输出 MIME、采样率与声道。
 - 目标码率是 Encoder 配置与估算依据，不要求实际输出码率逐字节精确命中，也不得把码率偏差作为发布硬拦截；结构性无效输出才返回 `AUDIO_OUTPUT_INVALID`。
+- copy 与强制重编码输出都必须按真实 sample span 加末帧时长计算覆盖时长，并使用 AAC frame、编码延迟和毫秒取整相关容差与源音轨比较；不得使用固定 1 秒容差，尤其不得让亚秒源的一帧/少量帧截断结果通过。
 
 **验收标准**：
 - 30–120 秒 AAC 短片 copy 连续 3 次，输出均可播放、时长一致，且 F19 证明未创建音频 Decoder/Encoder；

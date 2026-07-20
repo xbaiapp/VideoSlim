@@ -1,7 +1,8 @@
 package com.videoslim.videoslim
 
 import java.io.IOException
-import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.max
 
 internal object AudioOutputVerifier {
     const val AAC_MIME = "audio/mp4a-latm"
@@ -25,6 +26,7 @@ internal object AudioOutputVerifier {
         metadata: AudioMetadata,
         requiredMime: String? = null,
         allowedAacProfiles: Set<Int> = COPY_AAC_PROFILES,
+        expectedSource: AudioMetadata? = null,
     ): AudioMetadata {
         if (metadata.fileSizeBytes <= 0L) throw IOException("Published audio is empty")
         if (metadata.durationMs <= 0L) throw IOException("Published audio has no duration")
@@ -37,6 +39,9 @@ internal object AudioOutputVerifier {
         if (metadata.audioSampleRate <= 0) throw IOException("Published audio sample rate is invalid")
         if (metadata.sampleCount <= 0L) throw IOException("Published audio has no samples")
         if (metadata.sampleBytes <= 0L) throw IOException("Published audio has no sample payload")
+        if (metadata.sampleBytes > metadata.fileSizeBytes) {
+            throw IOException("Published audio sample payload exceeds its physical file size")
+        }
         if (!metadata.sampleTimesMonotonic) throw IOException("Published audio sample timestamps are not monotonic")
         val firstSampleTimeUs = metadata.firstSampleTimeUs ?: throw IOException("Published audio has no first timestamp")
         if (firstSampleTimeUs < 0L || firstSampleTimeUs > MAX_START_OFFSET_US) {
@@ -44,20 +49,121 @@ internal object AudioOutputVerifier {
         }
         val lastSampleTimeUs = metadata.lastSampleTimeUs ?: throw IOException("Published audio has no last timestamp")
         if (lastSampleTimeUs < firstSampleTimeUs) throw IOException("Published audio timestamp range is invalid")
-        val sampleSpanUs = lastSampleTimeUs - firstSampleTimeUs
-        val declaredDurationUs = metadata.durationMs * MICROSECONDS_PER_MILLISECOND
-        if (abs(declaredDurationUs - sampleSpanUs) > MAX_DURATION_DELTA_US) {
-            throw IOException("Published audio sample span does not match declared duration")
-        }
         if (
             metadata.audioMime == AAC_MIME &&
             (allowedAacProfiles.isEmpty() || metadata.audioProfile !in allowedAacProfiles)
         ) {
             throw IOException("Published audio AAC profile is missing or unsupported")
         }
+        requireTimelineConsistent(metadata)
+        expectedSource?.let { source ->
+            requireTimelineConsistent(source)
+            requireCoverageConsistent(source, metadata)
+        }
         return metadata
     }
 
+    private fun requireTimelineConsistent(metadata: AudioMetadata) {
+        val declaredDurationUs = durationUs(metadata.durationMs)
+        val coveredDurationUs = coveredSampleDurationUs(metadata)
+        val frameUs = estimatedFrameDurationUs(metadata)
+        val toleranceUs = max(MIN_ROUNDING_TOLERANCE_US, frameUs * TIMELINE_TOLERANCE_FRAMES)
+        if (
+            absDifference(declaredDurationUs, coveredDurationUs) > toleranceUs ||
+            !hasMinimumCoverage(declaredDurationUs, coveredDurationUs)
+        ) {
+            throw IOException("Audio sample coverage does not match declared duration")
+        }
+    }
+
+    private fun requireCoverageConsistent(source: AudioMetadata, output: AudioMetadata) {
+        val sourceCoverageUs = coveredSampleDurationUs(source)
+        val outputCoverageUs = coveredSampleDurationUs(output)
+        val toleranceUs =
+            max(
+                MIN_ROUNDING_TOLERANCE_US,
+                saturatedAdd(
+                    estimatedFrameDurationUs(source),
+                    estimatedFrameDurationUs(output) * ENCODER_DELAY_TOLERANCE_FRAMES,
+                ),
+            )
+        if (
+            absDifference(sourceCoverageUs, outputCoverageUs) > toleranceUs ||
+            !hasMinimumCoverage(sourceCoverageUs, outputCoverageUs)
+        ) {
+            throw IOException("Published audio sample coverage does not match the source")
+        }
+    }
+
+    private fun coveredSampleDurationUs(metadata: AudioMetadata): Long {
+        val first = metadata.firstSampleTimeUs ?: throw IOException("Audio has no first timestamp")
+        val last = metadata.lastSampleTimeUs ?: throw IOException("Audio has no last timestamp")
+        if (last < first) throw IOException("Audio timestamp range is invalid")
+        return saturatedAdd(last - first, estimatedFrameDurationUs(metadata))
+    }
+
+    private fun estimatedFrameDurationUs(metadata: AudioMetadata): Long {
+        val sampleRate = metadata.audioSampleRate
+        if (sampleRate <= 0) throw IOException("Audio sample rate is invalid")
+        val span =
+            (metadata.lastSampleTimeUs ?: 0L) - (metadata.firstSampleTimeUs ?: 0L)
+        if (metadata.sampleCount > 1L && span > 0L) {
+            val observed =
+                ceil(span.toDouble() / (metadata.sampleCount - 1L))
+                    .toLong()
+                    .coerceAtLeast(1L)
+            return observed.coerceAtMost(
+                if (metadata.audioMime == AAC_MIME) {
+                    MAX_AAC_FRAME_US
+                } else {
+                    MAX_GENERAL_AUDIO_FRAME_US
+                },
+            )
+        }
+        val aacSamplesPerFrame =
+            when {
+                metadata.audioMime != AAC_MIME -> null
+                metadata.audioProfile == AAC_PROFILE_LC -> AAC_LC_SAMPLES_PER_FRAME
+                metadata.audioProfile == AAC_PROFILE_HE || metadata.audioProfile == AAC_PROFILE_HE_PS ->
+                    HE_AAC_SAMPLES_PER_FRAME
+                else -> null
+            }
+        if (aacSamplesPerFrame != null) {
+            return ceil(aacSamplesPerFrame.toDouble() * MICROSECONDS_PER_SECOND / sampleRate)
+                .toLong()
+                .coerceIn(1L, MAX_AAC_FRAME_US)
+        }
+        return durationUs(metadata.durationMs).coerceIn(1L, MAX_GENERAL_AUDIO_FRAME_US)
+    }
+
+    private fun hasMinimumCoverage(expectedUs: Long, actualUs: Long): Boolean {
+        if (expectedUs <= 0L || actualUs <= 0L) return false
+        val shorter = minOf(expectedUs, actualUs)
+        val longer = maxOf(expectedUs, actualUs)
+        return shorter.toDouble() / longer.toDouble() >= MIN_COVERAGE_RATIO
+    }
+
+    private fun durationUs(durationMs: Long): Long =
+        if (durationMs > Long.MAX_VALUE / MICROSECONDS_PER_MILLISECOND) {
+            Long.MAX_VALUE
+        } else {
+            durationMs * MICROSECONDS_PER_MILLISECOND
+        }
+
+    private fun absDifference(left: Long, right: Long): Long =
+        if (left >= right) left - right else right - left
+
+    private fun saturatedAdd(left: Long, right: Long): Long =
+        if (left > Long.MAX_VALUE - right) Long.MAX_VALUE else left + right
+
     private const val MICROSECONDS_PER_MILLISECOND = 1_000L
-    private const val MAX_DURATION_DELTA_US = 1_000_000L
+    private const val MICROSECONDS_PER_SECOND = 1_000_000.0
+    private const val AAC_LC_SAMPLES_PER_FRAME = 1_024
+    private const val HE_AAC_SAMPLES_PER_FRAME = 2_048
+    private const val MIN_ROUNDING_TOLERANCE_US = 5_000L
+    private const val TIMELINE_TOLERANCE_FRAMES = 2L
+    private const val ENCODER_DELAY_TOLERANCE_FRAMES = 2L
+    private const val MAX_AAC_FRAME_US = 64_000L
+    private const val MAX_GENERAL_AUDIO_FRAME_US = 120_000L
+    private const val MIN_COVERAGE_RATIO = 0.75
 }

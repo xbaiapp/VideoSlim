@@ -1863,6 +1863,200 @@ void main() {
     expect(find.textContaining('再压缩'), findsNothing);
   });
 
+  testWidgets(
+    'initial audio destination preflight is visibly single-flight under double tap',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      final callsBeforePreflight = picker.outputLocationCalls;
+      final validation = Completer<OutputLocation>();
+      picker.outputLocationCompleter = validation;
+      final captured = tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey<String>('extract-audio')),
+          )
+          .onPressed!;
+
+      captured();
+      captured();
+      await tester.pump();
+
+      expect(picker.outputLocationCalls, callsBeforePreflight + 1);
+      expect(engine.audioProcessRequests, isEmpty);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey<String>('extract-audio')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey<String>('start-m2-compression')),
+            )
+            .onPressed,
+        isNull,
+      );
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('extract-audio'))),
+        listen: false,
+      );
+      expect(flow.validatingDestination, isTrue);
+      expect(flow.interactionLocked, isTrue);
+
+      validation.complete(OutputLocation.defaultGallery);
+      await tester.pump();
+      await tester.pump();
+
+      expect(engine.audioProcessRequests, hasLength(1));
+      expect(engine.processRequests, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'audio preflight blocks compression source reselection and destination changes',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      final capturedGalleryReselection = tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey<String>('pick-gallery')),
+          )
+          .onPressed!;
+      await _selectGallery(tester, engine, picker);
+      final capturedCompression = tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey<String>('start-m2-compression')),
+          )
+          .onPressed!;
+      final capturedDestinationChange = tester
+          .widget<OutlinedButton>(
+            find.byKey(const ValueKey<String>('choose-output-location')),
+          )
+          .onPressed!;
+      final validation = Completer<OutputLocation>();
+      picker.outputLocationCompleter = validation;
+      final capturedExtraction = tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey<String>('extract-audio')),
+          )
+          .onPressed!;
+
+      capturedExtraction();
+      capturedCompression();
+      capturedGalleryReselection();
+      capturedDestinationChange();
+      await tester.pump();
+
+      expect(picker.galleryCalls, 1);
+      expect(engine.processRequests, isEmpty);
+      expect(engine.audioProcessRequests, isEmpty);
+      validation.complete(OutputLocation.defaultGallery);
+      await tester.pump();
+      await tester.pump();
+
+      expect(engine.audioProcessRequests, hasLength(1));
+      expect(engine.audioProcessRequests.single.uri, _sourceUri);
+      expect(engine.processRequests, isEmpty);
+      expect(picker.galleryCalls, 1);
+    },
+  );
+
+  testWidgets(
+    'compression preflight blocks a concurrent audio extraction start',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      final validation = Completer<OutputLocation>();
+      picker.outputLocationCompleter = validation;
+      final capturedCompression = tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey<String>('start-m2-compression')),
+          )
+          .onPressed!;
+      final capturedExtraction = tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey<String>('extract-audio')),
+          )
+          .onPressed!;
+
+      capturedCompression();
+      capturedExtraction();
+      await tester.pump();
+
+      expect(engine.processRequests, isEmpty);
+      expect(engine.audioProcessRequests, isEmpty);
+      validation.complete(OutputLocation.defaultGallery);
+      await tester.pump();
+      await tester.pump();
+
+      expect(engine.processRequests, hasLength(1));
+      expect(engine.audioProcessRequests, isEmpty);
+    },
+  );
+
+  testWidgets('stale initial audio destination completion cannot start work', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    final validation = Completer<OutputLocation>();
+    picker.outputLocationCompleter = validation;
+    final capturedExtraction = tester
+        .widget<FilledButton>(
+          find.byKey(const ValueKey<String>('extract-audio')),
+        )
+        .onPressed!;
+    capturedExtraction();
+    await tester.pump();
+
+    final flow = Provider.of<HomeFlowState>(
+      tester.element(find.byKey(const ValueKey<String>('extract-audio'))),
+      listen: false,
+    );
+    flow.update(() {
+      flow.generation += 1;
+      flow.validatingDestination = false;
+      flow.selectedUri = 'content://media/video/reselected';
+      flow.sourceInfo = _videoInfo(uri: 'content://media/video/reselected');
+    });
+    validation.complete(OutputLocation.defaultGallery);
+    await tester.pump();
+    await tester.pump();
+
+    expect(engine.audioProcessRequests, isEmpty);
+    expect(engine.processRequests, isEmpty);
+  });
+
   testWidgets('audio retry destination validation is generation locked', (
     WidgetTester tester,
   ) async {

@@ -9,7 +9,7 @@ import org.junit.Test
 
 class AudioOutputVerifierTest {
     @Test
-    fun `accepts one monotonic AAC LC audio track with real payload`() {
+    fun `accepts one monotonic AAC LC audio track with physically consistent payload`() {
         val metadata = validMetadata()
 
         assertEquals(
@@ -61,7 +61,7 @@ class AudioOutputVerifierTest {
     }
 
     @Test
-    fun `rejects empty multi-track video-bearing or wrong-codec outputs`() {
+    fun `rejects empty physically inconsistent multi-track or wrong-codec outputs`() {
         listOf(
             validMetadata().copy(fileSizeBytes = 0L),
             validMetadata().copy(durationMs = 0L),
@@ -72,6 +72,7 @@ class AudioOutputVerifierTest {
             validMetadata().copy(audioSampleRate = 0),
             validMetadata().copy(sampleCount = 0L),
             validMetadata().copy(sampleBytes = 0L),
+            validMetadata().copy(sampleBytes = 1_000_001L),
             validMetadata().copy(sampleTimesMonotonic = false),
             validMetadata().copy(firstSampleTimeUs = 100_001L),
             validMetadata().copy(lastSampleTimeUs = -1L),
@@ -83,7 +84,88 @@ class AudioOutputVerifierTest {
     }
 
     @Test
-    fun `rejects plausible container duration with a truncated sample timeline`() {
+    fun `frame-aware declared duration rejects a one-frame near-total short truncation`() {
+        val oneFrameOfHalfSecond =
+            shortValidMetadata().copy(
+                lastSampleTimeUs = 0L,
+                sampleCount = 1L,
+                sampleBytes = 400L,
+            )
+
+        assertThrows(IOException::class.java) {
+            AudioOutputVerifier.requireValid(
+                oneFrameOfHalfSecond,
+                AudioOutputVerifier.AAC_MIME,
+                AudioOutputVerifier.COPY_AAC_PROFILES,
+            )
+        }
+    }
+
+    @Test
+    fun `frame-aware declared duration rejects sparse indexed samples in a short clip`() {
+        assertThrows(IOException::class.java) {
+            AudioOutputVerifier.requireValid(
+                shortValidMetadata().copy(
+                    lastSampleTimeUs = 250_000L,
+                    sampleCount = 2L,
+                    sampleBytes = 800L,
+                ),
+                AudioOutputVerifier.AAC_MIME,
+                AudioOutputVerifier.COPY_AAC_PROFILES,
+            )
+        }
+    }
+
+    @Test
+    fun `short lossless copy accepts AAC frame rounding but rejects source-relative truncation`() {
+        val source = shortValidMetadata()
+        val completeCopy = source.copy(sourceUri = "copy.m4a", fileName = "copy.m4a")
+        AudioOutputVerifier.requireValid(
+            completeCopy,
+            AudioOutputVerifier.AAC_MIME,
+            AudioOutputVerifier.COPY_AAC_PROFILES,
+            expectedSource = source,
+        )
+
+        assertThrows(IOException::class.java) {
+            AudioOutputVerifier.requireValid(
+                completeCopy.copy(lastSampleTimeUs = 0L, sampleCount = 1L, sampleBytes = 400L),
+                AudioOutputVerifier.AAC_MIME,
+                AudioOutputVerifier.COPY_AAC_PROFILES,
+                expectedSource = source,
+            )
+        }
+    }
+
+    @Test
+    fun `short AAC transcode accepts encoder frame rounding but rejects source-relative truncation`() {
+        val source =
+            shortValidMetadata().copy(
+                audioMime = "audio/opus",
+                audioProfile = null,
+                sampleCount = 26L,
+                lastSampleTimeUs = 480_000L,
+            )
+        val completeTranscode = shortValidMetadata().copy(lastSampleTimeUs = 469_333L, sampleCount = 23L)
+        AudioOutputVerifier.requireValid(
+            completeTranscode,
+            AudioOutputVerifier.AAC_MIME,
+            AudioOutputVerifier.TRANSCODE_AAC_PROFILES,
+            expectedSource = source,
+        )
+
+        assertThrows(IOException::class.java) {
+            AudioOutputVerifier.requireValid(
+                completeTranscode.copy(lastSampleTimeUs = 0L, sampleCount = 1L, sampleBytes = 400L),
+                AudioOutputVerifier.AAC_MIME,
+                AudioOutputVerifier.TRANSCODE_AAC_PROFILES,
+                expectedSource = source,
+            )
+        }
+    }
+
+    @Test
+    fun `rejects plausible long container duration with a truncated sample timeline`() {
         assertThrows(IOException::class.java) {
             AudioOutputVerifier.requireValid(
                 validMetadata().copy(lastSampleTimeUs = 10_000_000L, sampleCount = 470L),
@@ -101,6 +183,27 @@ class AudioOutputVerifierTest {
             AudioOutputVerifier.requireValid(opus, AudioOutputVerifier.AAC_MIME)
         }
     }
+
+    private fun shortValidMetadata() =
+        AudioMetadata(
+            sourceUri = "content://media/external/audio/media/7",
+            fileName = "short.m4a",
+            fileSizeBytes = 12_000L,
+            durationMs = 500L,
+            container = "audio/mp4",
+            audioMime = AudioOutputVerifier.AAC_MIME,
+            audioChannels = 2,
+            audioSampleRate = 48_000,
+            audioBitrate = 128_000,
+            audioTrackCount = 1,
+            videoTrackCount = 0,
+            firstSampleTimeUs = 0L,
+            lastSampleTimeUs = 490_667L,
+            sampleCount = 24L,
+            sampleBytes = 8_000L,
+            sampleTimesMonotonic = true,
+            audioProfile = AudioOutputVerifier.AAC_PROFILE_LC,
+        )
 
     private fun validMetadata() =
         AudioMetadata(

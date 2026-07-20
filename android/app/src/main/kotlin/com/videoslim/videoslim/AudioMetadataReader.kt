@@ -220,24 +220,26 @@ internal class AudioMetadataReader(context: Context) {
         shouldCancel: () -> Boolean,
     ): AudioSampleTiming {
         extractor.selectTrack(trackIndex)
-        val legacySampleBuffer =
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-                ByteBuffer.allocate(
-                    boundedAudioSampleBufferSize(format.intValue(MediaFormat.KEY_MAX_INPUT_SIZE)),
-                )
-            } else {
-                null
-            }
+        // Keep one bounded buffer and physically read every indexed sample on
+        // every supported API. The extra byte makes an over-cap legacy sample
+        // observable instead of accepting a possibly truncated cap-sized read.
+        format.intValue(MediaFormat.KEY_MAX_INPUT_SIZE)?.let(::boundedAudioSampleBufferSize)
+        val sampleBuffer = ByteBuffer.allocate(MAX_AUDIO_SAMPLE_BUFFER_BYTES + 1)
         return try {
             scanAudioSampleMetadata(
                 sampleTimeUs = { extractor.sampleTime },
-                sampleSizeBytes = {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                        extractor.sampleSize
-                    } else {
-                        legacySampleBuffer!!.clear()
-                        extractor.readSampleData(legacySampleBuffer, 0).toLong()
-                    }
+                samplePayloadBytes = {
+                    val indexedSize =
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            extractor.sampleSize
+                        } else {
+                            null
+                        }
+                    readVerifiedAudioSamplePayload(
+                        sampleBuffer = sampleBuffer,
+                        indexedSampleSize = indexedSize,
+                        readSampleData = { buffer -> extractor.readSampleData(buffer, 0) },
+                    )
                 },
                 advance = { extractor.advance() },
                 shouldCancel = shouldCancel,
@@ -315,7 +317,7 @@ internal data class AudioSampleTiming(
 
 internal fun scanAudioSampleMetadata(
     sampleTimeUs: () -> Long,
-    sampleSizeBytes: () -> Long,
+    samplePayloadBytes: () -> Long,
     advance: () -> Boolean,
     shouldCancel: () -> Boolean,
 ): AudioSampleTiming {
@@ -335,15 +337,44 @@ internal fun scanAudioSampleMetadata(
         last = sampleTime
         count += 1L
         checkAudioMetadataCancellation(shouldCancel)
-        sampleSizeBytes().takeIf { it > 0L }?.let { size ->
-            totalBytes =
-                if (totalBytes > Long.MAX_VALUE - size) Long.MAX_VALUE else totalBytes + size
-        }
+        val size = samplePayloadBytes()
+        if (size <= 0L) throw IOException("Audio sample payload is unreadable")
+        totalBytes =
+            if (totalBytes > Long.MAX_VALUE - size) Long.MAX_VALUE else totalBytes + size
         checkAudioMetadataCancellation(shouldCancel)
         if (!advance()) break
     }
     checkAudioMetadataCancellation(shouldCancel)
     return AudioSampleTiming(first, last, count, totalBytes, monotonic)
+}
+
+/**
+ * Reads one complete encoded sample into a reusable bounded buffer.
+ *
+ * API 28+ exposes the indexed sample size, which must exactly match the
+ * physical read. Older APIs still perform the same physical read and reject
+ * zero, failed, or over-product-cap results. The buffer has one sentinel byte
+ * beyond the product cap so a legacy over-cap read cannot masquerade as a
+ * complete cap-sized sample.
+ */
+@Throws(IOException::class)
+internal fun readVerifiedAudioSamplePayload(
+    sampleBuffer: ByteBuffer,
+    indexedSampleSize: Long?,
+    readSampleData: (ByteBuffer) -> Int,
+): Long {
+    if (indexedSampleSize != null && indexedSampleSize !in 1..MAX_AUDIO_SAMPLE_BUFFER_BYTES.toLong()) {
+        throw IOException("Indexed audio sample size is invalid or exceeds the verification cap")
+    }
+    sampleBuffer.clear()
+    val bytesRead = readSampleData(sampleBuffer)
+    if (bytesRead <= 0 || bytesRead > MAX_AUDIO_SAMPLE_BUFFER_BYTES) {
+        throw IOException("Audio sample payload is unreadable or exceeds the verification cap")
+    }
+    if (indexedSampleSize != null && bytesRead.toLong() != indexedSampleSize) {
+        throw IOException("Audio sample payload read was shorter than its indexed size")
+    }
+    return bytesRead.toLong()
 }
 
 private fun checkAudioMetadataCancellation(shouldCancel: () -> Boolean) {

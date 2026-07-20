@@ -381,14 +381,11 @@ internal class AudioExtractionEngine(
             } else {
                 AudioOutputVerifier.TRANSCODE_AAC_PROFILES
             },
+            expectedSource = task.sourceMetadata,
         )
-        val sourceSpanMs = task.sourceMetadata?.sampleSpanMs() ?: 0L
-        if (sourceSpanMs > 0L && kotlin.math.abs(outputMetadata.durationMs - sourceSpanMs) > 1_000L) {
-            throw EngineOperationException(EngineFailure(EngineErrorCode.AUDIO_OUTPUT_INVALID))
-        }
         log(
             "taskKind=audio_extraction task=${task.id} verifiedOutput=$outputMetadata " +
-                "sourceSpanMs=$sourceSpanMs",
+                "sourceSpanMs=${task.sourceMetadata?.sampleSpanMs() ?: 0L}",
         )
         checkCancellation(task)
         postToMain {

@@ -82,6 +82,7 @@ class _HomeScreenState extends State<HomeScreen> {
   set _picking(bool value) => _flow.picking = value;
   bool get _readingMetadata => _flow.readingMetadata;
   set _readingMetadata(bool value) => _flow.readingMetadata = value;
+  set _validatingDestination(bool value) => _flow.validatingDestination = value;
   bool get _preparing => _flow.preparing;
   set _preparing(bool value) => _flow.preparing = value;
   bool get _processing => _flow.processing;
@@ -581,37 +582,50 @@ class _HomeScreenState extends State<HomeScreen> {
       _flow.update(() => _errorText = '处理状态连接已中断，请重启应用后再试。');
       return;
     }
+
+    final generation = ++_generation;
+    _flow.update(() {
+      _validatingDestination = true;
+      _errorText = null;
+    });
+
     OutputLocation verifiedLocation;
     try {
       verifiedLocation = await widget.picker.getOutputLocation();
-      if (!mounted) return;
+      if (!_isCurrent(generation)) return;
       _flow.update(() => _outputLocation = verifiedLocation);
     } catch (error, stackTrace) {
-      if (mounted) {
+      if (_isCurrent(generation)) {
         _flow.update(() {
+          _validatingDestination = false;
           _errorText = _errorTextFor(error, fallback: '无法确认保存文件夹权限，请重新选择保存位置。');
         });
       }
       _logError('音频提取前保存位置检查失败', error, stackTrace);
       return;
     }
+    if (!mounted || !_isCurrent(generation)) return;
     if (!verifiedLocation.writable) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('保存文件夹权限已失效，请重新选择。')));
-      }
+      _flow.update(() => _validatingDestination = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('保存文件夹权限已失效，请重新选择。')));
       return;
     }
     final plan = _audioExtractPlan;
     if (plan == null || !plan.available) {
       _flow.update(() {
+        _validatingDestination = false;
         _errorText = switch (plan?.reason) {
           AudioExtractUnavailableReason.copyRequiresAac =>
             '原音轨不是 AAC，请改用 AAC 转码。',
           _ => '这个视频没有可提取的音轨。',
         };
       });
+      return;
+    }
+    if (_selectedUri != uri || !identical(_sourceInfo, info)) {
+      _flow.update(() => _validatingDestination = false);
       return;
     }
     final audioLocation = verifiedLocation.isCustom
@@ -622,7 +636,8 @@ class _HomeScreenState extends State<HomeScreen> {
       outputLocationLabel: audioLocation.label,
       outputTreeUri: audioLocation.treeUri,
     );
-    await _submitAudio(request);
+    if (!_isCurrent(generation)) return;
+    await _submitAudio(request, reservedGeneration: generation);
   }
 
   Future<void> _retryAudio() async {
@@ -701,6 +716,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _bufferedProgress.clear();
     _processStopwatch = Stopwatch()..start();
     _flow.update(() {
+      _validatingDestination = false;
       _activeTaskKind = TaskKind.audioExtraction;
       _preparing = true;
       _processing = false;
@@ -862,26 +878,44 @@ class _HomeScreenState extends State<HomeScreen> {
       _logFlow('阻止压缩：进度通道已关闭', level: AppLogLevel.error);
       return;
     }
+
+    final generation = ++_generation;
+    _flow.update(() {
+      _validatingDestination = true;
+      _errorText = null;
+    });
+
     OutputLocation verifiedLocation;
     try {
       verifiedLocation = await widget.picker.getOutputLocation();
-      if (!mounted) return;
+      if (!_isCurrent(generation)) return;
       _flow.update(() => _outputLocation = verifiedLocation);
     } catch (error, stackTrace) {
-      if (!mounted) return;
+      if (!_isCurrent(generation)) return;
       _flow.update(() {
+        _validatingDestination = false;
         _errorText = _errorTextFor(error, fallback: '无法确认保存文件夹权限，请重新选择保存位置。');
       });
       _logError('压缩前保存位置检查失败', error, stackTrace);
       return;
     }
+    if (!mounted || !_isCurrent(generation)) return;
     if (!verifiedLocation.writable) {
+      _flow.update(() => _validatingDestination = false);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('保存文件夹权限已失效，请点“重新选择”。')));
       return;
     }
-    if (!await _confirmPlan(plan, hdrSource: info.isHdr) || !mounted) {
+    if (!await _confirmPlan(plan, hdrSource: info.isHdr) ||
+        !_isCurrent(generation)) {
+      if (_isCurrent(generation)) {
+        _flow.update(() => _validatingDestination = false);
+      }
+      return;
+    }
+    if (_selectedUri != uri || !identical(_sourceInfo, info)) {
+      _flow.update(() => _validatingDestination = false);
       return;
     }
 
@@ -897,6 +931,7 @@ class _HomeScreenState extends State<HomeScreen> {
       request,
       estimatedOutputBytes: plan.estimatedOutputBytes,
       startedAt: startedAt,
+      reservedGeneration: generation,
     );
   }
 
@@ -904,15 +939,21 @@ class _HomeScreenState extends State<HomeScreen> {
     ProcessRequest request, {
     required int? estimatedOutputBytes,
     DateTime? startedAt,
+    int? reservedGeneration,
   }) async {
-    if (_interactionLocked || _outputPublished) return;
-    final generation = ++_generation;
+    if ((reservedGeneration == null && _interactionLocked) ||
+        _outputPublished) {
+      return;
+    }
+    final generation = reservedGeneration ?? ++_generation;
+    if (!_isCurrent(generation)) return;
     final taskStartedAt = startedAt ?? _now();
     _activeGeneration = generation;
     _terminalEventHandled = false;
     _bufferedProgress.clear();
     _processStopwatch = Stopwatch()..start();
     _flow.update(() {
+      _validatingDestination = false;
       _activeTaskKind = TaskKind.videoCompression;
       _preparing = true;
       _processing = false;
@@ -1325,6 +1366,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _stopTiming();
     _processStopwatch?.stop();
     _flow.update(() {
+      _validatingDestination = false;
       _preparing = false;
       _processing = false;
       _finishing = false;
@@ -1408,6 +1450,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _flow.update(() {
       _picking = false;
       _readingMetadata = false;
+      _validatingDestination = false;
       _preparing = false;
       _processing = false;
       _finishing = false;
@@ -1723,7 +1766,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           : null,
                       outputLocation: _outputLocation,
                       outputLocationBusy:
-                          _outputLocationLoading || _selectingOutputLocation,
+                          _interactionLocked ||
+                          _outputLocationLoading ||
+                          _selectingOutputLocation,
                       onPresetChanged: (value) =>
                           _changeSettings(() => _selectedPreset = value),
                       onResolutionChanged: (value) =>
@@ -1743,7 +1788,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           ? null
                           : _useDefaultOutputLocation,
                       onCompress:
-                          !_progressStreamClosed &&
+                          !_interactionLocked &&
+                              !_progressStreamClosed &&
                               !_capabilitiesLoading &&
                               !_outputLocationLoading &&
                               _outputLocation.writable &&
@@ -1759,7 +1805,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       bitrate: _audioExtractBitrate,
                       outputLocation: _audioOutputLocation,
                       outputLocationBusy:
-                          _outputLocationLoading || _selectingOutputLocation,
+                          _interactionLocked ||
+                          _outputLocationLoading ||
+                          _selectingOutputLocation,
                       onModeChanged: (value) =>
                           _changeSettings(() => _audioExtractMode = value),
                       onBitrateChanged: (value) =>
@@ -1771,7 +1819,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           ? null
                           : _useDefaultOutputLocation,
                       onExtract:
-                          !_progressStreamClosed &&
+                          !_interactionLocked &&
+                              !_progressStreamClosed &&
                               !_outputLocationLoading &&
                               _audioOutputLocation.writable &&
                               _audioExtractPlan?.available == true
