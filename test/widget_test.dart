@@ -474,10 +474,10 @@ void main() {
       _app(engine: engine, picker: picker, logger: _logger(backend)),
     );
     await _selectGallery(tester, engine, picker);
-    expect(find.textContaining('已改用 H.264 兼容格式'), findsOneWidget);
+    expect(find.textContaining('已调整为 H.264 格式'), findsOneWidget);
     await _tapCompression(tester);
     expect(find.text('开始前请确认'), findsOneWidget);
-    expect(find.textContaining('将改用 H.264 兼容格式'), findsOneWidget);
+    expect(find.textContaining('将调整为 H.264 格式'), findsOneWidget);
     expect(engine.lastRequest, isNull);
     await tester.tap(find.byKey(const ValueKey<String>('confirm-compression')));
     await tester.pump();
@@ -816,7 +816,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('这台手机没有可用于此视频的兼容处理方式。原视频没有被修改。'), findsOneWidget);
+    expect(find.text('这台手机没有可用于此视频的软件读取方式。原视频没有被修改。'), findsOneWidget);
     expect(find.text('使用兼容模式重试'), findsNothing);
     expect(find.text('重试压缩'), findsNothing);
   });

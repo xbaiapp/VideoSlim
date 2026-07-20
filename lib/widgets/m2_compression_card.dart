@@ -114,7 +114,7 @@ class M2CompressionCard extends StatelessWidget {
             ],
             const SizedBox(height: 18),
             if (capabilitiesLoading)
-              const _Notice(icon: Icons.memory_outlined, text: '正在检查手机兼容性…')
+              const _Notice(icon: Icons.memory_outlined, text: '正在检查手机处理能力…')
             else if (plan != null)
               _PlanSummary(plan: plan!),
             if (hdrSource) ...<Widget>[
@@ -411,7 +411,7 @@ class _PlanSummary extends StatelessWidget {
           const SizedBox(height: 10),
           const _Notice(
             icon: Icons.swap_horiz_rounded,
-            text: '当前手机无法使用 HEVC，已改用 H.264 兼容格式并适当提高目标码率。',
+            text: '当前手机无法使用 HEVC，已调整为 H.264 格式并适当提高目标码率。',
             warning: true,
           ),
         ],

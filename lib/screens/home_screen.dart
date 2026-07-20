@@ -585,7 +585,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     if (!plan.isSupported) {
       _flow.update(() {
-        _errorText = '当前手机没有可用的兼容处理方式。';
+        _errorText = '当前手机没有可用的视频压缩方式。';
       });
       return;
     }
@@ -734,9 +734,9 @@ class _HomeScreenState extends State<HomeScreen> {
       if (plan.hasLowSavings) '该视频本身已经比较精简，压缩后可能节省不多。',
       if (plan.isOutsideVerifiedRange) '这个视频较大或较长，尚未经过完整验证，可能无法一次完成。',
       if (plan.usedCodecFallback && _selectedPreset != null)
-        '当前手机无法使用首选格式，将改用 H.264 兼容格式；输出文件可能稍大。',
+        '当前手机无法使用首选格式，将调整为 H.264 格式；输出文件可能稍大。',
       if (plan.usedCodecFallback && _selectedPreset == null)
-        '当前手机无法使用你选择的 HEVC。继续后将改用 H.264 兼容格式，输出文件可能稍大。',
+        '当前手机无法使用你选择的 HEVC。继续后将调整为 H.264 格式，输出文件可能稍大。',
       if (hdrSource) 'HDR 视频会转换为普通画面，颜色可能略有变化。',
     ];
     if (warnings.isEmpty) return true;
@@ -1331,7 +1331,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           : !_capabilitiesLoading && _capabilities == null
                           ? '无法检查手机的处理能力，请重新选择视频或重启应用。'
                           : _compressionPlan?.isSupported == false
-                          ? '当前手机没有可用的兼容处理方式。'
+                          ? '当前手机没有可用的视频压缩方式。'
                           : _outputLocationLoading
                           ? '正在检查保存位置…'
                           : !_outputLocation.writable
@@ -2201,14 +2201,14 @@ String _stableCode(String? value, {String fallback = 'UNKNOWN'}) {
 String _messageForCode(String code, String? _, {required String fallback}) {
   return switch (code) {
     'INSUFFICIENT_STORAGE' => '存储空间不足，请释放空间后重试。',
-    'ENCODER_UNAVAILABLE' => '当前手机没有可用的兼容处理方式。',
+    'ENCODER_UNAVAILABLE' => '当前手机没有可用的视频压缩方式。',
     'SOURCE_CORRUPTED' => '无法处理这个视频，文件可能损坏或格式不受支持。',
     'SOURCE_PERMISSION_LOST' => '无法继续读取这个视频，请重新选择文件。',
     'SOURCE_UNAVAILABLE' => '所选视频已移动、删除或暂时不可用。',
     'SOURCE_PROVIDER_FAILED' => '手机无法持续读取这个视频，请重新选择或稍后重试。',
     'VIDEO_DECODING_FAILED' => '手机的视频解码器未能完成此次处理，原视频没有被修改。',
     'VIDEO_FORMAT_UNSUPPORTED' => '这台手机暂时无法读取这种视频格式。',
-    'COMPATIBILITY_DECODER_UNAVAILABLE' => '这台手机没有可用于此视频的兼容处理方式。原视频没有被修改。',
+    'COMPATIBILITY_DECODER_UNAVAILABLE' => '这台手机没有可用于此视频的软件读取方式。原视频没有被修改。',
     'VIDEO_ENCODING_FAILED' => '手机没能按当前设置完成压缩。可按原设置重试，或返回调整格式或画质。',
     'OUTPUT_PERMISSION_LOST' => '保存文件夹权限已失效，请重新选择保存位置。',
     'CANCELLED' => '压缩任务已取消。',
