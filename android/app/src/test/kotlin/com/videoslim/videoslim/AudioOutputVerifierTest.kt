@@ -106,7 +106,7 @@ class AudioOutputVerifierTest {
         assertThrows(IOException::class.java) {
             AudioOutputVerifier.requireValid(
                 shortValidMetadata().copy(
-                    lastSampleTimeUs = 250_000L,
+                    lastSampleTimeUs = 436_000L,
                     sampleCount = 2L,
                     sampleBytes = 800L,
                 ),

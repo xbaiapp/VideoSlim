@@ -107,33 +107,36 @@ internal object AudioOutputVerifier {
         if (sampleRate <= 0) throw IOException("Audio sample rate is invalid")
         val span =
             (metadata.lastSampleTimeUs ?: 0L) - (metadata.firstSampleTimeUs ?: 0L)
-        if (metadata.sampleCount > 1L && span > 0L) {
+        if (metadata.sampleCount > 1L) {
+            if (span <= 0L) throw IOException("Audio sample timestamps have no positive cadence")
             val observed =
                 ceil(span.toDouble() / (metadata.sampleCount - 1L))
                     .toLong()
                     .coerceAtLeast(1L)
-            return observed.coerceAtMost(
-                if (metadata.audioMime == AAC_MIME) {
-                    MAX_AAC_FRAME_US
-                } else {
-                    MAX_GENERAL_AUDIO_FRAME_US
-                },
-            )
+            val maximum = maximumFrameDurationUs(metadata)
+            if (observed > saturatedAdd(maximum, FRAME_TIMESTAMP_ROUNDING_US)) {
+                throw IOException("Audio sample cadence contains missing or sparse frames")
+            }
+            return observed
         }
-        val aacSamplesPerFrame =
+        return maximumFrameDurationUs(metadata)
+    }
+
+    private fun maximumFrameDurationUs(metadata: AudioMetadata): Long {
+        val sampleRate = metadata.audioSampleRate
+        if (sampleRate <= 0) throw IOException("Audio sample rate is invalid")
+        val samplesPerFrame =
             when {
                 metadata.audioMime != AAC_MIME -> null
                 metadata.audioProfile == AAC_PROFILE_LC -> AAC_LC_SAMPLES_PER_FRAME
-                metadata.audioProfile == AAC_PROFILE_HE || metadata.audioProfile == AAC_PROFILE_HE_PS ->
-                    HE_AAC_SAMPLES_PER_FRAME
-                else -> null
+                else -> HE_AAC_SAMPLES_PER_FRAME
             }
-        if (aacSamplesPerFrame != null) {
-            return ceil(aacSamplesPerFrame.toDouble() * MICROSECONDS_PER_SECOND / sampleRate)
+        if (samplesPerFrame != null) {
+            return ceil(samplesPerFrame.toDouble() * MICROSECONDS_PER_SECOND / sampleRate)
                 .toLong()
-                .coerceIn(1L, MAX_AAC_FRAME_US)
+                .coerceAtLeast(1L)
         }
-        return durationUs(metadata.durationMs).coerceIn(1L, MAX_GENERAL_AUDIO_FRAME_US)
+        return MAX_GENERAL_AUDIO_FRAME_US
     }
 
     private fun hasMinimumCoverage(expectedUs: Long, actualUs: Long): Boolean {
@@ -163,7 +166,7 @@ internal object AudioOutputVerifier {
     private const val MIN_ROUNDING_TOLERANCE_US = 5_000L
     private const val TIMELINE_TOLERANCE_FRAMES = 2L
     private const val ENCODER_DELAY_TOLERANCE_FRAMES = 2L
-    private const val MAX_AAC_FRAME_US = 64_000L
+    private const val FRAME_TIMESTAMP_ROUNDING_US = 2_000L
     private const val MAX_GENERAL_AUDIO_FRAME_US = 120_000L
     private const val MIN_COVERAGE_RATIO = 0.75
 }
