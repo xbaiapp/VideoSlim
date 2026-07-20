@@ -14,6 +14,28 @@ internal fun isValidContentVideoUri(value: String): Boolean {
         value.none { it.code < 0x20 || it.code == 0x7F }
 }
 
+internal enum class TaskKind(
+    val wireName: String,
+) {
+    VIDEO_COMPRESSION("video_compression"),
+    AUDIO_EXTRACTION("audio_extraction"),
+    ;
+
+    companion object {
+        /** Strict parser for all new task contracts: a missing kind remains invalid. */
+        fun fromWireName(value: Any?): TaskKind? = entries.firstOrNull { it.wireName == value }
+
+        /**
+         * Compatibility parser reserved for snapshots created before task kinds existed.
+         *
+         * Do not use this for new audio events or requests: those must select
+         * [AUDIO_EXTRACTION] explicitly.
+         */
+        fun fromLegacyVideoWireName(value: Any?): TaskKind? =
+            if (value == null) VIDEO_COMPRESSION else fromWireName(value)
+    }
+}
+
 enum class EngineErrorCode(
     val wireName: String,
     val defaultMessage: String,
@@ -34,6 +56,15 @@ enum class EngineErrorCode(
         "这台手机没有可用于此视频的软件读取方式，原视频没有被修改",
     ),
     VIDEO_ENCODING_FAILED("VIDEO_ENCODING_FAILED", "手机没能按当前设置完成压缩，可按原设置重试或调整格式和画质"),
+    AUDIO_TRACK_MISSING("AUDIO_TRACK_MISSING", "这个视频没有可提取的音轨"),
+    AUDIO_COPY_UNSUPPORTED("AUDIO_COPY_UNSUPPORTED", "源音轨不是 AAC，请改用 AAC 转码"),
+    AUDIO_CHANNEL_LAYOUT_UNSUPPORTED(
+        "AUDIO_CHANNEL_LAYOUT_UNSUPPORTED",
+        "暂不支持提取超过双声道的音频，请更换视频后重试",
+    ),
+    AUDIO_DECODING_FAILED("AUDIO_DECODING_FAILED", "手机无法读取源音频，原视频没有被修改"),
+    AUDIO_ENCODING_FAILED("AUDIO_ENCODING_FAILED", "手机没能完成 AAC 音频编码，原视频没有被修改"),
+    AUDIO_OUTPUT_INVALID("AUDIO_OUTPUT_INVALID", "提取的音频文件不完整，未保存公共输出"),
     OUTPUT_PERMISSION_LOST("OUTPUT_PERMISSION_LOST", "保存文件夹权限已失效，请重新选择保存位置"),
     CANCELLED("CANCELLED", "任务已取消"),
     UNKNOWN("UNKNOWN", "处理失败，请稍后重试"),
