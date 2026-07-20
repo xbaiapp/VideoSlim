@@ -1,11 +1,31 @@
 package com.videoslim.videoslim
 
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TaskRecoveryCodecTest {
+    @Test
+    fun `active journal is not cleared when quarantine directory sync fails`() {
+        val actions = mutableListOf<String>()
+
+        assertThrows(IOException::class.java) {
+            commitQuarantineBoundary(
+                commitDestination = { actions += "destination" },
+                syncDirectory = {
+                    actions += "sync"
+                    throw IOException("sync failed")
+                },
+                clearActiveJournal = { actions += "clear" },
+            )
+        }
+
+        assertEquals(listOf("destination", "sync"), actions)
+    }
+
     @Test
     fun `round trips every recovery field`() {
         val record = completeRecord()

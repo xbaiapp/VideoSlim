@@ -328,9 +328,13 @@ internal class MediaStoreSaver(
             runCatching { publicationObserver.onPublicationDiscarding(target) }
             val rowRemoved = deletePublished(outputUri.toString())
             val fileRemoved =
-                runCatching {
-                    !destination.exists() || destination.delete() || !destination.exists()
-                }.getOrDefault(false)
+                if (shouldDeleteLegacyPath(rowRemoved)) {
+                    runCatching {
+                        !destination.exists() || destination.delete() || !destination.exists()
+                    }.getOrDefault(false)
+                } else {
+                    false
+                }
             throw PublicationCleanupException(rowRemoved && fileRemoved, error)
         }
     }
@@ -456,6 +460,8 @@ internal class MediaStoreSaver(
 
     }
 }
+
+internal fun shouldDeleteLegacyPath(rowRemovalConfirmed: Boolean): Boolean = rowRemovalConfirmed
 
 internal fun copyPublicationBytes(
     input: InputStream,

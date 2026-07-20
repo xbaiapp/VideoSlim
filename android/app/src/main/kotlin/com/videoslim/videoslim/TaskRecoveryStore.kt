@@ -2,6 +2,8 @@ package com.videoslim.videoslim
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.system.Os
+import android.system.OsConstants
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -435,15 +437,30 @@ class TaskRecoveryStore(
                 output.write(encoded.toByteArray(StandardCharsets.UTF_8))
                 output.fd.sync()
             }
-            if (destination.exists()) {
-                val existing = runCatching { destination.readText(StandardCharsets.UTF_8) }.getOrNull()
-                if (existing != encoded) {
-                    throw IOException("Conflicting recovery quarantine record already exists")
-                }
-            } else if (!temporary.renameTo(destination)) {
-                throw IOException("Unable to commit recovery quarantine record")
-            }
-            commit(preferences.edit().remove(RECORD_KEY), "quarantine-clear")
+            commitQuarantineBoundary(
+                commitDestination = {
+                    if (destination.exists()) {
+                        val existing =
+                            runCatching {
+                                destination.readText(StandardCharsets.UTF_8)
+                            }.getOrNull()
+                        if (existing != encoded) {
+                            throw IOException(
+                                "Conflicting recovery quarantine record already exists",
+                            )
+                        }
+                    } else if (!temporary.renameTo(destination)) {
+                        throw IOException("Unable to commit recovery quarantine record")
+                    }
+                    if (!destination.isFile) {
+                        throw IOException("Committed recovery quarantine record is unavailable")
+                    }
+                },
+                syncDirectory = { syncDirectoryDurably(quarantineDirectory) },
+                clearActiveJournal = {
+                    commit(preferences.edit().remove(RECORD_KEY), "quarantine-clear")
+                },
+            )
             log("recovery record quarantined task=${current.taskId} reason=$reason")
             destination
         } finally {
@@ -494,6 +511,37 @@ class TaskRecoveryStore(
         const val QUARANTINE_DIRECTORY_NAME = "videoslim-recovery-quarantine"
         const val QUARANTINE_EXTENSION = ".journal"
         val TRANSACTION_LOCK = Any()
+    }
+}
+
+internal fun commitQuarantineBoundary(
+    commitDestination: () -> Unit,
+    syncDirectory: () -> Unit,
+    clearActiveJournal: () -> Unit,
+) {
+    commitDestination()
+    syncDirectory()
+    clearActiveJournal()
+}
+
+@Throws(IOException::class)
+private fun syncDirectoryDurably(directory: File) {
+    val descriptor =
+        try {
+            Os.open(
+                directory.absolutePath,
+                OsConstants.O_RDONLY,
+                0,
+            )
+        } catch (error: Throwable) {
+            throw IOException("Unable to open recovery quarantine directory for sync", error)
+        }
+    try {
+        Os.fsync(descriptor)
+    } catch (error: Throwable) {
+        throw IOException("Unable to sync recovery quarantine directory", error)
+    } finally {
+        runCatching { Os.close(descriptor) }
     }
 }
 

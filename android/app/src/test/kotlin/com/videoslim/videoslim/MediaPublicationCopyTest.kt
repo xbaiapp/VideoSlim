@@ -57,4 +57,10 @@ class MediaPublicationCopyTest {
             requirePublishedByteCount(expectedBytes = 6, observedBytes = 7)
         }
     }
+
+    @Test
+    fun `legacy path is deleted only after MediaStore row removal is confirmed`() {
+        assertEquals(false, shouldDeleteLegacyPath(rowRemovalConfirmed = false))
+        assertEquals(true, shouldDeleteLegacyPath(rowRemovalConfirmed = true))
+    }
 }
