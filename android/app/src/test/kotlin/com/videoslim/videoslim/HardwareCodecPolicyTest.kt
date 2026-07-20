@@ -7,18 +7,36 @@ import org.junit.Test
 
 class HardwareCodecPolicyTest {
     @Test
-    fun `video policy excludes known software codecs even when flags are wrong`() {
+    fun `explicit hardware classification wins over a legacy software name heuristic`() {
         val candidates =
             listOf(
                 candidate("c2.google.hevc.encoder", hardware = true, software = false, vendor = false),
-                candidate("OMX.google.h264.encoder", hardware = true, software = false, vendor = false),
-                candidate("c2.android.hevc.encoder", hardware = true, software = false, vendor = false),
+                candidate("c2.android.hevc.encoder", hardware = false, software = true, vendor = false),
+                candidate("OMX.google.h264.encoder", hardware = false, software = true, vendor = false),
+                candidate("vendor.conflicting.encoder", hardware = true, software = true, vendor = true),
                 candidate("c2.exynos.hevc.encoder", hardware = true, software = false, vendor = true),
             )
 
         val selected = HardwareCodecPolicy.select(candidates, "video/hevc", encoder = true)
 
-        assertEquals(listOf("c2.exynos.hevc.encoder"), selected.map { it.name })
+        assertEquals(
+            listOf("c2.exynos.hevc.encoder", "c2.google.hevc.encoder"),
+            selected.map { it.name },
+        )
+    }
+
+    @Test
+    fun `vendor non-software codec remains eligible when hardware flag is inconclusive`() {
+        val candidates =
+            listOf(
+                candidate("c2.pixel.hevc.encoder", hardware = false, software = false, vendor = true),
+                candidate("platform.ambiguous.encoder", hardware = false, software = false, vendor = false),
+                candidate("c2.google.hevc.encoder", hardware = false, software = false, vendor = true),
+            )
+
+        val selected = HardwareCodecPolicy.select(candidates, "video/hevc", encoder = true)
+
+        assertEquals(listOf("c2.pixel.hevc.encoder"), selected.map { it.name })
     }
 
     @Test

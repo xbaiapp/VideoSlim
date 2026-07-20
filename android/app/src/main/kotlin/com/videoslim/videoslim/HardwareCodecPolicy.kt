@@ -34,10 +34,32 @@ internal object HardwareCodecPolicy {
             .filter { it.isEncoder == encoder }
             .filter { candidate ->
                 candidate.supportedTypes.any { it.equals(mimeType, ignoreCase = true) }
-            }.filter { it.isHardwareAccelerated && !it.isSoftwareOnly }
-            .filterNot { isKnownSoftwareCodec(it.name) }
+            }.filter(::isHardwareEligible)
             .sortedWith(compareByDescending<CodecCandidate> { it.isVendor }.thenBy { it.name })
             .toList()
+
+    fun isHardwareEligible(candidate: CodecCandidate): Boolean =
+        isHardwareEligible(
+            codecName = candidate.name,
+            isHardwareAccelerated = candidate.isHardwareAccelerated,
+            isSoftwareOnly = candidate.isSoftwareOnly,
+            isVendor = candidate.isVendor,
+        )
+
+    fun isHardwareEligible(
+        codecName: String,
+        isHardwareAccelerated: Boolean,
+        isSoftwareOnly: Boolean,
+        isVendor: Boolean,
+    ): Boolean {
+        // API 29+ classification is authoritative. New Pixel generations may expose a
+        // hardware implementation under a name that older releases used for software.
+        if (isSoftwareOnly) return false
+        if (isHardwareAccelerated) return true
+        // Some vendor codecs report neither flag. Accept only the conservative vendor
+        // fallback, while retaining the legacy name deny-list for that ambiguous case.
+        return isVendor && !isKnownSoftwareCodec(codecName)
+    }
 
     fun isKnownSoftwareCodec(codecName: String): Boolean {
         val name = codecName.lowercase(Locale.ROOT)
@@ -265,9 +287,12 @@ internal class HardwareVideoDecoderSelector(
             defaults
                 .filter {
                     it.name in allowedCodecNames &&
-                    it.hardwareAccelerated &&
-                        !it.softwareOnly &&
-                        !HardwareCodecPolicy.isKnownSoftwareCodec(it.name)
+                        HardwareCodecPolicy.isHardwareEligible(
+                            codecName = it.name,
+                            isHardwareAccelerated = it.hardwareAccelerated,
+                            isSoftwareOnly = it.softwareOnly,
+                            isVendor = it.vendor,
+                        )
                 }.sortedWith(
                     compareByDescending<androidx.media3.exoplayer.mediacodec.MediaCodecInfo> {
                         it.vendor

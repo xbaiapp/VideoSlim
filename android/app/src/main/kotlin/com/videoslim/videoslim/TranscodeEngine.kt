@@ -95,11 +95,17 @@ internal class TranscodeEngine(
     @Volatile
     private var disposed = false
 
-    fun getCapabilities(): Map<String, Boolean> =
-        mapOf(
+    fun getCapabilities(): Map<String, Boolean> {
+        logger(
+            "codec capability inventory " +
+                "hevcEncoders=${codecCatalog.candidateSummary(MimeTypes.VIDEO_H265, encoder = true)} " +
+                "h264Encoders=${codecCatalog.candidateSummary(MimeTypes.VIDEO_H264, encoder = true)}",
+        )
+        return mapOf(
             "hevcEncoder" to codecCatalog.hasHardwareEncoder(MimeTypes.VIDEO_H265),
             "h264Encoder" to codecCatalog.hasHardwareEncoder(MimeTypes.VIDEO_H264),
         )
+    }
 
     fun start(request: ProcessRequest, listener: EngineProgressListener): String {
         requireMainThread()
