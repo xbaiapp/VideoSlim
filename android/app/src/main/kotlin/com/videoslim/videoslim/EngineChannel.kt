@@ -26,6 +26,7 @@ internal class EngineChannel(
     private val methodChannel = MethodChannel(messenger, METHOD_CHANNEL)
     private val eventChannel = EventChannel(messenger, EVENT_CHANNEL)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val audioMetadataReader = AudioMetadataReader(context)
     private var eventSink: EventChannel.EventSink? = null
     private var waitingForLegacyPermission = false
     private var waitingForNotificationPermission = false
@@ -49,6 +50,7 @@ internal class EngineChannel(
         log("method=${call.method} arguments=${call.arguments}")
         when (call.method) {
             "getVideoInfo" -> getVideoInfo(call.arguments, result)
+            "getAudioInfo" -> getAudioInfo(call.arguments, result)
             "getCapabilities" -> getCapabilities(call.arguments, result)
             "getTaskSnapshot" -> getTaskSnapshot(call.arguments, result)
             "process" -> process(call.arguments, result)
@@ -112,6 +114,36 @@ internal class EngineChannel(
                 }
             } catch (error: Throwable) {
                 val failure = metadataFailure(error)
+                mainHandler.post { if (!disposed) replyError(result, failure, error) }
+            }
+        }
+    }
+
+    private fun getAudioInfo(arguments: Any?, result: MethodChannel.Result) {
+        val uri =
+            try {
+                val value =
+                    requireExactMap(arguments, setOf("uri"))["uri"] as? String
+                        ?: throw IllegalArgumentException("uri 必须是字符串")
+                if (!isValidContentVideoUri(value)) {
+                    throw IllegalArgumentException("uri 必须是有效的 content:// URI")
+                }
+                value
+            } catch (error: Throwable) {
+                replyError(result, EngineFailure(EngineErrorCode.UNKNOWN, "音频信息参数无效"), error)
+                return
+            }
+        metadataExecutor.execute {
+            try {
+                val response = audioMetadataReader.read(uri).toChannelMap()
+                mainHandler.post {
+                    if (!disposed) {
+                        log("method=getAudioInfo response=$response")
+                        result.success(response)
+                    }
+                }
+            } catch (error: Throwable) {
+                val failure = audioMetadataFailure(error)
                 mainHandler.post { if (!disposed) replyError(result, failure, error) }
             }
         }
@@ -262,6 +294,19 @@ internal class EngineChannel(
                         EngineErrorCode.UNKNOWN,
                         error.message,
                     )
+                }
+            else -> EngineErrorMapper.fromThrowable(error)
+        }
+
+    private fun audioMetadataFailure(error: Throwable): EngineFailure =
+        when (error) {
+            is AudioMetadataException ->
+                when (error.code) {
+                    AudioMetadataException.SOURCE_CORRUPTED ->
+                        EngineFailure(EngineErrorCode.SOURCE_CORRUPTED, error.message)
+                    AudioMetadataException.NO_AUDIO_TRACK ->
+                        EngineFailure(EngineErrorCode.NO_AUDIO_TRACK, error.message)
+                    else -> EngineFailure(EngineErrorCode.UNKNOWN, error.message)
                 }
             else -> EngineErrorMapper.fromThrowable(error)
         }
