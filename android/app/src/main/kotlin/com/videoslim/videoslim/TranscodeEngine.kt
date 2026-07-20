@@ -96,7 +96,7 @@ internal class TranscodeEngine(
     private var disposed = false
 
     fun getCapabilities(): Map<String, Boolean> {
-        logger(
+        log(
             "codec capability inventory " +
                 "hevcEncoders=${codecCatalog.candidateSummary(MimeTypes.VIDEO_H265, encoder = true)} " +
                 "h264Encoders=${codecCatalog.candidateSummary(MimeTypes.VIDEO_H264, encoder = true)}",
