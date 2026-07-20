@@ -1589,8 +1589,19 @@ void main() {
       await tester.ensureVisible(share);
       await tester.tap(share);
       await tester.pump();
+      final delete = find.byKey(const ValueKey<String>('delete-audio-source'));
+      await tester.ensureVisible(delete);
+      await tester.tap(delete);
+      await tester.pump();
+      expect(find.text('音频文件会保留。Android 可能再次显示系统删除确认。'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey<String>('confirm-delete-original')),
+      );
+      await tester.pump();
       expect(mediaActions.opened, <String>[_audioOutputUri]);
       expect(mediaActions.shared, <String>[_audioOutputUri]);
+      expect(mediaActions.deleted, <String>[_sourceUri]);
+      expect(find.text('原视频已删除，音频文件已保留'), findsOneWidget);
     },
   );
 

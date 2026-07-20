@@ -9,16 +9,22 @@ class AudioResultCard extends StatelessWidget {
     required this.info,
     required this.outputLocationLabel,
     required this.busy,
+    required this.canDeleteOriginal,
+    required this.sourceDeleted,
     required this.onOpen,
     required this.onShare,
+    required this.onDeleteOriginal,
     required this.onAgain,
   });
 
   final AudioInfo info;
   final String outputLocationLabel;
   final bool busy;
+  final bool canDeleteOriginal;
+  final bool sourceDeleted;
   final VoidCallback onOpen;
   final VoidCallback onShare;
+  final VoidCallback onDeleteOriginal;
   final VoidCallback onAgain;
 
   @override
@@ -83,6 +89,19 @@ class AudioResultCard extends StatelessWidget {
                 ),
               ],
             ),
+            if (canDeleteOriginal || sourceDeleted) ...<Widget>[
+              const SizedBox(height: 10),
+              TextButton.icon(
+                key: const ValueKey<String>('delete-audio-source'),
+                onPressed: busy || sourceDeleted ? null : onDeleteOriginal,
+                icon: Icon(
+                  sourceDeleted
+                      ? Icons.check_rounded
+                      : Icons.delete_outline_rounded,
+                ),
+                label: Text(sourceDeleted ? '原视频已删除' : '删除原视频'),
+              ),
+            ],
             const SizedBox(height: 10),
             FilledButton.icon(
               onPressed: busy ? null : onAgain,

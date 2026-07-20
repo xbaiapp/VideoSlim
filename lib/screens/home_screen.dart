@@ -1441,11 +1441,13 @@ class _HomeScreenState extends State<HomeScreen> {
         _mediaActionBusy) {
       return;
     }
+    final isAudioResult = _activeTaskKind == TaskKind.audioExtraction;
+    final preservedResultName = isAudioResult ? '音频文件' : '压缩结果';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('删除原视频？'),
-        content: const Text('压缩结果会保留。Android 可能再次显示系统删除确认。'),
+        content: Text('$preservedResultName会保留。Android 可能再次显示系统删除确认。'),
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -1466,7 +1468,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _flow.update(() => _sourceDeleted = true);
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('原视频已删除，压缩结果已保留')));
+      ).showSnackBar(SnackBar(content: Text('原视频已删除，$preservedResultName已保留')));
     });
   }
 
@@ -1839,8 +1841,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       info: outputAudioInfo,
                       outputLocationLabel: _taskOutputLocationLabel,
                       busy: _mediaActionBusy,
+                      canDeleteOriginal:
+                          _selectedFromGallery && !_sourceDeleted,
+                      sourceDeleted: _sourceDeleted,
                       onOpen: _openOutput,
                       onShare: _shareOutput,
+                      onDeleteOriginal: _deleteOriginal,
                       onAgain: _reset,
                     ),
                   ],
