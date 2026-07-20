@@ -392,6 +392,7 @@ internal class LoggingEncoderFactory(
     private val delegate: Codec.EncoderFactory,
     private val logger: (String) -> Unit,
     private val onVideoEncoderCreated: (String) -> Unit = {},
+    private val forceAudioEncoding: Boolean = false,
 ) : Codec.EncoderFactory {
     override fun createForAudioEncoding(
         requestedFormat: Format,
@@ -414,7 +415,11 @@ internal class LoggingEncoderFactory(
             runCatching { onVideoEncoderCreated(codec.name) }
         }
 
-    override fun audioNeedsEncoding(): Boolean = delegate.audioNeedsEncoding()
+    override fun audioNeedsEncoding(): Boolean =
+        forceAudioEncoding || delegate.audioNeedsEncoding()
 
     override fun videoNeedsEncoding(): Boolean = delegate.videoNeedsEncoding()
 }
+
+internal fun shouldForceAudioEncoding(audioMode: AudioMode): Boolean =
+    audioMode == AudioMode.REENCODE

@@ -360,6 +360,7 @@ internal class TranscodeEngine(
                     onVideoEncoderCreated = { codecName ->
                         postToMain { recordActualVideoEncoder(task, codecName) }
                     },
+                    forceAudioEncoding = shouldForceAudioEncoding(task.request.audioMode),
                 )
             val decoderFactory =
                 DefaultDecoderFactory.Builder(appContext)
