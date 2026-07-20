@@ -1,10 +1,10 @@
 # VideoSlim M2 真机验收矩阵
 
-> **当前验收包：** `VideoSlim-M2-arm64-v1.2.3.apk`（`1.2.3+6`）
-> **SHA-256：** `2da1a990cb29a7c00628e6e7a4fb667aa1e470dfe6ce93250966f8363cf0862a`
-> **本机路径：** `/root/artifacts/videoslim/m2/VideoSlim-M2-arm64-v1.2.3.apk`
+> **当前验收包：** `VideoSlim-M2-arm64-v1.2.5.apk`（`1.2.5+8`）
+> **SHA-256：** `13b23dc929d75aef8c74c575111c2178d9115f69c4e6fb0088e9cc4290c0446a`
+> **本机路径：** `/root/artifacts/videoslim/m2/VideoSlim-M2-arm64-v1.2.5.apk`
 > **签名：** Android debug certificate，仅用于当前私有验收。
-> 旧 `1.2.0+3` 已撤销。服务器自动化与静态核验已通过，但 Pixel 10 Pro / GrapheneOS / Android 17 尚未验收，因此本表没有预先标记 PASS。
+> 旧 `1.2.0+3` 和发生 Android 17 能力误判的 `1.2.3+6` 已撤销。服务器自动化与静态核验已通过，但 Pixel 10 Pro / GrapheneOS / Android 17 尚未验收，因此本表没有预先标记 PASS。
 
 ## 1. 测试前记录
 
@@ -45,7 +45,7 @@
 - [ ] 输入 AVC Decoder 候选包含当前尺寸、帧率和可获得的 profile/level；
 - [ ] 输出 Encoder 候选包含目标尺寸、帧率、码率、Surface 与 VBR；
 - [ ] 实际视频 Decoder/Encoder 与预检 allowlist 一致；
-- [ ] 实际名称不为 `c2.google.*`、`c2.android.*`、`OMX.google.*`；
+- [ ] F19 显示实际视频 Codec 为批准候选且 `hardware=true`、`software=false`；如平台硬件标志不明确，只能使用非已知软件名称的 vendor Codec；
 - [ ] 普通页面和通知不显示 Media3、Codec、错误码或原始异常。
 
 ### 2.3 SAF 与 Provider

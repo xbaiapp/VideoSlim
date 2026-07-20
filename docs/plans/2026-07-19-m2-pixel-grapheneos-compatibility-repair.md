@@ -8,7 +8,7 @@
 
 **Tech Stack:** Flutter/Dart、Kotlin、Android SAF/ContentResolver、MediaCodecList、Media3 Transformer 1.10.1、JUnit 4、Flutter test。
 
-**实施状态（2026-07-19）：** Task 1–8 的源码、自动化门禁、独立复审、`1.2.3+6` ARM64 APK 构建与静态核验已完成。当前源码提交为 `b0d1c29f55482d4c7583437f36c965c3355e0f63`，APK SHA-256 为 `2da1a990cb29a7c00628e6e7a4fb667aa1e470dfe6ce93250966f8363cf0862a`。Pixel 10 Pro / GrapheneOS / Android 17 真机短片和约 98 分钟目标视频仍待执行，完成前不得标记 M2 最终 PASS。
+**实施状态（2026-07-20）：** Task 1–8 的源码、自动化门禁、独立复审和静态核验已完成。真机发现 `1.2.3+6` 的严格硬件标志与旧名称启发式组合将 HEVC/H.264 候选全部过滤；该问题已在 `1.2.5+8` 修复。当前源码提交为 `ce679b21fba70fb54678175ef1efa231d68b7e41`，APK SHA-256 为 `13b23dc929d75aef8c74c575111c2178d9115f69c4e6fb0088e9cc4290c0446a`。Pixel 10 Pro / GrapheneOS / Android 17 真机短片和约 98 分钟目标视频仍待复测，完成前不得标记 M2 最终 PASS。
 
 ---
 

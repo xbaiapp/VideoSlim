@@ -1,21 +1,21 @@
 # VideoSlim M2 自动化完成与真机交接报告
 
-> **状态（2026-07-19）：** Pixel / GrapheneOS 专项修复的源码、自动化门禁、独立复审、ARM64 APK 构建和静态核验已完成。`1.2.3+6` 是当前真机验收包；Pixel 10 Pro / GrapheneOS / Android 17 真机短片和约 98 分钟目标视频尚未执行，因此 M2 仍为**设备验收待定**，不得宣称最终 PASS 或进入 M3。
+> **状态（2026-07-20）：** Pixel 真机发现 `1.2.3+6` 的能力判断同时依赖严格硬件标志与旧名称启发式，导致 HEVC/H.264 候选均被过滤、所有设置被 UI 阻止。能力分类修复、自动化门禁、独立复审、ARM64 APK 构建和静态核验已完成，`1.2.5+8` 是当前真机验收包；Pixel 10 Pro / GrapheneOS / Android 17 短片和约 98 分钟目标视频仍待复测，因此 M2 仍为**设备验收待定**，不得宣称最终 PASS 或进入 M3。
 
 ## 1. 当前交付身份
 
 - 应用：VideoSlim / 视频瘦身
 - 包名：`com.videoslim.videoslim`
-- 版本：`1.2.3+6`
+- 版本：`1.2.5+8`
 - minSdk / targetSdk / compileSdk：`26 / 36 / 36`
 - ABI：仅 `arm64-v8a`
-- APK：`/root/artifacts/videoslim/m2/VideoSlim-M2-arm64-v1.2.3.apk`
+- APK：`/root/artifacts/videoslim/m2/VideoSlim-M2-arm64-v1.2.5.apk`
 - 大小：`17,968,911` bytes
-- SHA-256：`2da1a990cb29a7c00628e6e7a4fb667aa1e470dfe6ce93250966f8363cf0862a`
-- 构建源码：`b0d1c29f55482d4c7583437f36c965c3355e0f63`
+- SHA-256：`13b23dc929d75aef8c74c575111c2178d9115f69c4e6fb0088e9cc4290c0446a`
+- 构建源码：`ce679b21fba70fb54678175ef1efa231d68b7e41`
 - 签名：Android debug certificate，APK Signature Scheme v2；与旧私有验收包证书一致，仅用于私有真机验收，不是生产签名。
 
-旧 `1.2.0+3` 已因 Google Codec2 Released-state 故障撤销；中间候选 `1.2.1+4`、`1.2.2+5` 未交付，不能替代当前包。
+旧 `1.2.0+3` 已因 Google Codec2 Released-state 故障撤销；`1.2.3+6` 已因 Android 17 能力误判撤销；中间候选 `1.2.1+4`、`1.2.2+5`、`1.2.4+7` 不能替代当前包。
 
 ## 2. 本次阻塞修复
 
@@ -24,7 +24,8 @@
 - 输入 AVC Decoder 与输出 HEVC/H.264 Encoder 同时做硬件约束；
 - 预检使用当前任务的 MIME、尺寸、帧率、码率、Surface、VBR，并在输入 metadata 可获得时纳入 profile/level；
 - capability、预检和 Media3 selector 共用同一候选策略；selector 只返回已批准候选；
-- 默认排除 `c2.google.*`、`c2.android.*`、`OMX.google.*` 等软件视频实现；音频仍委托默认路径；
+- Android 明确报告 `softwareOnly=true` 时始终排除；明确报告 `hardwareAccelerated=true` 时以平台分类为准，不再被旧 Codec 名称启发式误杀；
+- 硬件标志不明确时仅保守接受非已知软件名称的 vendor Codec；音频仍委托默认路径；
 - 无可靠硬件 AVC Decoder 时快速阻止任务；无 HEVC 硬件 Encoder 时，预设和自定义设置均需用户明确确认后才切换硬件 H.264。
 
 ### SAF、Provider 与错误分类
@@ -47,12 +48,12 @@
 
 ## 3. 最终自动化与独立复审
 
-在精确源码提交 `b0d1c29` 上实际通过：
+在精确源码提交 `ce679b2` 上实际通过：
 
 - Dart format：35 个文件，无需修改；
 - Flutter analyze：0 issues；
 - Flutter tests：`106/106`；
-- Android JVM：17 suites、`83/83`，failures/errors/skipped 均为 0；
+- Android JVM：17 suites、`84/84`，failures/errors/skipped 均为 0；
 - Android Debug/Release Kotlin 编译；
 - Android `lintDebug`、`lintRelease`；
 - `git diff --check`；
@@ -62,7 +63,7 @@
 
 ## 4. APK 静态核验
 
-- package/version：`com.videoslim.videoslim` / `1.2.3+6`；
+- package/version：`com.videoslim.videoslim` / `1.2.5+8`；
 - SDK：`26 / 36 / 36`；
 - ABI：仅 `arm64-v8a`；
 - `zipalign -c -P 16 4`：通过；
@@ -82,7 +83,7 @@
 
 1. 目标输入存在支持 AVC High Profile Level 3.1、720×1280、30 fps 的真实硬件 Decoder；
 2. HEVC/H.264 目标格式存在真实硬件 Encoder，Media3 实际选择与 allowlist 一致；
-3. 实际 Codec 名称不为 `c2.google.*`、`c2.android.*`、`OMX.google.*`；
+3. F19 证明实际 Codec 由同一策略批准：平台报告 `software=false`，且为明确硬件实现，或硬件标志不明确时满足保守 vendor 回退；
 4. Photo Picker、SAF DocumentsProvider、后台、锁屏、通知取消和 App 内取消真实时序；
 5. 发布阶段重复取消不会留下 `IS_PENDING` 行或公共半成品；
 6. 约 98 分钟目标视频完整成功且无 Released-state；
@@ -95,4 +96,6 @@
 - `e78eb58`：Pixel / GrapheneOS 专项修复计划；
 - `da42117`：硬件 Codec、SAF/错误、阶段、ETA、文案与诊断主体修复；
 - `8907350`：发布取消幂等和阶段恢复修复；
-- `b0d1c29`：publication boundary 与取消阶段 race 最终修复。
+- `b0d1c29`：publication boundary 与取消阶段 race 最终修复；
+- `8fb1fb9`：修复 Android 17 硬件 Codec 能力误判并增加 F19 候选诊断；
+- `ce679b2`：隔离 F19 写入异常，保证诊断失败不阻断能力返回。
