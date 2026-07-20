@@ -29,9 +29,9 @@ internal class ProcessingService : Service() {
     private val logSequence = AtomicLong()
     @Volatile private var activeTaskId: String? = null
     @Volatile private var engineTaskId: String? = null
-    private var terminalHandled = false
-    private var timeoutRequested = false
-    private var cancelRequested = false
+    @Volatile private var terminalHandled = false
+    @Volatile private var timeoutRequested = false
+    @Volatile private var cancelRequested = false
     private var lastStartId = 0
 
     private val registryObserver: (TaskRuntimeSnapshot) -> Unit = { snapshot ->
@@ -79,6 +79,9 @@ internal class ProcessingService : Service() {
                         canonicalLegacyOutputPath = target.canonicalLegacyOutputPath,
                         mediaKind = target.mediaKind,
                     )
+                    if (cancelRequested || timeoutRequested) {
+                        recoveryStore.markDiscarding(internalTaskId)
+                    }
                     log(
                         "task=$internalTaskId publication target kind=${target.mediaKind.name} " +
                             "actualName=${target.actualDisplayName} uri=${target.mediaStoreUri}",
@@ -95,7 +98,11 @@ internal class ProcessingService : Service() {
                     val internalTaskId =
                         engineTaskId
                             ?: throw IllegalStateException("Publication completed without an engine task")
-                    recoveryStore.markPublished(internalTaskId)
+                    when (publicationCompletionRecoveryStage(cancelRequested || timeoutRequested)) {
+                        RecoveryStage.PUBLISHED -> recoveryStore.markPublished(internalTaskId)
+                        RecoveryStage.DISCARDING -> recoveryStore.markDiscarding(internalTaskId)
+                        else -> error("Unexpected publication completion stage")
+                    }
                     log("task=$internalTaskId publication completed uri=${target.mediaStoreUri}")
                 }
 
@@ -282,6 +289,7 @@ internal class ProcessingService : Service() {
         }
         cancelRequested = true
         val internalTaskId = engineTaskId ?: return
+        markDiscardingForAcceptedCancellation(internalTaskId)
         runCatching { cancelEngineTask(internalTaskId) }
             .onFailure { error ->
                 if (error is EngineOperationException && error.failure.code == EngineErrorCode.CANCELLED) {
@@ -290,6 +298,20 @@ internal class ProcessingService : Service() {
                     log("task=$taskId cancellation failed: ${error.stackTraceToString()}")
                 }
             }
+    }
+
+    private fun markDiscardingForAcceptedCancellation(internalTaskId: String) {
+        runCatching {
+            val recovery = recoveryStore.load()
+            if (
+                recovery?.taskId == internalTaskId &&
+                recovery.stage in setOf(RecoveryStage.PUBLISHING, RecoveryStage.PUBLISHED)
+            ) {
+                recoveryStore.markDiscarding(internalTaskId)
+            }
+        }.onFailure { error ->
+            log("task=$internalTaskId cancellation discard boundary failed: ${error.stackTraceToString()}")
+        }
     }
 
     private fun cancelEngineTask(internalTaskId: String) {
@@ -423,3 +445,6 @@ internal class ProcessingService : Service() {
         private const val MAX_WAKE_LOCK_MS = 21_900_000L
     }
 }
+
+internal fun publicationCompletionRecoveryStage(cancellationRequested: Boolean): RecoveryStage =
+    if (cancellationRequested) RecoveryStage.DISCARDING else RecoveryStage.PUBLISHED

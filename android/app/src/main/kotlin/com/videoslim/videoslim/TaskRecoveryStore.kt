@@ -30,6 +30,7 @@ data class TaskRecoveryRecord(
     val legacyOutputPath: String?,
     val startedAtEpochMs: Long,
     val mediaKind: OutputMediaKind = OutputMediaKind.VIDEO_MP4,
+    val journalVersion: Int = 2,
 )
 
 sealed interface TaskRecoveryDecodeResult {
@@ -59,10 +60,18 @@ internal object TaskRecoveryCodec {
     private val encoder = Base64.getUrlEncoder().withoutPadding()
     private val decoder = Base64.getUrlDecoder()
 
-    fun encode(record: TaskRecoveryRecord): String =
-        buildString {
-            appendLine("version=$VERSION")
-            appendLine("mediaKind=${record.mediaKind.name}")
+    fun encode(record: TaskRecoveryRecord): String {
+        require(record.journalVersion == VERSION || record.journalVersion == LEGACY_VERSION) {
+            "Unsupported recovery journal version"
+        }
+        require(record.journalVersion != LEGACY_VERSION || record.mediaKind == OutputMediaKind.VIDEO_MP4) {
+            "V1 recovery journals are video-only"
+        }
+        return buildString {
+            appendLine("version=${record.journalVersion}")
+            if (record.journalVersion == VERSION) {
+                appendLine("mediaKind=${record.mediaKind.name}")
+            }
             appendLine("taskId=${encodeRequired(record.taskId)}")
             appendLine("stage=${record.stage.name}")
             appendLine("tempFileName=${encodeRequired(record.tempFileName)}")
@@ -72,6 +81,7 @@ internal object TaskRecoveryCodec {
             appendLine("legacyOutputPath=${encodeNullable(record.legacyOutputPath)}")
             append("startedAtEpochMs=${record.startedAtEpochMs}")
         }
+    }
 
     fun decode(raw: String): TaskRecoveryDecodeResult {
         if (raw.isBlank()) return invalid("record is blank")
@@ -120,8 +130,9 @@ internal object TaskRecoveryCodec {
                         values.getValue("startedAtEpochMs").toLongOrNull()
                             ?: return invalid("invalid start time"),
                     mediaKind = mediaKind,
+                    journalVersion = version,
                 )
-            validateRecoveryRecord(record)?.let(::invalid)
+            validateRecoveryRecord(record, allowLegacyV1VideoNames = version == LEGACY_VERSION)?.let(::invalid)
                 ?: TaskRecoveryDecodeResult.Success(record)
         } catch (_: IllegalArgumentException) {
             invalid("invalid encoded value")
@@ -174,16 +185,19 @@ internal fun requiresPublicationTransactionBoundary(stage: RecoveryStage): Boole
         stage == RecoveryStage.PUBLISHING ||
         stage == RecoveryStage.PUBLISHED
 
-private fun validateRecoveryRecord(record: TaskRecoveryRecord): String? {
+private fun validateRecoveryRecord(
+    record: TaskRecoveryRecord,
+    allowLegacyV1VideoNames: Boolean = false,
+): String? {
     if (!isSafeJournalText(record.taskId, MAX_TASK_ID_LENGTH)) return "invalid task id"
     if (!isValidRecoveryTempFileName(record.tempFileName)) return "invalid temp filename"
     if (!record.tempFileName.endsWith(record.mediaKind.extension)) return "temp filename kind mismatch"
-    if (!isSafeRecoveryOutputName(record.expectedOutputDisplayName, record.mediaKind)) {
+    if (!isSafeRecoveryOutputName(record.expectedOutputDisplayName, record.mediaKind, allowLegacyV1VideoNames)) {
         return "invalid expected output name"
     }
     if (
         record.actualOutputDisplayName != null &&
-        !isSafeRecoveryOutputName(record.actualOutputDisplayName, record.mediaKind)
+        !isSafeRecoveryOutputName(record.actualOutputDisplayName, record.mediaKind, allowLegacyV1VideoNames)
     ) {
         return "invalid actual output name"
     }
@@ -245,9 +259,19 @@ private fun validateRecoveryRecord(record: TaskRecoveryRecord): String? {
 private fun isSafeRecoveryOutputName(
     name: String,
     mediaKind: OutputMediaKind,
+    allowLegacyV1VideoNames: Boolean = false,
 ): Boolean =
-    isSafeJournalText(name, MAX_OUTPUT_NAME_LENGTH) &&
-        mediaKind.isSafeDisplayName(name) &&
+    if (allowLegacyV1VideoNames && mediaKind == OutputMediaKind.VIDEO_MP4) {
+        isSafeLegacyV1VideoOutputName(name)
+    } else {
+        isSafeJournalText(name, MAX_OUTPUT_NAME_LENGTH) &&
+            mediaKind.isSafeDisplayName(name) &&
+            name != "." &&
+            name != ".."
+    }
+
+private fun isSafeLegacyV1VideoOutputName(name: String): Boolean =
+    OutputMediaKind.VIDEO_MP4.isSafeLegacyV1DisplayName(name) &&
         name != "." &&
         name != ".."
 

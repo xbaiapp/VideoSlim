@@ -24,9 +24,15 @@ enum class OutputMediaKind(
     ;
 
     fun isSafeDisplayName(name: String): Boolean =
+        isSafeDisplayName(name, MAX_OUTPUT_NAME_BYTES)
+
+    fun isSafeLegacyV1DisplayName(name: String): Boolean =
+        this == VIDEO_MP4 && isSafeDisplayName(name, LEGACY_V1_MAX_OUTPUT_NAME_BYTES)
+
+    private fun isSafeDisplayName(name: String, maxUtf8Bytes: Int): Boolean =
         name.isNotBlank() &&
             name.length <= MAX_OUTPUT_NAME_LENGTH &&
-            name.toByteArray(Charsets.UTF_8).size <= MAX_OUTPUT_NAME_BYTES &&
+            name.toByteArray(Charsets.UTF_8).size <= maxUtf8Bytes &&
             name.endsWith(extension, ignoreCase = true) &&
             name.substringBeforeLast('.', missingDelimiterValue = "").isNotBlank() &&
             name.lastOrNull()?.let { !it.isWhitespace() && it != '.' } == true &&
@@ -37,6 +43,7 @@ enum class OutputMediaKind(
     companion object {
         private const val MAX_OUTPUT_NAME_LENGTH = 255
         private const val MAX_OUTPUT_NAME_BYTES = 240
+        private const val LEGACY_V1_MAX_OUTPUT_NAME_BYTES = 255
     }
 }
 

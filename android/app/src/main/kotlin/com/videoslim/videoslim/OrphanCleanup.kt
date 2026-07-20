@@ -73,7 +73,7 @@ internal object OrphanCleanupPolicy {
             record.legacyOutputPath != null ||
             !isAppMediaUri(record.mediaKind, uri) ||
             !isValidRecoveryTempFileName(record.tempFileName) ||
-            !isSafeOwnedOutputName(actualName, record.mediaKind)
+            !isSafeOwnedOutputName(actualName, record.mediaKind, record.journalVersion == 1)
         ) {
             return CleanupAction.SKIP_UNSAFE
         }
@@ -111,7 +111,7 @@ internal object OrphanCleanupPolicy {
             recordedPath == null ||
             !isAppMediaUri(record.mediaKind, uri) ||
             !isValidRecoveryTempFileName(record.tempFileName) ||
-            !isSafeOwnedOutputName(actualName, record.mediaKind) ||
+            !isSafeOwnedOutputName(actualName, record.mediaKind, record.journalVersion == 1) ||
             !isDirectCanonicalChild(canonicalOutputDirectory, recordedPath, actualName)
         ) {
             return CleanupAction.SKIP_UNSAFE
@@ -167,7 +167,7 @@ internal object OrphanCleanupPolicy {
             record.legacyOutputPath != null ||
             !isSafDocumentUri(uri) ||
             !isValidRecoveryTempFileName(record.tempFileName) ||
-            !isSafeOwnedOutputName(actualName, record.mediaKind)
+            !isSafeOwnedOutputName(actualName, record.mediaKind, record.journalVersion == 1)
         ) {
             return CleanupAction.SKIP_UNSAFE
         }
@@ -175,8 +175,18 @@ internal object OrphanCleanupPolicy {
         if (observed.uri != uri || observed.displayName != actualName) {
             return CleanupAction.SKIP_UNSAFE
         }
-        return if (record.stage == RecoveryStage.PUBLISHED) CleanupAction.KEEP else CleanupAction.DELETE
+        // A SAF document URI/name pair is not immutable ownership evidence: path-derived document
+        // IDs can be deleted and recreated by another actor. Startup recovery therefore never
+        // deletes an extant SAF document; in-process publication rollback owns eager cleanup.
+        return if (record.stage == RecoveryStage.PUBLISHED) {
+            CleanupAction.KEEP
+        } else {
+            CleanupAction.SKIP_UNSAFE
+        }
     }
+
+    fun legacyPathAction(pathExistsAfterRowCleanup: Boolean): CleanupAction =
+        if (pathExistsAfterRowCleanup) CleanupAction.SKIP_UNSAFE else CleanupAction.ALREADY_ABSENT
 
     private fun isDirectCanonicalChild(
         canonicalOutputDirectory: String,
@@ -197,7 +207,13 @@ internal object OrphanCleanupPolicy {
     private fun isSafeOwnedOutputName(
         name: String,
         mediaKind: OutputMediaKind,
-    ): Boolean = mediaKind.isSafeDisplayName(name)
+        legacyV1: Boolean,
+    ): Boolean =
+        if (legacyV1) {
+            mediaKind.isSafeLegacyV1DisplayName(name)
+        } else {
+            mediaKind.isSafeDisplayName(name)
+        }
 
     private val SAF_DOCUMENT_URI =
         Regex("^content://[^/]+/(?:tree/[^/]+/)?document/.+$")
@@ -527,30 +543,26 @@ class OrphanCleanup(
         }
 
         val destination = File(record.legacyOutputPath!!)
-        var allClean = true
+        var rowCleanupConfirmed = observed == null
         var deletedSomething = false
-        var allowFileDelete = observed == null
         if (observed != null) {
             try {
                 val count = resolver.delete(Uri.parse(uri), null, null)
                 if (count > 0) {
                     report.mediaRowsDeleted += count
                     deletedSomething = true
-                    allowFileDelete = true
+                    rowCleanupConfirmed = true
                 } else {
                     val verification = queryLegacyEntry(uri, record.mediaKind, report)
-                    if (verification == null) {
-                        allClean = false
-                    } else if (verification.entry == null) {
-                        allowFileDelete = true
-                    } else {
-                        allClean = false
+                    if (verification?.entry == null && verification != null) {
+                        rowCleanupConfirmed = true
+                    } else if (verification != null) {
                         report.failures += 1
                         val identityStillMatches =
                             OrphanCleanupPolicy.isOwnedLegacyEntry(
                                 record,
                                 outputDirectory.path,
-                                verification.entry,
+                                verification.entry!!,
                             )
                         report.addDetail(
                             if (identityStillMatches) {
@@ -562,35 +574,40 @@ class OrphanCleanup(
                     }
                 }
             } catch (error: Throwable) {
-                allClean = false
                 failure(report, "legacy MediaStore row delete failed task=${record.taskId}", error)
             }
         }
-        if (allowFileDelete) {
+        if (!rowCleanupConfirmed) return
+
+        // Once the exact MediaStore row is absent, an existing path can already be a replacement
+        // created by another actor. Startup recovery has no immutable file identity to distinguish
+        // it from the interrupted output, so it must quarantine rather than delete that path.
+        val destinationStillExists =
             try {
-                if (destination.exists()) {
-                    if (destination.delete() || !destination.exists()) {
-                        report.legacyFilesDeleted += 1
-                        deletedSomething = true
-                    } else {
-                        allClean = false
-                        report.failures += 1
-                        report.addDetail("legacy output file delete returned false task=${record.taskId}")
-                    }
-                }
+                destination.exists()
             } catch (error: Throwable) {
-                allClean = false
-                failure(report, "legacy output file delete failed task=${record.taskId}", error)
+                failure(report, "legacy output existence check failed task=${record.taskId}", error)
+                return
             }
+        if (
+            OrphanCleanupPolicy.legacyPathAction(destinationStillExists) ==
+            CleanupAction.SKIP_UNSAFE
+        ) {
+            quarantineUnsafeRecord(
+                record,
+                report,
+                "legacy path remains after row cleanup; file identity cannot be proven",
+            )
+            return
         }
         if (deletedSomething) {
             report.outputsDeleted += 1
-            report.addDetail("deleted exact interrupted legacy output task=${record.taskId}")
+            report.addDetail("deleted exact interrupted legacy MediaStore row task=${record.taskId}")
         } else {
             report.alreadyAbsent += 1
             report.addDetail("legacy output already absent task=${record.taskId}")
         }
-        if (allClean) clearRecord(record, report)
+        clearRecord(record, report)
     }
 
     private fun queryDocumentEntry(

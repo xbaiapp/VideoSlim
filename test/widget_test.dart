@@ -39,6 +39,8 @@ final class _FakePicker implements VideoPicker {
   int fileCalls = 0;
   OutputLocation outputLocation = OutputLocation.defaultGallery;
   OutputLocation? chooseOutputResult;
+  Completer<OutputLocation>? outputLocationCompleter;
+  int outputLocationCalls = 0;
 
   @override
   Future<String?> pickFromGallery() async {
@@ -53,7 +55,10 @@ final class _FakePicker implements VideoPicker {
   }
 
   @override
-  Future<OutputLocation> getOutputLocation() async => outputLocation;
+  Future<OutputLocation> getOutputLocation() {
+    outputLocationCalls += 1;
+    return outputLocationCompleter?.future ?? Future.value(outputLocation);
+  }
 
   @override
   Future<OutputLocation?> chooseOutputFolder() async {
@@ -1856,6 +1861,100 @@ void main() {
 
     expect(find.text('处理状态连接已中断，请重启应用后再提取音频。'), findsOneWidget);
     expect(find.textContaining('再压缩'), findsNothing);
+  });
+
+  testWidgets('audio retry destination validation is generation locked', (
+    WidgetTester tester,
+  ) async {
+    const treeUri =
+        'content://com.android.externalstorage.documents/tree/primary%3AExports';
+    const location = OutputLocation(
+      kind: OutputLocationKind.customFolder,
+      label: '自定义文件夹 > Exports',
+      writable: true,
+      treeUri: treeUri,
+    );
+    const retryRequest = AudioExtractRequest(
+      uri: _sourceUri,
+      outputFileName: '旅行_音频.m4a',
+      outputLocationLabel: '自定义文件夹 > Exports',
+      outputTreeUri: treeUri,
+      mode: AudioExtractMode.aac,
+      bitrate: 128000,
+    );
+    final engine = _FakeEngine()
+      ..snapshot = TaskSnapshot(
+        taskKind: TaskKind.audioExtraction,
+        taskId: 'restored-audio',
+        state: TaskState.failed,
+        phase: TaskPhase.encoding,
+        percent: 30,
+        sourceUri: _sourceUri,
+        outputFileName: retryRequest.outputFileName,
+        audioRetryRequest: retryRequest,
+        outputLocationLabel: retryRequest.outputLocationLabel,
+        startedAtEpochMs: DateTime(2026, 7, 19, 1).millisecondsSinceEpoch,
+        errorCode: 'AUDIO_ENCODING_FAILED',
+      )
+      ..infoByUri[_sourceUri] = _videoInfo();
+    final picker = _FakePicker()..outputLocation = location;
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('重试音频提取'), findsOneWidget);
+
+    final validation = Completer<OutputLocation>();
+    picker.outputLocationCompleter = validation;
+    await tester.ensureVisible(find.text('重试音频提取'));
+    await tester.tap(find.text('重试音频提取'));
+    await tester.pump();
+    expect(engine.audioProcessRequests, isEmpty);
+
+    await tester.tap(find.text('重新选择'));
+    await tester.pump();
+    validation.complete(location);
+    await tester.pump();
+    await tester.pump();
+
+    expect(engine.audioProcessRequests, isEmpty);
+    expect(find.text('导入一个视频'), findsOneWidget);
+  });
+
+  testWidgets('cancelled audio task is terminal without retry action', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapAudioExtraction(tester);
+    engine.progress.add(
+      const ProgressEvent(
+        taskKind: TaskKind.audioExtraction,
+        taskId: 'task-1',
+        percent: 20,
+        state: TaskState.cancelled,
+        phase: TaskPhase.cancelling,
+        errorCode: 'CANCELLED',
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('音频提取任务已取消。'), findsOneWidget);
+    expect(find.text('重试音频提取'), findsNothing);
+    expect(find.byKey(const ValueKey<String>('audio-aac-retry')), findsNothing);
+    expect(engine.audioProcessRequests, hasLength(1));
   });
 
   testWidgets('audio metadata failure keeps published actions without retry', (

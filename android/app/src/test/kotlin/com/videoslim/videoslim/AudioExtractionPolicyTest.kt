@@ -1,5 +1,6 @@
 package com.videoslim.videoslim
 
+import androidx.media3.transformer.ExportException
 import java.io.IOException
 import java.util.concurrent.CancellationException
 import org.junit.Assert.assertEquals
@@ -48,6 +49,59 @@ class AudioExtractionPolicyTest {
         assertEquals(
             EngineErrorCode.CANCELLED,
             mapAudioPipelineFailure(CancellationException(), encoding = true).code,
+        )
+    }
+
+    @Test
+    fun `Media3 1_10_1 format failures keep stable decoder and encoder codes`() {
+        listOf(
+            ExportException.ERROR_CODE_DECODER_INIT_FAILED,
+            ExportException.ERROR_CODE_DECODING_FAILED,
+            ExportException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+        ).forEach { errorCode ->
+            assertEquals(
+                EngineErrorCode.AUDIO_DECODING_FAILED,
+                mapAudioExportFailure(errorCode).code,
+            )
+        }
+        listOf(
+            ExportException.ERROR_CODE_ENCODER_INIT_FAILED,
+            ExportException.ERROR_CODE_ENCODING_FAILED,
+            ExportException.ERROR_CODE_ENCODING_FORMAT_UNSUPPORTED,
+        ).forEach { errorCode ->
+            assertEquals(
+                EngineErrorCode.AUDIO_ENCODING_FAILED,
+                mapAudioExportFailure(errorCode).code,
+            )
+        }
+    }
+
+    @Test
+    fun `source SecurityException maps to stable permission loss`() {
+        val mapped = audioSourcePermissionException(SecurityException("provider detail"))
+
+        assertEquals(AudioMetadataException.SOURCE_PERMISSION_LOST, mapped.code)
+        assertEquals("无法访问音频文件", mapped.message)
+    }
+
+    @Test
+    fun `lossless extractor boundary requires supported AAC profile evidence`() {
+        assertTrue(
+            isSupportedLosslessCopyFormat(
+                AudioOutputVerifier.AAC_MIME,
+                AudioOutputVerifier.AAC_PROFILE_LC,
+            ),
+        )
+        assertTrue(
+            isSupportedLosslessCopyFormat(
+                AudioOutputVerifier.AAC_MIME,
+                AudioOutputVerifier.AAC_PROFILE_HE,
+            ),
+        )
+        assertFalse(isSupportedLosslessCopyFormat(AudioOutputVerifier.AAC_MIME, null))
+        assertFalse(isSupportedLosslessCopyFormat(AudioOutputVerifier.AAC_MIME, 39))
+        assertFalse(
+            isSupportedLosslessCopyFormat("audio/opus", AudioOutputVerifier.AAC_PROFILE_LC),
         )
     }
 

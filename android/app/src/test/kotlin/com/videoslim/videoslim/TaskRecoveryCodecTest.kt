@@ -92,6 +92,36 @@ class TaskRecoveryCodecTest {
                 .joinToString("\n")
         val decoded = TaskRecoveryCodec.decode(legacy) as TaskRecoveryDecodeResult.Success
         assertEquals(OutputMediaKind.VIDEO_MP4, decoded.record.mediaKind)
+        assertEquals(1, decoded.record.journalVersion)
+    }
+
+    @Test
+    fun `V1 safely accepts historical video names over the V2 240 byte limit`() {
+        val historicalName = "a".repeat(241) + ".mp4"
+        val record =
+            completeRecord().copy(
+                expectedOutputDisplayName = historicalName,
+                actualOutputDisplayName = historicalName,
+                legacyOutputPath = "/storage/emulated/0/Movies/VideoSlim/$historicalName",
+            )
+        val encodedV2 = TaskRecoveryCodec.encode(record)
+        val encodedV1 =
+            encodedV2
+                .replaceFirst("version=2", "version=1")
+                .lineSequence()
+                .filterNot { it.startsWith("mediaKind=") }
+                .joinToString("\n")
+
+        assertTrue(TaskRecoveryCodec.decode(encodedV2) is TaskRecoveryDecodeResult.Invalid)
+        val decodedV1 = TaskRecoveryCodec.decode(encodedV1) as TaskRecoveryDecodeResult.Success
+        assertEquals(historicalName, decodedV1.record.actualOutputDisplayName)
+        assertEquals(1, decodedV1.record.journalVersion)
+        assertEquals(
+            TaskRecoveryDecodeResult.Success(decodedV1.record),
+            TaskRecoveryCodec.decode(TaskRecoveryCodec.encode(decodedV1.record)),
+        )
+        assertTrue(OutputMediaKind.VIDEO_MP4.isSafeLegacyV1DisplayName(historicalName))
+        assertFalse(OutputMediaKind.VIDEO_MP4.isSafeDisplayName(historicalName))
     }
 
     @Test

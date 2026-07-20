@@ -45,7 +45,10 @@ class OutputMediaSpecTest {
                 .filterNot { it.startsWith("mediaKind=") }
                 .joinToString("\n")
 
-        assertEquals(TaskRecoveryDecodeResult.Success(video), TaskRecoveryCodec.decode(v1))
+        assertEquals(
+            TaskRecoveryDecodeResult.Success(video.copy(journalVersion = 1)),
+            TaskRecoveryCodec.decode(v1),
+        )
     }
 
     @Test

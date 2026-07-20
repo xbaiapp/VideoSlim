@@ -628,14 +628,16 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _retryAudio() async {
     final previous = _lastAudioExtractRequest;
     if (previous == null || _interactionLocked || _outputPublished) return;
-    if (!await _canReuseAudioDestination(previous)) return;
-    await _submitAudio(previous);
+    final generation = ++_generation;
+    if (!await _canReuseAudioDestination(previous, generation)) return;
+    await _submitAudio(previous, reservedGeneration: generation);
   }
 
   Future<void> _retryAudioAsAac() async {
     final previous = _lastAudioExtractRequest;
     if (previous == null || _interactionLocked || _outputPublished) return;
-    if (!await _canReuseAudioDestination(previous)) return;
+    final generation = ++_generation;
+    if (!await _canReuseAudioDestination(previous, generation)) return;
     final request = AudioExtractRequest(
       uri: previous.uri,
       outputFileName: previous.outputFileName,
@@ -644,24 +646,29 @@ class _HomeScreenState extends State<HomeScreen> {
       mode: AudioExtractMode.aac,
       bitrate: 128000,
     );
+    if (!_isCurrent(generation)) return;
     _flow.update(() {
       _audioExtractMode = AudioExtractMode.aac;
       _audioExtractBitrate = 128000;
     });
-    await _submitAudio(request);
+    await _submitAudio(request, reservedGeneration: generation);
   }
 
-  Future<bool> _canReuseAudioDestination(AudioExtractRequest request) async {
+  Future<bool> _canReuseAudioDestination(
+    AudioExtractRequest request,
+    int generation,
+  ) async {
+    if (!_isCurrent(generation)) return false;
     if (_progressStreamClosed) {
       _flow.update(() {
         _errorText = '处理状态连接已中断，请重启应用后再提取音频。';
       });
       return false;
     }
-    if (request.outputTreeUri == null) return true;
+    if (request.outputTreeUri == null) return _isCurrent(generation);
     try {
       final current = await widget.picker.getOutputLocation();
-      if (!mounted) return false;
+      if (!_isCurrent(generation)) return false;
       if (!current.writable || current.treeUri != request.outputTreeUri) {
         _flow.update(() {
           _errorText = '原任务的保存文件夹已更改或需要重新授权，请重新选择后开始新任务。';
@@ -670,7 +677,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       return true;
     } catch (error, stackTrace) {
-      if (mounted) {
+      if (_isCurrent(generation)) {
         _flow.update(() {
           _errorText = _errorTextFor(
             error,
@@ -683,8 +690,12 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _submitAudio(AudioExtractRequest request) async {
-    final generation = ++_generation;
+  Future<void> _submitAudio(
+    AudioExtractRequest request, {
+    int? reservedGeneration,
+  }) async {
+    final generation = reservedGeneration ?? ++_generation;
+    if (!_isCurrent(generation)) return;
     _activeGeneration = generation;
     _terminalEventHandled = false;
     _bufferedProgress.clear();
@@ -1148,6 +1159,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case TaskState.cancelled:
         _terminalEventHandled = true;
         final code = _stableCode(event.errorCode, fallback: 'CANCELLED');
+        _lastFailureCode = code;
         final message = _messageForCode(
           code,
           event.errorMessage,
@@ -2739,7 +2751,6 @@ bool _canRetryAudioFailure(String? code) => switch (code) {
   'AUDIO_ENCODING_FAILED' ||
   'AUDIO_OUTPUT_INVALID' ||
   'OUTPUT_PERMISSION_LOST' ||
-  'CANCELLED' ||
   'UNKNOWN' => true,
   _ => false,
 };

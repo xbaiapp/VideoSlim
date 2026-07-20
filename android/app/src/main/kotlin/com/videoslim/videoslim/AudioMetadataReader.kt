@@ -27,6 +27,7 @@ internal data class AudioMetadata(
     val firstSampleTimeUs: Long?,
     val lastSampleTimeUs: Long?,
     val sampleCount: Long,
+    val sampleBytes: Long,
     val sampleTimesMonotonic: Boolean,
     val audioTrackIndex: Int = 0,
     val audioProfile: Int? = null,
@@ -75,14 +76,17 @@ internal class AudioMetadataReader(context: Context) {
     fun read(
         uri: Uri,
         shouldCancel: () -> Boolean = { false },
-    ): AudioMetadata {
-        checkAudioMetadataCancellation(shouldCancel)
-        val openable = readOpenableMetadata(uri)
-        return readConfigured(uri.toString(), openable, shouldCancel) { extractor, retriever ->
-            extractor.setDataSource(appContext, uri, null)
-            retriever.setDataSource(appContext, uri)
+    ): AudioMetadata =
+        try {
+            checkAudioMetadataCancellation(shouldCancel)
+            val openable = readOpenableMetadata(uri)
+            readConfigured(uri.toString(), openable, shouldCancel) { extractor, retriever ->
+                extractor.setDataSource(appContext, uri, null)
+                retriever.setDataSource(appContext, uri)
+            }
+        } catch (error: SecurityException) {
+            throw audioSourcePermissionException(error)
         }
-    }
 
     fun read(
         file: java.io.File,
@@ -184,6 +188,7 @@ internal class AudioMetadataReader(context: Context) {
                 firstSampleTimeUs = timing.firstSampleTimeUs,
                 lastSampleTimeUs = timing.lastSampleTimeUs,
                 sampleCount = timing.sampleCount,
+                sampleBytes = timing.sampleBytes,
                 sampleTimesMonotonic = timing.monotonic,
                 audioTrackIndex = firstAudioTrack,
                 audioProfile = audioFormat.intValue(MediaFormat.KEY_AAC_PROFILE),
@@ -193,11 +198,7 @@ internal class AudioMetadataReader(context: Context) {
         } catch (error: AudioMetadataException) {
             throw error
         } catch (error: SecurityException) {
-            throw AudioMetadataException(
-                AudioMetadataException.SOURCE_PERMISSION_LOST,
-                "无法访问音频文件",
-                error,
-            )
+            throw audioSourcePermissionException(error)
         } catch (error: IOException) {
             throw AudioMetadataException(AudioMetadataException.UNKNOWN, "无法读取音频文件", error)
         } catch (error: RuntimeException) {
@@ -350,6 +351,13 @@ private fun checkAudioMetadataCancellation(shouldCancel: () -> Boolean) {
         throw CancellationException("Audio metadata scan cancelled")
     }
 }
+
+internal fun audioSourcePermissionException(error: SecurityException): AudioMetadataException =
+    AudioMetadataException(
+        AudioMetadataException.SOURCE_PERMISSION_LOST,
+        "无法访问音频文件",
+        error,
+    )
 
 private fun MediaFormat.stringValue(key: String): String? =
     if (containsKey(key)) runCatching { getString(key) }.getOrNull() else null

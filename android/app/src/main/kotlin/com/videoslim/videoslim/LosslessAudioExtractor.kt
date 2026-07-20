@@ -45,7 +45,8 @@ internal class LosslessAudioExtractor(context: Context) {
             val track = findFirstAudioTrack(extractor)
             val format = track.format
             val mime = format.string(MediaFormat.KEY_MIME).orEmpty()
-            if (mime != AudioOutputVerifier.AAC_MIME) {
+            val profile = format.integer(MediaFormat.KEY_AAC_PROFILE)
+            if (!isSupportedLosslessCopyFormat(mime, profile)) {
                 throw EngineOperationException(
                     EngineFailure(
                         EngineErrorCode.AUDIO_COPY_UNSUPPORTED,
@@ -115,6 +116,9 @@ internal class LosslessAudioExtractor(context: Context) {
         val format: MediaFormat,
     )
 }
+
+internal fun isSupportedLosslessCopyFormat(mime: String?, profile: Int?): Boolean =
+    mime == AudioOutputVerifier.AAC_MIME && AudioOutputVerifier.isSupportedCopyProfile(profile)
 
 private class MediaExtractorSampleSource(
     private val extractor: MediaExtractor,

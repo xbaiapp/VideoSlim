@@ -12,6 +12,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.Clock
 import androidx.media3.datasource.DataSourceBitmapLoader
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.trackselection.TrackSelector
 import androidx.media3.transformer.AudioEncoderSettings
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultAssetLoaderFactory
@@ -151,8 +152,12 @@ internal class AudioExtractionEngine(
             if (sourceMetadata.audioChannels !in 1..2) {
                 throw EngineOperationException(EngineFailure(EngineErrorCode.AUDIO_CHANNEL_LAYOUT_UNSUPPORTED))
             }
-            if (task.request.mode == AudioExtractMode.COPY &&
-                sourceMetadata.audioMime != AudioOutputVerifier.AAC_MIME
+            if (
+                task.request.mode == AudioExtractMode.COPY &&
+                (
+                    sourceMetadata.audioMime != AudioOutputVerifier.AAC_MIME ||
+                        !AudioOutputVerifier.isSupportedCopyProfile(sourceMetadata.audioProfile)
+                )
             ) {
                 throw EngineOperationException(EngineFailure(EngineErrorCode.AUDIO_COPY_UNSUPPORTED))
             }
@@ -202,6 +207,19 @@ internal class AudioExtractionEngine(
             return
         }
         emit(task, task.lastPercent, TaskRuntimeSnapshot.STATE_RUNNING)
+        val progressDispatcher =
+            CoalescedProgressDispatcher(
+                schedule = { runnable -> mainHandler.post(runnable) },
+                deliver = { progress ->
+                    if (isCurrent(task)) {
+                        emit(
+                            task,
+                            (progress * MAX_PROCESSING_PERCENT).coerceIn(0.0, MAX_PROCESSING_PERCENT),
+                            TaskRuntimeSnapshot.STATE_RUNNING,
+                        )
+                    }
+                },
+            )
         ioExecutor.execute {
             try {
                 val result =
@@ -209,17 +227,7 @@ internal class AudioExtractionEngine(
                         sourceUri = task.request.sourceUri,
                         outputFile = task.tempFile,
                         shouldCancel = { task.cancelRequested || disposed },
-                        onProgress = { progress ->
-                            postToMain {
-                                if (isCurrent(task)) {
-                                    emit(
-                                        task,
-                                        (progress * MAX_PROCESSING_PERCENT).coerceIn(0.0, MAX_PROCESSING_PERCENT),
-                                        TaskRuntimeSnapshot.STATE_RUNNING,
-                                    )
-                                }
-                            }
-                        },
+                        onProgress = progressDispatcher::update,
                     )
                 log(
                     "taskKind=audio_extraction task=${task.id} mode=copy decoder=none encoder=none " +
@@ -263,7 +271,10 @@ internal class AudioExtractionEngine(
                     delegate =
                         DefaultEncoderFactory.Builder(appContext)
                             .setRequestedAudioEncoderSettings(
-                                AudioEncoderSettings.Builder().setBitrate(bitrate).build(),
+                                AudioEncoderSettings.Builder()
+                                    .setProfile(AudioOutputVerifier.AAC_PROFILE_LC)
+                                    .setBitrate(bitrate)
+                                    .build(),
                             ).setEnableFallback(true)
                             .build(),
                     logger = { message ->
@@ -287,6 +298,7 @@ internal class AudioExtractionEngine(
                     Clock.DEFAULT,
                     DefaultMediaSourceFactory(appContext),
                     DataSourceBitmapLoader(appContext),
+                    TrackSelector.Factory { context -> FirstAudioTrackSelector(context) },
                 )
             val transformer =
                 Transformer.Builder(appContext)
@@ -361,7 +373,15 @@ internal class AudioExtractionEngine(
             metadataReader.read(task.tempFile) {
                 task.cancelRequested || disposed || Thread.currentThread().isInterrupted
             }
-        AudioOutputVerifier.requireValid(outputMetadata, AudioOutputVerifier.AAC_MIME)
+        AudioOutputVerifier.requireValid(
+            outputMetadata,
+            AudioOutputVerifier.AAC_MIME,
+            if (task.request.mode == AudioExtractMode.COPY) {
+                AudioOutputVerifier.COPY_AAC_PROFILES
+            } else {
+                AudioOutputVerifier.TRANSCODE_AAC_PROFILES
+            },
+        )
         val sourceSpanMs = task.sourceMetadata?.sampleSpanMs() ?: 0L
         if (sourceSpanMs > 0L && kotlin.math.abs(outputMetadata.durationMs - sourceSpanMs) > 1_000L) {
             throw EngineOperationException(EngineFailure(EngineErrorCode.AUDIO_OUTPUT_INVALID))
@@ -555,15 +575,7 @@ internal class AudioExtractionEngine(
     ): EngineFailure = mapAudioPipelineFailure(error, encoding)
 
     private fun mapExportFailure(error: ExportException): EngineFailure =
-        when (error.errorCode) {
-            ExportException.ERROR_CODE_DECODING_FAILED,
-            ExportException.ERROR_CODE_DECODER_INIT_FAILED,
-            -> EngineFailure(EngineErrorCode.AUDIO_DECODING_FAILED)
-            ExportException.ERROR_CODE_ENCODING_FAILED,
-            ExportException.ERROR_CODE_ENCODER_INIT_FAILED,
-            -> EngineFailure(EngineErrorCode.AUDIO_ENCODING_FAILED)
-            else -> EngineFailure(EngineErrorCode.AUDIO_OUTPUT_INVALID)
-        }
+        mapAudioExportFailure(error.errorCode)
 
     private fun storageTopology(request: AudioExtractRequest): AudioStorageTopology {
         val cacheAvailable = StatFs(appContext.cacheDir.absolutePath).availableBytes
@@ -697,6 +709,7 @@ internal fun mapAudioPipelineFailure(
         is EngineOperationException -> return error.failure
         is CancellationException -> return EngineFailure(EngineErrorCode.CANCELLED)
         is AudioMetadataException -> return EngineFailure(EngineErrorCode.AUDIO_OUTPUT_INVALID)
+        is ExportException -> return mapAudioExportFailure(error.errorCode)
     }
     val generic = EngineErrorMapper.fromThrowable(error)
     if (generic.code != EngineErrorCode.UNKNOWN) return generic
@@ -708,6 +721,19 @@ internal fun mapAudioPipelineFailure(
         },
     )
 }
+
+internal fun mapAudioExportFailure(errorCode: Int): EngineFailure =
+    when (errorCode) {
+        ExportException.ERROR_CODE_DECODER_INIT_FAILED,
+        ExportException.ERROR_CODE_DECODING_FAILED,
+        ExportException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+        -> EngineFailure(EngineErrorCode.AUDIO_DECODING_FAILED)
+        ExportException.ERROR_CODE_ENCODER_INIT_FAILED,
+        ExportException.ERROR_CODE_ENCODING_FAILED,
+        ExportException.ERROR_CODE_ENCODING_FORMAT_UNSUPPORTED,
+        -> EngineFailure(EngineErrorCode.AUDIO_ENCODING_FAILED)
+        else -> EngineFailure(EngineErrorCode.AUDIO_ENCODING_FAILED)
+    }
 
 internal fun shouldRetainAudioRecovery(error: Throwable): Boolean =
     error is PublicationCleanupException && !error.cleanupConfirmed

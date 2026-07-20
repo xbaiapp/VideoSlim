@@ -180,7 +180,7 @@ class OrphanCleanupPolicyTest {
     }
 
     @Test
-    fun `completed SAF document is preserved while incomplete exact document is deleted`() {
+    fun `completed SAF document is preserved while incomplete extant document is quarantined`() {
         val uri = "content://provider.example/document/lecture"
         val record =
             scopedRecord().copy(
@@ -189,13 +189,67 @@ class OrphanCleanupPolicyTest {
             )
         val observed = DocumentOutputEntry(uri = uri, displayName = "lecture.mp4")
 
-        assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.documentAction(record, observed))
+        assertEquals(CleanupAction.SKIP_UNSAFE, OrphanCleanupPolicy.documentAction(record, observed))
         assertEquals(
             CleanupAction.KEEP,
             OrphanCleanupPolicy.documentAction(
                 record.copy(stage = RecoveryStage.PUBLISHED),
                 observed,
             ),
+        )
+    }
+
+    @Test
+    fun `SAF replacement at the same URI is never startup deletion authority`() {
+        val uri = "content://provider.example/document/lecture"
+        val record =
+            scopedRecord().copy(
+                stage = RecoveryStage.DISCARDING,
+                mediaStoreUri = uri,
+                actualOutputDisplayName = "lecture.mp4",
+            )
+
+        assertEquals(
+            CleanupAction.SKIP_UNSAFE,
+            OrphanCleanupPolicy.documentAction(
+                record,
+                DocumentOutputEntry(uri = uri, displayName = "lecture.mp4"),
+            ),
+        )
+        assertEquals(CleanupAction.ALREADY_ABSENT, OrphanCleanupPolicy.documentAction(record, null))
+    }
+
+    @Test
+    fun `legacy replacement path is quarantined after exact row cleanup`() {
+        assertEquals(CleanupAction.SKIP_UNSAFE, OrphanCleanupPolicy.legacyPathAction(true))
+        assertEquals(CleanupAction.ALREADY_ABSENT, OrphanCleanupPolicy.legacyPathAction(false))
+    }
+
+    @Test
+    fun `V1 historical video name remains eligible for exact ownership checks`() {
+        val historicalName = "a".repeat(241) + ".mp4"
+        val root = "/storage/emulated/0/Movies/VideoSlim"
+        val uri = "content://media/external/video/media/84"
+        val record =
+            scopedRecord().copy(
+                expectedOutputDisplayName = historicalName,
+                actualOutputDisplayName = historicalName,
+                mediaStoreUri = uri,
+                legacyOutputPath = "$root/$historicalName",
+                journalVersion = 1,
+            )
+
+        assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.legacyAction(record, root))
+        assertTrue(
+            OrphanCleanupPolicy.isOwnedLegacyEntry(
+                record,
+                root,
+                LegacyMediaEntry(uri, historicalName, "$root/$historicalName"),
+            ),
+        )
+        assertEquals(
+            CleanupAction.SKIP_UNSAFE,
+            OrphanCleanupPolicy.legacyAction(record.copy(journalVersion = 2), root),
         )
     }
 
