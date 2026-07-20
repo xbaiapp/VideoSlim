@@ -18,7 +18,7 @@ class ProcessingNotificationTextTest {
             )
 
         assertEquals("正在压缩视频", text.title)
-        assertEquals("已完成 38%", text.body)
+        assertEquals("已完成 38% · 编码方式尚未确认", text.body)
         assertEquals(38, text.progress)
         assertTrue(text.ongoing)
         assertTrue(text.showCancel)
@@ -59,7 +59,10 @@ class ProcessingNotificationTextTest {
             )
 
         assertEquals("视频已压缩并保存", text.title)
-        assertEquals("可在系统相册的 VideoSlim 文件夹中查看", text.body)
+        assertEquals(
+            "已保存到 系统相册 > Movies > VideoSlim · 编码方式尚未确认",
+            text.body,
+        )
         assertEquals(100, text.progress)
         assertFalse(text.ongoing)
         assertFalse(text.showCancel)
@@ -89,8 +92,8 @@ class ProcessingNotificationTextTest {
             )
 
         assertEquals("没能完成压缩", failed.title)
-        assertEquals("处理失败，请打开 VideoSlim 查看详情", failed.body)
-        assertTrue(known.body.contains("兼容模式"))
+        assertEquals("处理失败，请打开 VideoSlim 查看详情 · 编码方式尚未确认", failed.body)
+        assertTrue(known.body.contains("调整格式和画质"))
         listOf(failed.body, known.body).forEach { body ->
             assertFalse(body.contains("Media3"))
             assertFalse(body.contains("Codec"))

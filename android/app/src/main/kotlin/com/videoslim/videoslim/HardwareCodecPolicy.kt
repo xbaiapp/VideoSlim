@@ -70,6 +70,39 @@ internal object HardwareCodecPolicy {
             name.contains("ffmpeg") ||
             name.endsWith(".sw")
     }
+
+    fun selectSoftwareDecoders(
+        candidates: List<CodecCandidate>,
+        mimeType: String,
+        platformSoftwareFlagAvailable: Boolean = true,
+    ): List<CodecCandidate> =
+        if (!platformSoftwareFlagAvailable) {
+            emptyList()
+        } else {
+            candidates
+            .asSequence()
+            .filter { !it.isEncoder && it.isSoftwareOnly }
+            .filter { candidate ->
+                candidate.supportedTypes.any { it.equals(mimeType, ignoreCase = true) }
+            }.sortedBy { it.name }
+            .toList()
+        }
+
+    fun classifyActualVideoEncodingMode(
+        candidate: CodecCandidate?,
+        apiLevel: Int,
+    ): VideoEncoderMode {
+        candidate ?: return VideoEncoderMode.UNKNOWN
+        if (candidate.isSoftwareOnly) return VideoEncoderMode.SOFTWARE
+        if (apiLevel >= Build.VERSION_CODES.Q && candidate.isHardwareAccelerated) {
+            return VideoEncoderMode.EXPLICIT_HARDWARE
+        }
+        if (isKnownSoftwareCodec(candidate.name)) return VideoEncoderMode.SOFTWARE
+        if (apiLevel >= Build.VERSION_CODES.Q && candidate.isVendor) {
+            return VideoEncoderMode.AMBIGUOUS_VENDOR
+        }
+        return VideoEncoderMode.UNKNOWN
+    }
 }
 
 internal class HardwareCodecCatalog(
@@ -115,6 +148,36 @@ internal class HardwareCodecCatalog(
             )
         }
 
+    fun compatibleSoftwareVideoDecoderInfos(
+        mimeType: String,
+        width: Int,
+        height: Int,
+        frameRate: Double,
+        profile: Int? = null,
+        level: Int? = null,
+    ): List<MediaCodecInfo> {
+        val selectedNames =
+            HardwareCodecPolicy.selectSoftwareDecoders(
+                descriptors,
+                mimeType,
+                platformSoftwareFlagAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
+            )
+                .mapTo(linkedSetOf()) { it.name }
+        return codecInfos
+            .filter { it.name in selectedNames }
+            .filter { info ->
+                supportsDecoderFormat(
+                    info = info,
+                    mimeType = mimeType,
+                    width = width,
+                    height = height,
+                    frameRate = frameRate,
+                    profile = profile,
+                    level = level,
+                )
+            }.sortedBy { it.name }
+    }
+
     fun compatibleVideoEncoderInfos(
         mimeType: String,
         width: Int,
@@ -142,6 +205,14 @@ internal class HardwareCodecCatalog(
                     supportsSizeAndRate(video, width, height, frameRate)
             }.getOrDefault(false)
         }
+
+    fun videoEncoderMode(codecName: String): VideoEncoderMode {
+        val descriptor =
+            descriptors.firstOrNull {
+                it.isEncoder && (it.name == codecName || it.canonicalName == codecName)
+            }
+        return HardwareCodecPolicy.classifyActualVideoEncodingMode(descriptor, Build.VERSION.SDK_INT)
+    }
 
     fun candidateSummary(
         mimeType: String,
@@ -267,8 +338,9 @@ internal class HardwareVideoEncoderSelector(
     }
 }
 
-internal class HardwareVideoDecoderSelector(
+internal class ModeVideoDecoderSelector(
     private val allowedCodecNames: Set<String>,
+    private val mode: VideoDecoderMode,
     private val logger: (String) -> Unit,
 ) : MediaCodecSelector {
     override fun getDecoderInfos(
@@ -283,23 +355,33 @@ internal class HardwareVideoDecoderSelector(
                 requiresTunnelingDecoder,
             )
         if (!mimeType.startsWith("video/")) return defaults
+        val matching =
+            defaults.filter {
+                it.name in allowedCodecNames &&
+                    when (mode) {
+                        VideoDecoderMode.HARDWARE ->
+                            HardwareCodecPolicy.isHardwareEligible(
+                                codecName = it.name,
+                                isHardwareAccelerated = it.hardwareAccelerated,
+                                isSoftwareOnly = it.softwareOnly,
+                                isVendor = it.vendor,
+                            )
+                        VideoDecoderMode.SOFTWARE -> it.softwareOnly
+                    }
+            }
         val selected =
-            defaults
-                .filter {
-                    it.name in allowedCodecNames &&
-                        HardwareCodecPolicy.isHardwareEligible(
-                            codecName = it.name,
-                            isHardwareAccelerated = it.hardwareAccelerated,
-                            isSoftwareOnly = it.softwareOnly,
-                            isVendor = it.vendor,
-                        )
-                }.sortedWith(
-                    compareByDescending<androidx.media3.exoplayer.mediacodec.MediaCodecInfo> {
-                        it.vendor
-                    }.thenBy { it.name },
-                )
+            when (mode) {
+                VideoDecoderMode.HARDWARE ->
+                    matching.sortedWith(
+                        compareByDescending<androidx.media3.exoplayer.mediacodec.MediaCodecInfo> {
+                            it.vendor
+                        }.thenBy { it.name },
+                    )
+                VideoDecoderMode.SOFTWARE -> matching.sortedBy { it.name }
+            }
         logger(
-            "video decoder candidates mime=$mimeType default=${defaults.joinToString { it.name }} " +
+            "video decoder candidates mode=${mode.wireName} mime=$mimeType " +
+                "default=${defaults.joinToString { it.name }} " +
                 "selected=${selected.joinToString { it.name }}",
         )
         return selected
@@ -309,6 +391,7 @@ internal class HardwareVideoDecoderSelector(
 internal class LoggingEncoderFactory(
     private val delegate: Codec.EncoderFactory,
     private val logger: (String) -> Unit,
+    private val onVideoEncoderCreated: (String) -> Unit = {},
 ) : Codec.EncoderFactory {
     override fun createForAudioEncoding(
         requestedFormat: Format,
@@ -324,6 +407,7 @@ internal class LoggingEncoderFactory(
     ): Codec =
         delegate.createForVideoEncoding(requestedFormat, logSessionId).also { codec ->
             logger("actual video encoder name=${codec.name} format=${codec.configurationFormat}")
+            onVideoEncoderCreated(codec.name)
         }
 
     override fun audioNeedsEncoding(): Boolean = delegate.audioNeedsEncoding()

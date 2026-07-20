@@ -69,6 +69,56 @@ class HardwareCodecPolicyTest {
         assertFalse(HardwareCodecPolicy.isKnownSoftwareCodec("c2.exynos.avc.decoder"))
     }
 
+    @Test
+    fun `software decoder compatibility mode requires the platform software-only flag`() {
+        val candidates =
+            listOf(
+                candidate(
+                    "c2.google.avc.decoder",
+                    encoder = false,
+                    hardware = true,
+                    software = false,
+                    vendor = false,
+                    types = setOf("video/avc"),
+                ),
+                candidate(
+                    "c2.android.avc.decoder",
+                    encoder = false,
+                    hardware = false,
+                    software = true,
+                    vendor = false,
+                    types = setOf("video/avc"),
+                ),
+                candidate(
+                    "software.encoder",
+                    encoder = true,
+                    hardware = false,
+                    software = true,
+                    vendor = false,
+                    types = setOf("video/avc"),
+                ),
+                candidate(
+                    "wrong.mime.decoder",
+                    encoder = false,
+                    hardware = false,
+                    software = true,
+                    vendor = false,
+                    types = setOf("video/hevc"),
+                ),
+            )
+
+        val selected = HardwareCodecPolicy.selectSoftwareDecoders(candidates, "video/avc")
+
+        assertEquals(listOf("c2.android.avc.decoder"), selected.map { it.name })
+        assertTrue(
+            HardwareCodecPolicy.selectSoftwareDecoders(
+                candidates,
+                "video/avc",
+                platformSoftwareFlagAvailable = false,
+            ).isEmpty(),
+        )
+    }
+
     private fun candidate(
         name: String,
         encoder: Boolean = true,

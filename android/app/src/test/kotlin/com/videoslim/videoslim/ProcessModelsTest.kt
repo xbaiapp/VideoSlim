@@ -13,7 +13,10 @@ class ProcessModelsTest {
 
         assertEquals("content://media/external/video/media/42", request.sourceUri)
         assertEquals("lecture_slim.mp4", request.outputFileName)
+        assertNull(request.outputTreeUri)
+        assertEquals("系统相册 > Movies > VideoSlim", request.outputLocationLabel)
         assertEquals(VideoCodec.HEVC, request.videoCodec)
+        assertEquals(VideoDecoderMode.HARDWARE, request.videoDecoderMode)
         assertEquals(2_500_000, request.videoBitrate)
         assertEquals(1_280, request.longEdge)
         assertEquals(AudioMode.COPY, request.audioMode)
@@ -40,6 +43,23 @@ class ProcessModelsTest {
 
             assertEquals(expectedCodec, request.videoCodec)
             assertEquals((bitrate as Number).toInt(), request.videoBitrate)
+        }
+    }
+
+    @Test
+    fun `parses explicit software decoder compatibility mode`() {
+        val software =
+            ProcessRequest.parse(
+                validArguments(
+                    video = validVideo().apply { this["decoderMode"] = "software" },
+                ),
+            )
+        assertEquals(VideoDecoderMode.SOFTWARE, software.videoDecoderMode)
+
+        listOf<Any?>(null, "automatic", true).forEach { mode ->
+            assertRejected(
+                validArguments(video = validVideo().apply { this["decoderMode"] = mode }),
+            )
         }
     }
 
@@ -211,6 +231,11 @@ class ProcessModelsTest {
         linkedMapOf(
             "uri" to "content://media/external/video/media/42",
             "outputFileName" to "lecture_slim.mp4",
+            "destination" to
+                linkedMapOf(
+                    "treeUri" to null,
+                    "label" to "系统相册 > Movies > VideoSlim",
+                ),
             "video" to video,
             "audio" to audio,
         )
@@ -218,6 +243,7 @@ class ProcessModelsTest {
     private fun validVideo(): MutableMap<Any?, Any?> =
         linkedMapOf(
             "codec" to "hevc",
+            "decoderMode" to "hardware",
             "bitrate" to 2_500_000,
             "longEdge" to 1_280,
             "crop" to null,

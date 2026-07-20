@@ -53,6 +53,7 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.13.0")
     implementation("androidx.media3:media3-common:$media3Version")
     implementation("androidx.media3:media3-effect:$media3Version")
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-transformer:$media3Version")
     testImplementation("junit:junit:4.13.2")
 }

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../logging/app_logger.dart';
 import '../models/device_capabilities.dart';
+import '../models/output_location.dart';
 import '../models/process_request.dart';
 import '../models/progress_event.dart';
 import '../models/task_snapshot.dart';
@@ -250,6 +251,37 @@ final class MethodChannelVideoPicker implements VideoPicker {
       'pickFromFiles',
       arguments: null,
       parse: _requireNullableUri,
+    );
+  }
+
+  @override
+  Future<OutputLocation> getOutputLocation() {
+    return _invoker.invoke<OutputLocation>(
+      'getOutputLocation',
+      arguments: const <String, Object?>{},
+      parse: (Object? response) =>
+          OutputLocation.fromMap(_requireMap(response)),
+    );
+  }
+
+  @override
+  Future<OutputLocation?> chooseOutputFolder() {
+    return _invoker.invoke<OutputLocation?>(
+      'chooseOutputFolder',
+      arguments: const <String, Object?>{},
+      parse: (Object? response) => response == null
+          ? null
+          : OutputLocation.fromMap(_requireMap(response)),
+    );
+  }
+
+  @override
+  Future<OutputLocation> resetOutputLocation() {
+    return _invoker.invoke<OutputLocation>(
+      'resetOutputLocation',
+      arguments: const <String, Object?>{},
+      parse: (Object? response) =>
+          OutputLocation.fromMap(_requireMap(response)),
     );
   }
 }

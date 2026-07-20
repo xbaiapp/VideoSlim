@@ -180,13 +180,17 @@ private fun validateRecoveryRecord(record: TaskRecoveryRecord): String? {
             }
         }
         RecoveryStage.ALLOCATED -> {
+            val allocationUri = record.mediaStoreUri
             if (
                 record.actualOutputDisplayName != null ||
-                record.mediaStoreUri == null ||
+                allocationUri == null ||
                 record.legacyOutputPath != null ||
-                !OrphanCleanupPolicy.isAppMediaVideoUri(record.mediaStoreUri)
+                (
+                    !OrphanCleanupPolicy.isAppMediaVideoUri(allocationUri) &&
+                        !OrphanCleanupPolicy.isSafDocumentUri(allocationUri)
+                )
             ) {
-                return "allocated record has an invalid unverified scoped target"
+                return "allocated record has an invalid unverified publication target"
             }
         }
         RecoveryStage.PUBLISHING,
@@ -313,25 +317,25 @@ class TaskRecoveryStore(
     }
 
     @Throws(IOException::class)
-    fun recordScopedAllocation(
+    fun recordPublicationAllocation(
         taskId: String,
-        mediaStoreUri: String,
+        publicationUri: String,
     ): TaskRecoveryRecord = synchronized(TRANSACTION_LOCK) {
         val current = loadForMutation(taskId)
         if (current.stage == RecoveryStage.ALLOCATED) {
-            if (current.mediaStoreUri == mediaStoreUri) return@synchronized current
-            throw IllegalStateException("A different scoped allocation is already recorded")
+            if (current.mediaStoreUri == publicationUri) return@synchronized current
+            throw IllegalStateException("A different publication allocation is already recorded")
         }
         if (current.stage != RecoveryStage.TRANSFORMING) {
-            throw IllegalStateException("Scoped allocation cannot be recorded in ${current.stage}")
+            throw IllegalStateException("Publication allocation cannot be recorded in ${current.stage}")
         }
         val updated =
             current.copy(
                 stage = RecoveryStage.ALLOCATED,
-                mediaStoreUri = mediaStoreUri,
+                mediaStoreUri = publicationUri,
             )
         validateRecoveryRecord(updated)?.let { throw IllegalArgumentException(it) }
-        persist(updated, "scoped-allocation")
+        persist(updated, "publication-allocation")
         updated
     }
 

@@ -6,7 +6,9 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
@@ -20,8 +22,8 @@ data class PublicationTarget(
 )
 
 interface PublicationObserver {
-    /** Called immediately after a scoped row insert, before any ownership-field query. */
-    fun onScopedUriAllocated(mediaStoreUri: String)
+    /** Called immediately after any public output allocation, before ownership-field queries. */
+    fun onPublicationUriAllocated(publicationUri: String)
 
     /** Called synchronously immediately after the output row (and legacy path) is allocated. */
     fun onPublicationTargetAllocated(target: PublicationTarget)
@@ -35,7 +37,7 @@ interface PublicationObserver {
     companion object {
         val NONE: PublicationObserver =
             object : PublicationObserver {
-                override fun onScopedUriAllocated(mediaStoreUri: String) = Unit
+                override fun onPublicationUriAllocated(publicationUri: String) = Unit
 
                 override fun onPublicationTargetAllocated(target: PublicationTarget) = Unit
 
@@ -55,16 +57,58 @@ internal class MediaStoreSaver(
     fun publishVideo(
         tempFile: File,
         requestedName: String,
+        outputTreeUri: String? = null,
         shouldCancel: () -> Boolean = { false },
     ): String {
         if (!tempFile.isFile || tempFile.length() <= 0L) {
             throw IOException("Temporary video output is missing or empty")
         }
         validateRequestedName(requestedName)
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        return if (outputTreeUri != null) {
+            publishDocumentTree(tempFile, requestedName, outputTreeUri, shouldCancel)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             publishScoped(tempFile, requestedName, shouldCancel)
         } else {
             publishLegacy(tempFile, requestedName, shouldCancel)
+        }
+    }
+
+    fun validateOutputDestination(outputTreeUri: String?) {
+        if (outputTreeUri == null) return
+        val treeUri = runCatching { Uri.parse(outputTreeUri) }.getOrNull()
+            ?: throw OutputPermissionException("Invalid output tree URI")
+        if (!DocumentsContract.isTreeUri(treeUri) || !hasPersistedWritePermission(treeUri)) {
+            throw OutputPermissionException("Persisted output-folder write permission is missing")
+        }
+        val rootUri =
+            runCatching {
+                DocumentsContract.buildDocumentUriUsingTree(
+                    treeUri,
+                    DocumentsContract.getTreeDocumentId(treeUri),
+                )
+            }.getOrElse { throw OutputPermissionException("Output tree URI is unreadable", it) }
+        try {
+            val cursor =
+                resolver.query(
+                    rootUri,
+                    arrayOf(DocumentsContract.Document.COLUMN_FLAGS),
+                    null,
+                    null,
+                    null,
+                ) ?: throw OutputPermissionException("Output folder is unavailable")
+            cursor.use {
+                if (!it.moveToFirst()) throw OutputPermissionException("Output folder is unavailable")
+                if (!it.isNull(0)) {
+                    val flags = it.getInt(0)
+                    if (flags and DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE == 0) {
+                        throw OutputPermissionException("Output folder does not allow new files")
+                    }
+                }
+            }
+        } catch (error: OutputPermissionException) {
+            throw error
+        } catch (error: Throwable) {
+            throw OutputPermissionException("Output folder cannot be verified", error)
         }
     }
 
@@ -74,15 +118,73 @@ internal class MediaStoreSaver(
             if (resolver.delete(uri, null, null) > 0) {
                 true
             } else {
-                resolver.query(
-                    uri,
-                    arrayOf(MediaStore.Video.Media._ID),
-                    null,
-                    null,
-                    null,
-                )?.use { !it.moveToFirst() } ?: false
+                !contentUriExists(uri)
             }
         }.getOrDefault(false)
+
+    private fun publishDocumentTree(
+        tempFile: File,
+        requestedName: String,
+        outputTreeUri: String,
+        shouldCancel: () -> Boolean,
+    ): String {
+        validateOutputDestination(outputTreeUri)
+        val treeUri = Uri.parse(outputTreeUri)
+        val rootUri =
+            DocumentsContract.buildDocumentUriUsingTree(
+                treeUri,
+                DocumentsContract.getTreeDocumentId(treeUri),
+            )
+        val outputUri =
+            try {
+                DocumentsContract.createDocument(resolver, rootUri, VIDEO_MIME_TYPE, requestedName)
+                    ?: throw IOException("Document provider could not create the output video")
+            } catch (error: SecurityException) {
+                throw OutputPermissionException("Output-folder permission was lost", error)
+            }
+        var target: PublicationTarget? = null
+        try {
+            publicationObserver.onPublicationUriAllocated(outputUri.toString())
+            val allocatedTarget = readDocumentPublicationTarget(outputUri)
+            target = allocatedTarget
+            publicationObserver.onPublicationTargetAllocated(allocatedTarget)
+            copyIntoUri(tempFile, outputUri, shouldCancel)
+            publicationObserver.onPublicationCompleted(allocatedTarget)
+            return outputUri.toString()
+        } catch (error: Throwable) {
+            target?.let { runCatching { publicationObserver.onPublicationDiscarding(it) } }
+            val cleanupConfirmed = deletePublished(outputUri.toString())
+            val reportedError =
+                if (error is SecurityException || !hasPersistedWritePermission(treeUri)) {
+                    OutputPermissionException("Output-folder permission was lost", error)
+                } else {
+                    error
+                }
+            throw PublicationCleanupException(cleanupConfirmed, reportedError)
+        }
+    }
+
+    private fun readDocumentPublicationTarget(outputUri: Uri): PublicationTarget {
+        val cursor =
+            resolver.query(
+                outputUri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null,
+            ) ?: throw IOException("Created output document could not be queried")
+        return cursor.use {
+            if (!it.moveToFirst() || it.isNull(0)) {
+                throw IOException("Created output document has no display name")
+            }
+            val actualName = it.getString(0)
+            validateRequestedName(actualName)
+            PublicationTarget(
+                mediaStoreUri = outputUri.toString(),
+                actualDisplayName = actualName,
+            )
+        }
+    }
 
     private fun publishScoped(
         tempFile: File,
@@ -100,7 +202,7 @@ internal class MediaStoreSaver(
                 ?: throw IOException("MediaStore insert returned null")
         var target: PublicationTarget? = null
         try {
-            publicationObserver.onScopedUriAllocated(outputUri.toString())
+            publicationObserver.onPublicationUriAllocated(outputUri.toString())
             val allocatedTarget = readScopedPublicationTarget(outputUri)
             target = allocatedTarget
             publicationObserver.onPublicationTargetAllocated(allocatedTarget)
@@ -220,7 +322,12 @@ internal class MediaStoreSaver(
                 ?: throw IOException("MediaStore output stream is unavailable")
         FileInputStream(source).use { input ->
             output.use { destination ->
-                copyPublicationBytes(input, destination, shouldCancel)
+                val copiedBytes = copyPublicationBytes(input, destination, shouldCancel)
+                if (copiedBytes != source.length()) {
+                    throw IOException(
+                        "Published byte count $copiedBytes did not match source length ${source.length()}",
+                    )
+                }
             }
         }
     }
@@ -237,6 +344,16 @@ internal class MediaStoreSaver(
         }
         throw IOException("Unable to allocate a unique output filename")
     }
+
+    private fun hasPersistedWritePermission(uri: Uri): Boolean =
+        resolver.persistedUriPermissions.any { permission ->
+            permission.uri == uri && permission.isWritePermission
+        }
+
+    private fun contentUriExists(uri: Uri): Boolean =
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { it.moveToFirst() }
+            ?: true
 
     private fun validateRequestedName(name: String) {
         if (
@@ -269,18 +386,25 @@ internal fun copyPublicationBytes(
     output: OutputStream,
     shouldCancel: () -> Boolean,
     bufferSize: Int = 1024 * 1024,
-) {
+): Long {
     require(bufferSize > 0) { "bufferSize must be positive" }
     val buffer = ByteArray(bufferSize)
+    var copiedBytes = 0L
     while (true) {
         if (shouldCancel() || Thread.currentThread().isInterrupted) {
             throw IOException("Video publication cancelled")
         }
         val count = input.read(buffer)
-        if (count < 0) return
+        if (count < 0) return copiedBytes
         output.write(buffer, 0, count)
+        copiedBytes += count
     }
 }
+
+internal class OutputPermissionException(
+    message: String,
+    cause: Throwable? = null,
+) : IOException(message, cause)
 
 internal class PublicationCleanupException(
     val cleanupConfirmed: Boolean,

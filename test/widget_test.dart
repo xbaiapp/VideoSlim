@@ -10,6 +10,7 @@ import 'package:videoslim/engine/video_picker.dart';
 import 'package:videoslim/logging/app_logger.dart';
 import 'package:videoslim/models/compression_settings.dart';
 import 'package:videoslim/models/device_capabilities.dart';
+import 'package:videoslim/models/output_location.dart';
 import 'package:videoslim/models/process_request.dart';
 import 'package:videoslim/models/progress_event.dart';
 import 'package:videoslim/models/task_snapshot.dart';
@@ -34,6 +35,8 @@ final class _FakePicker implements VideoPicker {
   String? fileResult;
   int galleryCalls = 0;
   int fileCalls = 0;
+  OutputLocation outputLocation = OutputLocation.defaultGallery;
+  OutputLocation? chooseOutputResult;
 
   @override
   Future<String?> pickFromGallery() async {
@@ -46,6 +49,20 @@ final class _FakePicker implements VideoPicker {
     fileCalls += 1;
     return fileResult;
   }
+
+  @override
+  Future<OutputLocation> getOutputLocation() async => outputLocation;
+
+  @override
+  Future<OutputLocation?> chooseOutputFolder() async {
+    final result = chooseOutputResult;
+    if (result != null) outputLocation = result;
+    return result;
+  }
+
+  @override
+  Future<OutputLocation> resetOutputLocation() async =>
+      outputLocation = OutputLocation.defaultGallery;
 }
 
 final class _FakeMediaActions implements MediaActions {
@@ -88,6 +105,7 @@ final class _FakeEngine implements VideoEngine {
   TaskSnapshot? snapshot;
   Completer<TaskSnapshot?>? snapshotCompleter;
   ProcessRequest? lastRequest;
+  final List<ProcessRequest> processRequests = <ProcessRequest>[];
   final List<String> metadataCalls = <String>[];
   final List<String> cancelCalls = <String>[];
 
@@ -135,6 +153,7 @@ final class _FakeEngine implements VideoEngine {
   @override
   Future<String> process(ProcessRequest request) async {
     lastRequest = request;
+    processRequests.add(request);
     final completer = processCompleter;
     if (completer != null) {
       return completer.future;
@@ -350,6 +369,64 @@ void main() {
     expect(find.text('视频技术信息'), findsOneWidget);
   });
 
+  testWidgets('custom output folder flows into request and published result', (
+    WidgetTester tester,
+  ) async {
+    const treeUri =
+        'content://com.android.externalstorage.documents/tree/primary%3AExports';
+    const customLabel = '自定义文件夹 > Exports';
+    final engine = _FakeEngine();
+    final picker = _FakePicker()
+      ..chooseOutputResult = const OutputLocation(
+        kind: OutputLocationKind.customFolder,
+        label: customLabel,
+        writable: true,
+        treeUri: treeUri,
+      );
+    final backend = _MemoryBackend();
+    engine.infoByUri[_outputUri] = _videoInfo(
+      uri: _outputUri,
+      fileName: 'actual-custom.mp4',
+      fileSizeBytes: 6 * 1024 * 1024,
+    );
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+
+    final choose = find.byKey(const ValueKey<String>('choose-output-location'));
+    await tester.ensureVisible(choose);
+    await tester.tap(choose);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text(customLabel), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('use-default-output-location')),
+      findsOneWidget,
+    );
+
+    await _tapCompression(tester);
+    expect(engine.lastRequest?.outputTreeUri, treeUri);
+    expect(engine.lastRequest?.outputLocationLabel, customLabel);
+
+    engine.progress.add(
+      const ProgressEvent(
+        taskId: 'task-1',
+        percent: 100,
+        state: TaskState.success,
+        outputUri: _outputUri,
+        outputFileName: 'actual-custom.mp4',
+        outputLocationLabel: customLabel,
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('$customLabel > actual-custom.mp4'), findsOneWidget);
+  });
+
   testWidgets('HDR warning explains M2 tone mapping without blocking', (
     WidgetTester tester,
   ) async {
@@ -397,10 +474,10 @@ void main() {
       _app(engine: engine, picker: picker, logger: _logger(backend)),
     );
     await _selectGallery(tester, engine, picker);
-    expect(find.textContaining('已改用 H.264 兼容模式'), findsOneWidget);
+    expect(find.textContaining('已改用 H.264 兼容格式'), findsOneWidget);
     await _tapCompression(tester);
     expect(find.text('开始前请确认'), findsOneWidget);
-    expect(find.textContaining('将改用兼容模式'), findsOneWidget);
+    expect(find.textContaining('将改用 H.264 兼容格式'), findsOneWidget);
     expect(engine.lastRequest, isNull);
     await tester.tap(find.byKey(const ValueKey<String>('confirm-compression')));
     await tester.pump();
@@ -506,7 +583,7 @@ void main() {
     expect(find.text('正在压缩'), findsOneWidget);
     await emit(TaskPhase.publishing, 42);
     expect(find.text('正在保存'), findsOneWidget);
-    expect(find.text('正在保存到相册'), findsOneWidget);
+    expect(find.text('正在保存到 系统相册 > Movies > VideoSlim'), findsOneWidget);
     expect(find.textContaining('预计还需'), findsNothing);
     await emit(TaskPhase.cancelling, 42);
     expect(find.text('正在取消'), findsWidgets);
@@ -555,6 +632,7 @@ void main() {
           taskId: 'task-1',
           percent: 42,
           state: TaskState.running,
+          actualVideoEncodingMode: ActualVideoEncodingMode.explicitHardware,
         ),
       );
       await tester.pump();
@@ -565,6 +643,7 @@ void main() {
           taskId: 'task-1',
           percent: 100,
           state: TaskState.success,
+          actualVideoEncodingMode: ActualVideoEncodingMode.explicitHardware,
           outputUri: _outputUri,
         ),
       );
@@ -573,6 +652,7 @@ void main() {
 
       expect(engine.metadataCalls, <String>[_sourceUri, _outputUri]);
       expect(find.text('压缩完成'), findsOneWidget);
+      expect(find.text('实际编码：硬件（系统已确认）'), findsOneWidget);
       expect(
         find.text('系统相册 > Movies > VideoSlim > 旅行_视频_slim.mp4'),
         findsOneWidget,
@@ -635,6 +715,109 @@ void main() {
     await tester.pump();
 
     expect(find.text('存储空间不足，请释放空间后重试。'), findsOneWidget);
+    expect(find.text('使用兼容模式重试'), findsNothing);
+  });
+
+  testWidgets('decoder failure offers an explicit software decoder retry', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapCompression(tester);
+    expect(engine.processRequests.single.videoDecoderMode, 'hardware');
+
+    engine.progress.add(
+      const ProgressEvent(
+        taskId: 'task-1',
+        percent: 89,
+        state: TaskState.failed,
+        errorCode: 'VIDEO_DECODING_FAILED',
+        errorMessage: '底层消息不应直接展示',
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('手机的视频解码器未能完成此次处理，原视频没有被修改。'), findsOneWidget);
+    final retry = find.byKey(const ValueKey<String>('compatibility-retry'));
+    await tester.ensureVisible(retry);
+    await tester.tap(retry);
+    await tester.pump();
+    expect(find.text('使用兼容模式重试？'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('confirm-compatibility-retry')),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(engine.processRequests, hasLength(2));
+    expect(engine.processRequests.last.videoDecoderMode, 'software');
+    expect(
+      engine.processRequests.last.videoCodec,
+      engine.processRequests.first.videoCodec,
+    );
+    expect(
+      engine.processRequests.last.videoBitrate,
+      engine.processRequests.first.videoBitrate,
+    );
+
+    engine.progress.add(
+      const ProgressEvent(
+        taskId: 'task-1',
+        percent: 20,
+        state: TaskState.failed,
+        videoDecoderMode: RequestedVideoDecoderMode.software,
+        errorCode: 'VIDEO_DECODING_FAILED',
+        errorMessage: 'software decoder failed',
+      ),
+    );
+    await tester.pump();
+    expect(find.text('使用兼容模式重试'), findsNothing);
+
+    final sameModeRetry = find.text('重试压缩');
+    await tester.ensureVisible(sameModeRetry);
+    await tester.tap(sameModeRetry);
+    await tester.pump();
+    await tester.pump();
+    expect(engine.processRequests, hasLength(3));
+    expect(engine.processRequests.last.videoDecoderMode, 'software');
+  });
+
+  testWidgets('unavailable compatibility decoder has no pointless retry', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapCompression(tester);
+    engine.progress.add(
+      const ProgressEvent(
+        taskId: 'task-1',
+        percent: 0,
+        state: TaskState.failed,
+        videoDecoderMode: RequestedVideoDecoderMode.software,
+        errorCode: 'COMPATIBILITY_DECODER_UNAVAILABLE',
+        errorMessage: 'internal detail must not be shown',
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('这台手机没有可用于此视频的兼容处理方式。原视频没有被修改。'), findsOneWidget);
+    expect(find.text('使用兼容模式重试'), findsNothing);
+    expect(find.text('重试压缩'), findsNothing);
   });
 
   testWidgets('stream error invalidates a pending process future', (
@@ -780,7 +963,10 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.textContaining('压缩文件已经保存到相册'), findsOneWidget);
+    expect(
+      find.textContaining('压缩文件已经保存到 系统相册 > Movies > VideoSlim'),
+      findsOneWidget,
+    );
     expect(
       find.text('系统相册 > Movies > VideoSlim > actual-collision-name.mp4'),
       findsOneWidget,
@@ -809,7 +995,10 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.textContaining('压缩文件已经保存到相册'), findsOneWidget);
+    expect(
+      find.textContaining('压缩文件已经保存到 系统相册 > Movies > VideoSlim'),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey<String>('start-m2-compression')),
       findsNothing,
@@ -955,7 +1144,7 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.text('正在保存到系统相册…'), findsOneWidget);
+    expect(find.text('正在保存到 系统相册 > Movies > VideoSlim…'), findsOneWidget);
     final cancelButton = tester.widget<OutlinedButton>(
       find.byKey(const ValueKey<String>('cancel-processing')),
     );

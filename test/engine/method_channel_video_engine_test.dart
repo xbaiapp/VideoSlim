@@ -199,8 +199,13 @@ void main() {
         expect(calls[2].arguments, <String, Object?>{
           'uri': 'content://videos/42',
           'outputFileName': '旅行_slim.mp4',
+          'destination': <String, Object?>{
+            'treeUri': null,
+            'label': '系统相册 > Movies > VideoSlim',
+          },
           'video': <String, Object?>{
             'codec': 'hevc',
+            'decoderMode': 'hardware',
             'bitrate': 2500000,
             'longEdge': 1280,
             'crop': <String, int>{

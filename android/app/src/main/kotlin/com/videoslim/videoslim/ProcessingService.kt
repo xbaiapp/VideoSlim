@@ -49,11 +49,11 @@ internal class ProcessingService : Service() {
             }
         val publicationObserver =
             object : PublicationObserver {
-                override fun onScopedUriAllocated(mediaStoreUri: String) {
+                override fun onPublicationUriAllocated(publicationUri: String) {
                     val internalTaskId =
                         engineTaskId
-                            ?: throw IllegalStateException("Scoped row allocated without an engine task")
-                    recoveryStore.recordScopedAllocation(internalTaskId, mediaStoreUri)
+                            ?: throw IllegalStateException("Publication allocated without an engine task")
+                    recoveryStore.recordPublicationAllocation(internalTaskId, publicationUri)
                 }
 
                 override fun onPublicationTargetAllocated(target: PublicationTarget) {
@@ -257,6 +257,7 @@ internal class ProcessingService : Service() {
                 percent = event.percent,
                 state = state,
                 phase = event.phase,
+                actualVideoEncodingMode = event.actualVideoEncodingMode.wireName,
                 outputUri = event.outputUri,
                 errorCode =
                     if (timeoutRequested && state == TaskRuntimeSnapshot.STATE_FAILED) {

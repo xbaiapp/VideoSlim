@@ -26,7 +26,7 @@ internal data class ProcessingNotificationText(
                 TaskRuntimeSnapshot.STATE_SUCCESS ->
                     ProcessingNotificationText(
                         title = "视频已压缩并保存",
-                        body = "可在系统相册的 VideoSlim 文件夹中查看",
+                        body = "已保存到 ${snapshot.outputLocationLabel} · ${encodingModeText(snapshot)}",
                         progress = 100,
                         ongoing = false,
                         showCancel = false,
@@ -35,7 +35,7 @@ internal data class ProcessingNotificationText(
                 TaskRuntimeSnapshot.STATE_FAILED ->
                     ProcessingNotificationText(
                         title = "没能完成压缩",
-                        body = failureBody(snapshot.errorCode),
+                        body = "${failureBody(snapshot.errorCode)} · ${encodingModeText(snapshot)}",
                         progress = progress,
                         ongoing = false,
                         showCancel = false,
@@ -62,7 +62,7 @@ internal data class ProcessingNotificationText(
                 TaskRuntimeSnapshot.PHASE_PREPARING ->
                     ProcessingNotificationText(
                         title = "正在准备视频",
-                        body = "即将开始压缩",
+                        body = "即将开始压缩 · ${encodingModeText(snapshot)}",
                         progress = progress,
                         ongoing = true,
                         showCancel = true,
@@ -70,7 +70,7 @@ internal data class ProcessingNotificationText(
                 TaskRuntimeSnapshot.PHASE_ENCODING ->
                     ProcessingNotificationText(
                         title = "正在压缩视频",
-                        body = "已完成 $progress%",
+                        body = "已完成 $progress% · ${encodingModeText(snapshot)}",
                         progress = progress,
                         ongoing = true,
                         showCancel = true,
@@ -78,7 +78,7 @@ internal data class ProcessingNotificationText(
                 TaskRuntimeSnapshot.PHASE_PUBLISHING ->
                     ProcessingNotificationText(
                         title = "正在保存视频",
-                        body = "压缩已完成，正在保存到系统相册",
+                        body = "正在保存到 ${snapshot.outputLocationLabel} · ${encodingModeText(snapshot)}",
                         progress = progress,
                         ongoing = true,
                         showCancel = true,
@@ -109,11 +109,19 @@ internal data class ProcessingNotificationText(
                 EngineErrorCode.SOURCE_UNAVAILABLE.wireName -> "所选视频已移动、删除或暂时不可用"
                 EngineErrorCode.SOURCE_PROVIDER_FAILED.wireName -> "手机无法持续读取视频，请重新选择或稍后重试"
                 EngineErrorCode.SOURCE_CORRUPTED.wireName -> "无法处理这个视频，文件可能损坏或格式不受支持"
-                EngineErrorCode.VIDEO_DECODING_FAILED.wireName -> "手机在读取视频时中途停止，请重新尝试"
+                EngineErrorCode.VIDEO_DECODING_FAILED.wireName -> "视频解码器未能完成处理，可打开 VideoSlim 使用兼容模式重试"
                 EngineErrorCode.VIDEO_FORMAT_UNSUPPORTED.wireName -> "这台手机暂时无法读取这种视频格式"
-                EngineErrorCode.VIDEO_ENCODING_FAILED.wireName -> "当前设置未能完成，可打开 VideoSlim 改用兼容模式"
+                EngineErrorCode.VIDEO_ENCODING_FAILED.wireName -> "当前设置未能完成，可打开 VideoSlim 重试或调整格式和画质"
                 EngineErrorCode.ENCODER_UNAVAILABLE.wireName -> "当前手机没有可用的兼容处理方式"
                 else -> "处理失败，请打开 VideoSlim 查看详情"
+            }
+
+        private fun encodingModeText(snapshot: TaskRuntimeSnapshot): String =
+            when (snapshot.actualVideoEncodingMode) {
+                VideoEncoderMode.EXPLICIT_HARDWARE.wireName -> "硬件编码（系统已确认）"
+                VideoEncoderMode.AMBIGUOUS_VENDOR.wireName -> "厂商实现（硬件状态未确认）"
+                VideoEncoderMode.SOFTWARE.wireName -> "软件编码"
+                else -> "编码方式尚未确认"
             }
     }
 }

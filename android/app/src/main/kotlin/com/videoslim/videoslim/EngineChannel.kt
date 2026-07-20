@@ -148,6 +148,12 @@ internal class EngineChannel(
                 replyError(result, EngineFailure(EngineErrorCode.UNKNOWN, "压缩参数无效"), error)
                 return
             }
+        try {
+            transcodeEngine.validateOutputDestination(request.outputTreeUri)
+        } catch (error: EngineOperationException) {
+            replyError(result, error.failure, error)
+            return
+        }
         if (waitingForLegacyPermission || waitingForNotificationPermission) {
             replyError(
                 result,

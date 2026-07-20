@@ -59,6 +59,8 @@ internal object ProcessingRuntime {
             taskId = taskId,
             sourceUri = request.sourceUri,
             outputFileName = request.outputFileName,
+            outputLocationLabel = request.outputLocationLabel,
+            videoDecoderMode = request.videoDecoderMode.wireName,
             startedAtEpochMs = System.currentTimeMillis(),
         )
         val intent =

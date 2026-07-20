@@ -13,6 +13,8 @@ internal data class StorageEstimate(
     val audioBytes: Long,
     val overheadBytes: Long,
     val outputBytes: Long,
+    val lowerOutputBytes: Long,
+    val upperOutputBytes: Long,
     val cacheRequiredBytes: Long,
     val publicRequiredBytes: Long,
     val sharedPoolRequiredBytes: Long,
@@ -23,8 +25,11 @@ internal fun hasSufficientStorage(
     cacheAvailableBytes: Long,
     publicAvailableBytes: Long,
     sharesStoragePool: Boolean?,
+    requiresPublicDestination: Boolean = true,
 ): Boolean =
-    if (sharesStoragePool == false) {
+    if (!requiresPublicDestination) {
+        cacheAvailableBytes >= estimate.cacheRequiredBytes
+    } else if (sharesStoragePool == false) {
         cacheAvailableBytes >= estimate.cacheRequiredBytes &&
             publicAvailableBytes >= estimate.publicRequiredBytes
     } else {
@@ -128,22 +133,37 @@ internal data class TranscodePlan(
                             metadata.audioBitrate ?: CONSERVATIVE_COPY_AUDIO_BITRATE,
                         )
                 }
-            val overheadBytes =
-                max(
-                    MIN_OVERHEAD_BYTES,
-                    metadata.fileSizeBytes.coerceAtLeast(0L) / SOURCE_OVERHEAD_DIVISOR,
+            val nominalMediaBytes = safeAdd(videoBytes, audioBytes)
+            val overheadBytes = max(MIN_OVERHEAD_BYTES, nominalMediaBytes / 100L)
+            val outputBytes = safeAdd(nominalMediaBytes, overheadBytes)
+            val lowerOutputBytes =
+                safeAdd(
+                    safeAdd(safeScale(videoBytes, VBR_LOWER_PERCENT, 100L), audioBytes),
+                    overheadBytes,
                 )
-            val outputBytes = safeAdd(safeAdd(videoBytes, audioBytes), overheadBytes)
-            val cacheRequiredBytes = safeAdd(outputBytes, STORAGE_HEADROOM_BYTES)
-            val publicRequiredBytes = safeAdd(outputBytes, STORAGE_HEADROOM_BYTES)
+            val upperOutputBytes =
+                safeAdd(
+                    safeAdd(
+                        safeScale(videoBytes, VBR_UPPER_PERCENT, 100L),
+                        safeScale(audioBytes, AUDIO_UPPER_PERCENT, 100L),
+                    ),
+                    overheadBytes,
+                )
+            val cacheRequiredBytes = safeAdd(upperOutputBytes, STORAGE_HEADROOM_BYTES)
+            val publicRequiredBytes = safeAdd(upperOutputBytes, STORAGE_HEADROOM_BYTES)
             val sharedPoolRequiredBytes =
-                safeAdd(safeMultiply(outputBytes, OVERLAPPING_TEMP_AND_PUBLIC_OUTPUTS), STORAGE_HEADROOM_BYTES)
+                safeAdd(
+                    safeMultiply(upperOutputBytes, OVERLAPPING_TEMP_AND_PUBLIC_OUTPUTS),
+                    STORAGE_HEADROOM_BYTES,
+                )
 
             return StorageEstimate(
                 videoBytes = videoBytes,
                 audioBytes = audioBytes,
                 overheadBytes = overheadBytes,
                 outputBytes = outputBytes,
+                lowerOutputBytes = lowerOutputBytes,
+                upperOutputBytes = upperOutputBytes,
                 cacheRequiredBytes = cacheRequiredBytes,
                 publicRequiredBytes = publicRequiredBytes,
                 sharedPoolRequiredBytes = sharedPoolRequiredBytes,
@@ -169,16 +189,25 @@ internal data class TranscodePlan(
                 else -> left * right
             }
 
+        private fun safeScale(
+            value: Long,
+            numerator: Long,
+            denominator: Long,
+        ): Long =
+            if (value == Long.MAX_VALUE) Long.MAX_VALUE else safeMultiply(value, numerator) / denominator
+
         private fun safeAdd(left: Long, right: Long): Long =
             if (left >= Long.MAX_VALUE - right) Long.MAX_VALUE else left + right
 
         private const val MIN_ENCODER_DIMENSION = 2
         private const val MIN_OPEN_GL_TONE_MAPPING_SDK = 29
-        private const val CONSERVATIVE_COPY_AUDIO_BITRATE = 256_000
+        private const val CONSERVATIVE_COPY_AUDIO_BITRATE = 128_000
         private const val BITS_PER_MILLISECOND = 8_000L
-        private const val SOURCE_OVERHEAD_DIVISOR = 20L
-        private const val MIN_OVERHEAD_BYTES = 16L * 1024L * 1024L
-        private const val STORAGE_HEADROOM_BYTES = 32L * 1024L * 1024L
+        private const val VBR_LOWER_PERCENT = 80L
+        private const val VBR_UPPER_PERCENT = 200L
+        private const val AUDIO_UPPER_PERCENT = 110L
+        private const val MIN_OVERHEAD_BYTES = 4L * 1024L * 1024L
+        private const val STORAGE_HEADROOM_BYTES = 64L * 1024L * 1024L
         private const val OVERLAPPING_TEMP_AND_PUBLIC_OUTPUTS = 2L
 
     }

@@ -12,6 +12,7 @@ import '../logic/compression_planner.dart';
 import '../logic/eta_estimator.dart';
 import '../models/compression_settings.dart';
 import '../models/device_capabilities.dart';
+import '../models/output_location.dart';
 import '../models/progress_event.dart';
 import '../models/task_snapshot.dart';
 import '../models/video_info.dart';
@@ -48,6 +49,15 @@ class _HomeScreenState extends State<HomeScreen> {
   final CompressionPlanner _planner = const CompressionPlanner();
   EtaEstimator? _etaEstimator;
   Timer? _timingTimer;
+  OutputLocation _outputLocation = OutputLocation.defaultGallery;
+  bool _outputLocationLoading = true;
+  bool _selectingOutputLocation = false;
+  String _taskOutputLocationLabel = OutputLocation.defaultGallery.label;
+  ActualVideoEncodingMode _actualVideoEncodingMode =
+      ActualVideoEncodingMode.unknown;
+  String? _lastFailureCode;
+  RequestedVideoDecoderMode _lastVideoDecoderMode =
+      RequestedVideoDecoderMode.hardware;
 
   int get _generation => _flow.generation;
   set _generation(int value) => _flow.generation = value;
@@ -142,6 +152,7 @@ class _HomeScreenState extends State<HomeScreen> {
       onDone: _onProgressDone,
     );
     _logFlow('M2 首页已启动，进度流已订阅');
+    unawaited(_loadOutputLocation());
     unawaited(_restoreTaskSnapshot());
   }
 
@@ -154,6 +165,65 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   DateTime _now() => (widget.now ?? DateTime.now)();
+
+  Future<void> _loadOutputLocation() async {
+    try {
+      final location = await widget.picker.getOutputLocation();
+      if (!mounted) return;
+      _flow.update(() {
+        _outputLocation = location;
+        _outputLocationLoading = false;
+      });
+    } catch (error, stackTrace) {
+      if (!mounted) return;
+      _flow.update(() => _outputLocationLoading = false);
+      _logError('读取保存位置失败', error, stackTrace);
+    }
+  }
+
+  Future<void> _chooseOutputFolder() async {
+    if (_interactionLocked || _selectingOutputLocation) return;
+    _flow.update(() => _selectingOutputLocation = true);
+    try {
+      final location = await widget.picker.chooseOutputFolder();
+      if (!mounted || location == null) return;
+      _flow.update(() {
+        _outputLocation = location;
+        _errorText = null;
+      });
+    } catch (error, stackTrace) {
+      if (mounted) {
+        _flow.update(() {
+          _errorText = _errorTextFor(error, fallback: '无法使用这个文件夹，请重新选择并允许写入。');
+        });
+      }
+      _logError('选择保存文件夹失败', error, stackTrace);
+    } finally {
+      if (mounted) _flow.update(() => _selectingOutputLocation = false);
+    }
+  }
+
+  Future<void> _useDefaultOutputLocation() async {
+    if (_interactionLocked || _selectingOutputLocation) return;
+    _flow.update(() => _selectingOutputLocation = true);
+    try {
+      final location = await widget.picker.resetOutputLocation();
+      if (!mounted) return;
+      _flow.update(() {
+        _outputLocation = location;
+        _errorText = null;
+      });
+    } catch (error, stackTrace) {
+      if (mounted) {
+        _flow.update(() {
+          _errorText = _errorTextFor(error, fallback: '无法恢复默认保存位置。');
+        });
+      }
+      _logError('恢复默认保存位置失败', error, stackTrace);
+    } finally {
+      if (mounted) _flow.update(() => _selectingOutputLocation = false);
+    }
+  }
 
   CompressionSettings get _compressionSettings {
     final preset = _selectedPreset;
@@ -230,6 +300,9 @@ class _HomeScreenState extends State<HomeScreen> {
         _publishedOutputFileName = snapshot.outputFileName;
         _percent = snapshot.percent;
         _taskPhase = snapshot.phase;
+        _taskOutputLocationLabel = snapshot.outputLocationLabel;
+        _lastVideoDecoderMode = snapshot.videoDecoderMode;
+        _actualVideoEncodingMode = snapshot.actualVideoEncodingMode;
         _preparing = false;
         _processing = true;
         _finishing = false;
@@ -247,8 +320,11 @@ class _HomeScreenState extends State<HomeScreen> {
           percent: snapshot.percent,
           state: snapshot.state,
           phase: snapshot.phase,
+          videoDecoderMode: snapshot.videoDecoderMode,
+          actualVideoEncodingMode: snapshot.actualVideoEncodingMode,
           outputUri: snapshot.outputUri,
           outputFileName: snapshot.outputFileName,
+          outputLocationLabel: snapshot.outputLocationLabel,
           errorCode: snapshot.errorCode,
           errorMessage: snapshot.errorMessage,
         ),
@@ -421,7 +497,43 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _compress() async {
+  Future<void> _compress() => _startCompression(videoDecoderMode: 'hardware');
+
+  Future<void> _retryLastMode() =>
+      _startCompression(videoDecoderMode: _lastVideoDecoderMode.wireName);
+
+  Future<void> _retryWithCompatibilityMode() async {
+    if (_interactionLocked ||
+        _lastFailureCode != 'VIDEO_DECODING_FAILED' ||
+        _lastVideoDecoderMode != RequestedVideoDecoderMode.hardware) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('使用兼容模式重试？'),
+        content: const Text(
+          '兼容模式会改用软件方式读取视频，并从头重新压缩。速度可能更慢，也会增加耗电和发热；输出编码设置保持不变。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('返回'),
+          ),
+          FilledButton.tonal(
+            key: const ValueKey<String>('confirm-compatibility-retry'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('开始兼容重试'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await _startCompression(videoDecoderMode: 'software');
+    }
+  }
+
+  Future<void> _startCompression({required String videoDecoderMode}) async {
     final info = _sourceInfo;
     final uri = _selectedUri;
     final plan = _compressionPlan;
@@ -446,6 +558,25 @@ class _HomeScreenState extends State<HomeScreen> {
       _logFlow('阻止压缩：进度通道已关闭', level: AppLogLevel.error);
       return;
     }
+    OutputLocation verifiedLocation;
+    try {
+      verifiedLocation = await widget.picker.getOutputLocation();
+      if (!mounted) return;
+      _flow.update(() => _outputLocation = verifiedLocation);
+    } catch (error, stackTrace) {
+      if (!mounted) return;
+      _flow.update(() {
+        _errorText = _errorTextFor(error, fallback: '无法确认保存文件夹权限，请重新选择保存位置。');
+      });
+      _logError('压缩前保存位置检查失败', error, stackTrace);
+      return;
+    }
+    if (!verifiedLocation.writable) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('保存文件夹权限已失效，请点“重新选择”。')));
+      return;
+    }
     if (!await _confirmPlan(plan, hdrSource: info.isHdr) || !mounted) {
       return;
     }
@@ -465,17 +596,26 @@ class _HomeScreenState extends State<HomeScreen> {
       _taskPhase = TaskPhase.preparing;
       _etaStalled = false;
       _errorText = null;
+      _lastFailureCode = null;
+      _lastVideoDecoderMode = requestedVideoDecoderModeFromWireName(
+        videoDecoderMode,
+      );
       _outputInfo = null;
       _outputPublished = false;
       _publishedOutputUri = null;
       _publishedOutputFileName = null;
       _taskId = null;
+      _taskOutputLocationLabel = verifiedLocation.label;
+      _actualVideoEncodingMode = ActualVideoEncodingMode.unknown;
     });
     _startTiming(startedAt);
 
     final request = plan.toProcessRequest(
       uri: uri,
       outputFileName: _buildOutputFileName(info.fileName, startedAt),
+      outputLocationLabel: verifiedLocation.label,
+      outputTreeUri: verifiedLocation.treeUri,
+      videoDecoderMode: videoDecoderMode,
     );
     _publishedOutputFileName = request.outputFileName;
     try {
@@ -538,9 +678,9 @@ class _HomeScreenState extends State<HomeScreen> {
       if (plan.hasLowSavings) '该视频本身已经比较精简，压缩后可能节省不多。',
       if (plan.isOutsideVerifiedRange) '这个视频较大或较长，尚未经过完整验证，可能无法一次完成。',
       if (plan.usedCodecFallback && _selectedPreset != null)
-        '当前手机无法使用首选格式，将改用兼容模式；输出文件可能稍大。',
+        '当前手机无法使用首选格式，将改用 H.264 兼容格式；输出文件可能稍大。',
       if (plan.usedCodecFallback && _selectedPreset == null)
-        '当前手机无法使用你选择的 HEVC。继续后将改用 H.264 兼容模式，输出文件可能稍大。',
+        '当前手机无法使用你选择的 HEVC。继续后将改用 H.264 兼容格式，输出文件可能稍大。',
       if (hdrSource) 'HDR 视频会转换为普通画面，颜色可能略有变化。',
     ];
     if (warnings.isEmpty) return true;
@@ -605,6 +745,11 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!_isCurrent(generation) || _terminalEventHandled) {
       return;
     }
+    _flow.update(() {
+      _lastVideoDecoderMode = event.videoDecoderMode;
+      _actualVideoEncodingMode = event.actualVideoEncodingMode;
+      _taskOutputLocationLabel = event.outputLocationLabel;
+    });
     switch (event.state) {
       case TaskState.running:
         final nextPercent = event.percent.clamp(0, 100).toDouble();
@@ -655,6 +800,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case TaskState.failed:
         _terminalEventHandled = true;
         final code = _stableCode(event.errorCode);
+        _lastFailureCode = code;
         final message = _messageForCode(
           code,
           event.errorMessage,
@@ -715,7 +861,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _flow.update(() {
         _finishing = false;
         _processing = false;
-        _errorText = '压缩文件已经保存到相册，但暂时无法显示文件信息。';
+        _errorText = '压缩文件已经保存到 $_taskOutputLocationLabel，但暂时无法显示文件信息。';
       });
       _activeGeneration = null;
       _logError(
@@ -875,11 +1021,15 @@ class _HomeScreenState extends State<HomeScreen> {
       _selectedUri = null;
       _taskId = null;
       _errorText = null;
+      _lastFailureCode = null;
+      _lastVideoDecoderMode = RequestedVideoDecoderMode.hardware;
       _sourceInfo = null;
       _outputInfo = null;
       _outputPublished = false;
       _publishedOutputUri = null;
       _publishedOutputFileName = null;
+      _actualVideoEncodingMode = ActualVideoEncodingMode.unknown;
+      _taskOutputLocationLabel = _outputLocation.label;
       _selectedFromGallery = false;
       _sourceDeleted = false;
       _mediaActionBusy = false;
@@ -1084,8 +1234,17 @@ class _HomeScreenState extends State<HomeScreen> {
                           sourceInfo != null &&
                           _compressionPlan?.isSupported == true &&
                           !_outputPublished &&
+                          _lastFailureCode !=
+                              'COMPATIBILITY_DECODER_UNAVAILABLE' &&
                           !_progressStreamClosed,
-                      onRetry: _interactionLocked ? null : _compress,
+                      onRetry: _interactionLocked ? null : _retryLastMode,
+                      canCompatibilityRetry:
+                          _lastFailureCode == 'VIDEO_DECODING_FAILED' &&
+                          _lastVideoDecoderMode ==
+                              RequestedVideoDecoderMode.hardware,
+                      onCompatibilityRetry: _interactionLocked
+                          ? null
+                          : _retryWithCompatibilityMode,
                       onReset: _interactionLocked ? null : _reset,
                     ),
                   ],
@@ -1116,7 +1275,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           ? '无法检查手机的处理能力，请重新选择视频或重启应用。'
                           : _compressionPlan?.isSupported == false
                           ? '当前手机没有可用的兼容处理方式。'
+                          : _outputLocationLoading
+                          ? '正在检查保存位置…'
+                          : !_outputLocation.writable
+                          ? '保存文件夹权限已失效，请重新选择。'
                           : null,
+                      outputLocation: _outputLocation,
+                      outputLocationBusy:
+                          _outputLocationLoading || _selectingOutputLocation,
                       onPresetChanged: (value) =>
                           _changeSettings(() => _selectedPreset = value),
                       onResolutionChanged: (value) =>
@@ -1129,9 +1295,17 @@ class _HomeScreenState extends State<HomeScreen> {
                           _changeSettings(() => _customAudioMode = value),
                       onAudioBitrateChanged: (value) =>
                           _changeSettings(() => _customAudioBitrate = value),
+                      onChooseOutputLocation: _interactionLocked
+                          ? null
+                          : _chooseOutputFolder,
+                      onUseDefaultOutputLocation: _interactionLocked
+                          ? null
+                          : _useDefaultOutputLocation,
                       onCompress:
                           !_progressStreamClosed &&
                               !_capabilitiesLoading &&
+                              !_outputLocationLoading &&
+                              _outputLocation.writable &&
                               _compressionPlan?.isSupported == true
                           ? _compress
                           : null,
@@ -1150,6 +1324,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           ? TaskPhase.cancelling
                           : _taskPhase,
                       cancelling: _cancelling,
+                      outputLocationLabel: _taskOutputLocationLabel,
+                      actualVideoEncodingMode: _actualVideoEncodingMode,
                       onCancel: _processing && _taskId != null && !_cancelling
                           ? _cancelTask
                           : null,
@@ -1160,7 +1336,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           : switch (_taskPhase) {
                               TaskPhase.preparing => '正在准备视频…',
                               TaskPhase.encoding => '正在压缩视频，可以切换应用或熄屏',
-                              TaskPhase.publishing => '正在保存到系统相册…',
+                              TaskPhase.publishing =>
+                                '正在保存到 $_taskOutputLocationLabel…',
                               TaskPhase.cancelling => '正在取消并清理未完成文件…',
                               TaskPhase.finished => '正在确认保存结果…',
                             },
@@ -1174,6 +1351,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(height: 16),
                     _PublishedResultFallbackCard(
                       outputFileName: _publishedOutputFileName!,
+                      outputLocationLabel: _taskOutputLocationLabel,
+                      actualVideoEncodingMode: _actualVideoEncodingMode,
                       busy: _mediaActionBusy,
                       onOpen: _openOutput,
                       onShare: _shareOutput,
@@ -1185,6 +1364,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     _SuccessCard(
                       sourceInfo: sourceInfo,
                       outputInfo: outputInfo,
+                      outputLocationLabel: _taskOutputLocationLabel,
+                      actualVideoEncodingMode: _actualVideoEncodingMode,
                       busy: _mediaActionBusy,
                       canDeleteOriginal:
                           _selectedFromGallery && !_sourceDeleted,
@@ -1454,6 +1635,8 @@ class _ProgressCard extends StatelessWidget {
     required this.etaStalled,
     required this.phase,
     required this.cancelling,
+    required this.outputLocationLabel,
+    required this.actualVideoEncodingMode,
     required this.onCancel,
   });
 
@@ -1464,6 +1647,8 @@ class _ProgressCard extends StatelessWidget {
   final bool etaStalled;
   final TaskPhase phase;
   final bool cancelling;
+  final String outputLocationLabel;
+  final ActualVideoEncodingMode actualVideoEncodingMode;
   final VoidCallback? onCancel;
 
   @override
@@ -1472,7 +1657,7 @@ class _ProgressCard extends StatelessWidget {
     final safePercent = percent.clamp(0, 100).toDouble();
     final remainingText = switch (phase) {
       TaskPhase.preparing => '正在准备',
-      TaskPhase.publishing => '正在保存到相册',
+      TaskPhase.publishing => '正在保存到 $outputLocationLabel',
       TaskPhase.cancelling => '正在取消',
       TaskPhase.finished => '正在确认保存结果',
       TaskPhase.encoding when etaStalled => '正在重新估算',
@@ -1531,6 +1716,16 @@ class _ProgressCard extends StatelessWidget {
               ).textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
             ),
             const SizedBox(height: 4),
+            Text(
+              '保存到：$outputLocationLabel',
+              key: const ValueKey<String>('processing-output-location'),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              actualVideoEncodingMode.label,
+              key: const ValueKey<String>('actual-video-encoding-mode'),
+            ),
+            const SizedBox(height: 4),
             Row(
               children: <Widget>[
                 Expanded(
@@ -1547,7 +1742,7 @@ class _ProgressCard extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              '处理期间可以熄屏或切换应用，请不要移动或删除原视频。',
+              '处理期间可以熄屏或切换应用；请避免同时播放其他视频，也不要移动或删除原视频。',
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
@@ -1586,12 +1781,16 @@ class _ErrorCard extends StatelessWidget {
     required this.message,
     required this.canRetry,
     required this.onRetry,
+    required this.canCompatibilityRetry,
+    required this.onCompatibilityRetry,
     required this.onReset,
   });
 
   final String message;
   final bool canRetry;
   final VoidCallback? onRetry;
+  final bool canCompatibilityRetry;
+  final VoidCallback? onCompatibilityRetry;
   final VoidCallback? onReset;
 
   @override
@@ -1629,6 +1828,12 @@ class _ErrorCard extends StatelessWidget {
               runSpacing: 8,
               children: <Widget>[
                 TextButton(onPressed: onReset, child: const Text('重新选择')),
+                if (canCompatibilityRetry)
+                  FilledButton(
+                    key: const ValueKey<String>('compatibility-retry'),
+                    onPressed: onCompatibilityRetry,
+                    child: const Text('使用兼容模式重试'),
+                  ),
                 if (canRetry)
                   FilledButton.tonal(
                     onPressed: onRetry,
@@ -1646,6 +1851,8 @@ class _ErrorCard extends StatelessWidget {
 class _PublishedResultFallbackCard extends StatelessWidget {
   const _PublishedResultFallbackCard({
     required this.outputFileName,
+    required this.outputLocationLabel,
+    required this.actualVideoEncodingMode,
     required this.busy,
     required this.onOpen,
     required this.onShare,
@@ -1653,6 +1860,8 @@ class _PublishedResultFallbackCard extends StatelessWidget {
   });
 
   final String outputFileName;
+  final String outputLocationLabel;
+  final ActualVideoEncodingMode actualVideoEncodingMode;
   final bool busy;
   final VoidCallback onOpen;
   final VoidCallback onShare;
@@ -1679,13 +1888,19 @@ class _PublishedResultFallbackCard extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              '系统相册 > Movies > VideoSlim > $outputFileName',
+              '$outputLocationLabel > $outputFileName',
               key: const ValueKey<String>('published-output-path'),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: colors.primary,
                 fontWeight: FontWeight.w700,
               ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              actualVideoEncodingMode.label,
+              key: const ValueKey<String>('result-video-encoding-mode'),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
             Text(
@@ -1723,6 +1938,8 @@ class _SuccessCard extends StatelessWidget {
   const _SuccessCard({
     required this.sourceInfo,
     required this.outputInfo,
+    required this.outputLocationLabel,
+    required this.actualVideoEncodingMode,
     required this.busy,
     required this.canDeleteOriginal,
     required this.sourceDeleted,
@@ -1734,6 +1951,8 @@ class _SuccessCard extends StatelessWidget {
 
   final VideoInfo sourceInfo;
   final VideoInfo outputInfo;
+  final String outputLocationLabel;
+  final ActualVideoEncodingMode actualVideoEncodingMode;
   final bool busy;
   final bool canDeleteOriginal;
   final bool sourceDeleted;
@@ -1781,12 +2000,18 @@ class _SuccessCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '系统相册 > Movies > VideoSlim > ${outputInfo.fileName}',
+              '$outputLocationLabel > ${outputInfo.fileName}',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: colors.primary,
                 fontWeight: FontWeight.w700,
               ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              actualVideoEncodingMode.label,
+              key: const ValueKey<String>('success-video-encoding-mode'),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 20),
             _ResultRow(
@@ -1921,9 +2146,11 @@ String _messageForCode(String code, String? _, {required String fallback}) {
     'SOURCE_PERMISSION_LOST' => '无法继续读取这个视频，请重新选择文件。',
     'SOURCE_UNAVAILABLE' => '所选视频已移动、删除或暂时不可用。',
     'SOURCE_PROVIDER_FAILED' => '手机无法持续读取这个视频，请重新选择或稍后重试。',
-    'VIDEO_DECODING_FAILED' => '手机在读取视频时中途停止，原视频没有被修改。',
+    'VIDEO_DECODING_FAILED' => '手机的视频解码器未能完成此次处理，原视频没有被修改。',
     'VIDEO_FORMAT_UNSUPPORTED' => '这台手机暂时无法读取这种视频格式。',
-    'VIDEO_ENCODING_FAILED' => '手机没能按当前设置完成压缩，可以改用兼容模式重试。',
+    'COMPATIBILITY_DECODER_UNAVAILABLE' => '这台手机没有可用于此视频的兼容处理方式。原视频没有被修改。',
+    'VIDEO_ENCODING_FAILED' => '手机没能按当前设置完成压缩。可按原设置重试，或返回调整格式或画质。',
+    'OUTPUT_PERMISSION_LOST' => '保存文件夹权限已失效，请重新选择保存位置。',
     'CANCELLED' => '压缩任务已取消。',
     'PICKER_BUSY' => '已有视频选择请求正在进行，请稍后再试。',
     _ => fallback,

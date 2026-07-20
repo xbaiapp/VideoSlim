@@ -46,6 +46,25 @@ class TaskRecoveryCodecTest {
         )
     }
 
+
+    @Test
+    fun `round trips an unverified SAF document allocation`() {
+        val record =
+            completeRecord().copy(
+                stage = RecoveryStage.ALLOCATED,
+                actualOutputDisplayName = null,
+                mediaStoreUri =
+                    "content://com.android.externalstorage.documents/tree/primary%3AMovies/" +
+                        "document/primary%3AMovies%2FVideoSlim%2Flecture.mp4",
+                legacyOutputPath = null,
+            )
+
+        assertEquals(
+            TaskRecoveryDecodeResult.Success(record),
+            TaskRecoveryCodec.decode(TaskRecoveryCodec.encode(record)),
+        )
+    }
+
     @Test
     fun `rejects corrupt unknown incomplete and traversal records`() {
         val encoded = TaskRecoveryCodec.encode(completeRecord())

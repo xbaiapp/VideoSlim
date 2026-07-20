@@ -8,6 +8,9 @@ internal data class TaskRuntimeSnapshot(
     val sourceUri: String,
     val outputFileName: String,
     val startedAtEpochMs: Long,
+    val outputLocationLabel: String = DEFAULT_OUTPUT_LOCATION_LABEL,
+    val videoDecoderMode: String = VideoDecoderMode.HARDWARE.wireName,
+    val actualVideoEncodingMode: String = VideoEncoderMode.UNKNOWN.wireName,
     val outputUri: String? = null,
     val errorCode: String? = null,
     val errorMessage: String? = null,
@@ -18,8 +21,11 @@ internal data class TaskRuntimeSnapshot(
             "percent" to percent,
             "state" to state,
             "phase" to phase,
+            "videoDecoderMode" to videoDecoderMode,
+            "actualVideoEncodingMode" to actualVideoEncodingMode,
             "outputUri" to outputUri,
             "outputFileName" to outputFileName,
+            "outputLocationLabel" to outputLocationLabel,
             "errorCode" to errorCode,
             "errorMessage" to errorMessage,
         )
@@ -44,6 +50,7 @@ internal data class TaskRuntimeSnapshot(
         const val PHASE_PUBLISHING = "publishing"
         const val PHASE_CANCELLING = "cancelling"
         const val PHASE_FINISHED = "finished"
+        const val DEFAULT_OUTPUT_LOCATION_LABEL = "系统相册 > Movies > VideoSlim"
     }
 }
 
@@ -63,10 +70,16 @@ internal class ProcessingRegistry {
         sourceUri: String,
         outputFileName: String,
         startedAtEpochMs: Long,
+        outputLocationLabel: String = TaskRuntimeSnapshot.DEFAULT_OUTPUT_LOCATION_LABEL,
+        videoDecoderMode: String = VideoDecoderMode.HARDWARE.wireName,
     ): TaskRuntimeSnapshot {
         require(taskId.isNotBlank()) { "taskId must not be blank" }
         require(sourceUri.isNotBlank()) { "sourceUri must not be blank" }
         require(outputFileName.isNotBlank()) { "outputFileName must not be blank" }
+        require(outputLocationLabel.isNotBlank()) { "outputLocationLabel must not be blank" }
+        require(videoDecoderMode in ALLOWED_VIDEO_DECODER_MODES) {
+            "Unknown video decoder mode: $videoDecoderMode"
+        }
         require(startedAtEpochMs >= 0L) { "startedAtEpochMs must not be negative" }
         val snapshot: TaskRuntimeSnapshot
         val listeners: List<(TaskRuntimeSnapshot) -> Unit>
@@ -80,6 +93,8 @@ internal class ProcessingRegistry {
                     phase = TaskRuntimeSnapshot.PHASE_PREPARING,
                     sourceUri = sourceUri,
                     outputFileName = outputFileName,
+                    outputLocationLabel = outputLocationLabel,
+                    videoDecoderMode = videoDecoderMode,
                     startedAtEpochMs = startedAtEpochMs,
                 )
             current = snapshot
@@ -97,10 +112,14 @@ internal class ProcessingRegistry {
         errorCode: String? = null,
         errorMessage: String? = null,
         phase: String? = null,
+        actualVideoEncodingMode: String? = null,
     ): Boolean {
         require(percent.isFinite() && percent in 0.0..100.0) { "percent must be finite and in range" }
         require(state in ALLOWED_STATES) { "Unknown task state: $state" }
         require(phase == null || phase in ALLOWED_PHASES) { "Unknown task phase: $phase" }
+        require(actualVideoEncodingMode == null || actualVideoEncodingMode in ALLOWED_VIDEO_ENCODING_MODES) {
+            "Unknown video encoding mode: $actualVideoEncodingMode"
+        }
         val updated: TaskRuntimeSnapshot
         val listeners: List<(TaskRuntimeSnapshot) -> Unit>
         synchronized(lock) {
@@ -118,6 +137,8 @@ internal class ProcessingRegistry {
                     percent = monotonicPercent,
                     state = state,
                     phase = phase ?: previous.phase,
+                    actualVideoEncodingMode =
+                        actualVideoEncodingMode ?: previous.actualVideoEncodingMode,
                     outputUri = outputUri,
                     errorCode = errorCode,
                     errorMessage = errorMessage,
@@ -240,5 +261,9 @@ internal class ProcessingRegistry {
                 TaskRuntimeSnapshot.PHASE_CANCELLING,
                 TaskRuntimeSnapshot.PHASE_FINISHED,
             )
+        val ALLOWED_VIDEO_ENCODING_MODES =
+            VideoEncoderMode.entries.mapTo(mutableSetOf()) { it.wireName }
+        val ALLOWED_VIDEO_DECODER_MODES =
+            VideoDecoderMode.entries.mapTo(mutableSetOf()) { it.wireName }
     }
 }

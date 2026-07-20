@@ -53,8 +53,11 @@ void main() {
         'percent': 100.0,
         'state': 'success',
         'phase': 'encoding',
+        'videoDecoderMode': 'hardware',
+        'actualVideoEncodingMode': 'unknown',
         'outputUri': 'content://media/output/2',
         'outputFileName': 'actual-output.mp4',
+        'outputLocationLabel': '系统相册 > Movies > VideoSlim',
         'errorCode': null,
         'errorMessage': null,
       });

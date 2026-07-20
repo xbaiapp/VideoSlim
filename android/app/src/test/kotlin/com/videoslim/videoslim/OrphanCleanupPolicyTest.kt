@@ -64,7 +64,7 @@ class OrphanCleanupPolicyTest {
 
         assertEquals(CleanupAction.DELETE, scopedAction(record, pending))
         assertEquals(
-            CleanupAction.KEEP,
+            CleanupAction.DELETE,
             scopedAction(record, pending.copy(isPending = 0)),
         )
         assertEquals(
@@ -104,6 +104,51 @@ class OrphanCleanupPolicyTest {
         assertEquals(
             CleanupAction.SKIP_UNSAFE,
             scopedAction(scopedRecord().copy(mediaStoreUri = "content://other/42"), null),
+        )
+    }
+
+    @Test
+    fun `unverified SAF allocation deletes only its exact safe document`() {
+        val uri =
+            "content://com.android.externalstorage.documents/tree/primary%3AMovies/" +
+                "document/primary%3AMovies%2FVideoSlim%2Flecture.mp4"
+        val record =
+            scopedRecord().copy(
+                stage = RecoveryStage.ALLOCATED,
+                actualOutputDisplayName = null,
+                mediaStoreUri = uri,
+            )
+        val observed = DocumentOutputEntry(uri = uri, displayName = "lecture.mp4")
+
+        assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.documentAction(record, observed))
+        assertEquals(CleanupAction.ALREADY_ABSENT, OrphanCleanupPolicy.documentAction(record, null))
+        assertEquals(
+            CleanupAction.SKIP_UNSAFE,
+            OrphanCleanupPolicy.documentAction(record, observed.copy(uri = "$uri-other")),
+        )
+        assertEquals(
+            CleanupAction.SKIP_UNSAFE,
+            OrphanCleanupPolicy.documentAction(record, observed.copy(displayName = "../victim.mp4")),
+        )
+    }
+
+    @Test
+    fun `completed SAF document is preserved while incomplete exact document is deleted`() {
+        val uri = "content://provider.example/document/lecture"
+        val record =
+            scopedRecord().copy(
+                mediaStoreUri = uri,
+                actualOutputDisplayName = "lecture.mp4",
+            )
+        val observed = DocumentOutputEntry(uri = uri, displayName = "lecture.mp4")
+
+        assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.documentAction(record, observed))
+        assertEquals(
+            CleanupAction.KEEP,
+            OrphanCleanupPolicy.documentAction(
+                record.copy(stage = RecoveryStage.PUBLISHED),
+                observed,
+            ),
         )
     }
 

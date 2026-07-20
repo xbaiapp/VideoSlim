@@ -14,9 +14,11 @@ class MediaPublicationCopyTest {
         val source = ByteArray(37) { it.toByte() }
         val output = ByteArrayOutputStream()
 
-        copyPublicationBytes(ByteArrayInputStream(source), output, { false }, bufferSize = 8)
+        val copied =
+            copyPublicationBytes(ByteArrayInputStream(source), output, { false }, bufferSize = 8)
 
         assertArrayEquals(source, output.toByteArray())
+        assertEquals(source.size.toLong(), copied)
     }
 
     @Test

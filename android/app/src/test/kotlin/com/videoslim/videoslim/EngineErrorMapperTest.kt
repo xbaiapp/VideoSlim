@@ -104,6 +104,7 @@ class EngineErrorMapperTest {
                 "percent" to 100.0,
                 "state" to "success",
                 "phase" to "finished",
+                "actualVideoEncodingMode" to "unknown",
                 "outputUri" to "content://media/output/7",
                 "errorCode" to null,
                 "errorMessage" to null,

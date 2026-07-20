@@ -19,6 +19,8 @@ final class CompressionPlan {
     required this.audioBitrate,
     required this.audioBitrateIsEstimated,
     required this.estimatedOutputBytes,
+    required this.estimatedOutputMinBytes,
+    required this.estimatedOutputMaxBytes,
     required this.hasLowSavings,
     required this.isOutsideVerifiedRange,
     required this.usedCodecFallback,
@@ -55,6 +57,12 @@ final class CompressionPlan {
   /// Estimated output bytes, including the planned or copied audio track.
   final int estimatedOutputBytes;
 
+  /// Conservative lower bound for hardware VBR output.
+  final int estimatedOutputMinBytes;
+
+  /// Conservative upper bound used for storage guidance.
+  final int estimatedOutputMaxBytes;
+
   /// Whether target video bitrate is at least 90% of source video bitrate.
   final bool hasLowSavings;
 
@@ -74,6 +82,9 @@ final class CompressionPlan {
   ProcessRequest toProcessRequest({
     required String uri,
     required String outputFileName,
+    String outputLocationLabel = '系统相册 > Movies > VideoSlim',
+    String? outputTreeUri,
+    String videoDecoderMode = 'hardware',
   }) {
     if (!isSupported) {
       throw StateError('Cannot create a request for unsupported plan');
@@ -81,7 +92,10 @@ final class CompressionPlan {
     return ProcessRequest(
       uri: uri,
       outputFileName: outputFileName,
+      outputLocationLabel: outputLocationLabel,
+      outputTreeUri: outputTreeUri,
       videoCodec: videoCodec.wireName,
+      videoDecoderMode: videoDecoderMode,
       videoBitrate: videoBitrate,
       longEdge: effectiveLongEdge,
       audioMode: audioMode.wireName,
@@ -104,6 +118,10 @@ final class CompressionPlanner {
 
   /// Explicit fallback when a copied source audio track has no reported rate.
   static const int estimatedCopyAudioBitrate = 128000;
+
+  /// Hardware VBR may substantially undershoot or overshoot its target bitrate.
+  static const int vbrLowerPercent = 80;
+  static const int vbrUpperPercent = 200;
 
   /// Maximum duration in the verified product range.
   static const int verifiedDurationMs = 6 * 60 * 60 * 1000;
@@ -153,11 +171,30 @@ final class CompressionPlanner {
     }
 
     final audio = _resolveAudio(source: source, settings: settings);
-    final estimatedOutputBytes = _multiplyDivideFloor(
-      videoBitrate + audio.bitrate,
+    final videoBytes = _multiplyDivideFloor(
+      videoBitrate,
       source.durationMs,
       8000,
     );
+    final audioBytes = _multiplyDivideFloor(
+      audio.bitrate,
+      source.durationMs,
+      8000,
+    );
+    final nominalMediaBytes = videoBytes + audioBytes;
+    final proportionalOverhead = nominalMediaBytes ~/ 100;
+    final containerOverhead = proportionalOverhead < 4 * 1024 * 1024
+        ? 4 * 1024 * 1024
+        : proportionalOverhead;
+    final estimatedOutputBytes = nominalMediaBytes + containerOverhead;
+    final estimatedOutputMinBytes =
+        _multiplyDivideFloor(videoBytes, vbrLowerPercent, 100) +
+        audioBytes +
+        containerOverhead;
+    final estimatedOutputMaxBytes =
+        _multiplyDivideFloor(videoBytes, vbrUpperPercent, 100) +
+        _multiplyDivideFloor(audioBytes, 110, 100) +
+        containerOverhead;
 
     return CompressionPlan(
       settings: settings,
@@ -170,6 +207,8 @@ final class CompressionPlanner {
       audioBitrate: audio.bitrate,
       audioBitrateIsEstimated: audio.isEstimated,
       estimatedOutputBytes: estimatedOutputBytes,
+      estimatedOutputMinBytes: estimatedOutputMinBytes,
+      estimatedOutputMaxBytes: estimatedOutputMaxBytes,
       hasLowSavings: _productAtLeast(videoBitrate, 10, source.videoBitrate, 9),
       isOutsideVerifiedRange:
           source.durationMs > verifiedDurationMs ||

@@ -1,6 +1,46 @@
 /// Lifecycle state for a processing task.
 enum TaskState { idle, running, success, failed, cancelled }
 
+/// The platform classification of the encoder created for this task.
+enum ActualVideoEncodingMode {
+  unknown('unknown', '实际编码：尚未确认'),
+  explicitHardware('explicit_hardware', '实际编码：硬件（系统已确认）'),
+  ambiguousVendor('ambiguous_vendor', '实际编码：厂商实现（硬件状态未确认）'),
+  software('software', '实际编码：软件');
+
+  const ActualVideoEncodingMode(this.wireName, this.label);
+
+  final String wireName;
+  final String label;
+}
+
+ActualVideoEncodingMode actualVideoEncodingModeFromWireName(Object? value) =>
+    ActualVideoEncodingMode.values.firstWhere(
+      (mode) => mode.wireName == value,
+      orElse: () => throw FormatException(
+        'Unknown ActualVideoEncodingMode wire name: $value',
+      ),
+    );
+
+/// Input video decoder mode explicitly requested for a task.
+enum RequestedVideoDecoderMode {
+  hardware('hardware'),
+  software('software');
+
+  const RequestedVideoDecoderMode(this.wireName);
+
+  final String wireName;
+}
+
+RequestedVideoDecoderMode requestedVideoDecoderModeFromWireName(
+  Object? value,
+) => RequestedVideoDecoderMode.values.firstWhere(
+  (mode) => mode.wireName == value,
+  orElse: () => throw FormatException(
+    'Unknown RequestedVideoDecoderMode wire name: $value',
+  ),
+);
+
 /// Current user-visible phase inside a processing task.
 enum TaskPhase { preparing, encoding, publishing, cancelling, finished }
 
@@ -53,8 +93,11 @@ class ProgressEvent {
     required this.percent,
     required this.state,
     this.phase = TaskPhase.encoding,
+    this.videoDecoderMode = RequestedVideoDecoderMode.hardware,
+    this.actualVideoEncodingMode = ActualVideoEncodingMode.unknown,
     this.outputUri,
     this.outputFileName,
+    this.outputLocationLabel = '系统相册 > Movies > VideoSlim',
     this.errorCode,
     this.errorMessage,
   }) : assert(taskId != ''),
@@ -73,8 +116,16 @@ class ProgressEvent {
       percent: (map['percent'] as num).toDouble(),
       state: state,
       phase: taskPhaseFromWireName(map['phase']),
+      videoDecoderMode: requestedVideoDecoderModeFromWireName(
+        map['videoDecoderMode'] ?? 'hardware',
+      ),
+      actualVideoEncodingMode: actualVideoEncodingModeFromWireName(
+        map['actualVideoEncodingMode'] ?? 'unknown',
+      ),
       outputUri: map['outputUri'] as String?,
       outputFileName: map['outputFileName'] as String?,
+      outputLocationLabel:
+          map['outputLocationLabel'] as String? ?? '系统相册 > Movies > VideoSlim',
       errorCode: map['errorCode'] as String?,
       errorMessage: map['errorMessage'] as String?,
     );
@@ -92,11 +143,20 @@ class ProgressEvent {
   /// Current preparation, compression, save, or cancellation phase.
   final TaskPhase phase;
 
+  /// Input decoder mode explicitly requested for this task.
+  final RequestedVideoDecoderMode videoDecoderMode;
+
+  /// Classification of the video encoder created by Media3.
+  final ActualVideoEncodingMode actualVideoEncodingMode;
+
   /// Published output URI after success, when available.
   final String? outputUri;
 
-  /// Actual output display name allocated by MediaStore.
+  /// Actual output display name allocated by the output provider.
   final String? outputFileName;
+
+  /// User-facing destination label, never used as an authority grant.
+  final String outputLocationLabel;
 
   /// Stable engine error code after failure, when available.
   final String? errorCode;
@@ -110,8 +170,11 @@ class ProgressEvent {
     'percent': percent,
     'state': state.wireName,
     'phase': phase.wireName,
+    'videoDecoderMode': videoDecoderMode.wireName,
+    'actualVideoEncodingMode': actualVideoEncodingMode.wireName,
     'outputUri': outputUri,
     'outputFileName': outputFileName,
+    'outputLocationLabel': outputLocationLabel,
     'errorCode': errorCode,
     'errorMessage': errorMessage,
   };

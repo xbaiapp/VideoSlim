@@ -26,8 +26,11 @@ class ProcessingRegistryTest {
                 "percent" to 0.0,
                 "state" to "running",
                 "phase" to "preparing",
+                "videoDecoderMode" to "hardware",
+                "actualVideoEncodingMode" to "unknown",
                 "outputUri" to null,
                 "outputFileName" to "source_slim.mp4",
+                "outputLocationLabel" to "系统相册 > Movies > VideoSlim",
                 "errorCode" to null,
                 "errorMessage" to null,
             ),
@@ -37,6 +40,31 @@ class ProcessingRegistryTest {
         assertEquals("source_slim.mp4", snapshot.toSnapshotMap()["outputFileName"])
         assertEquals(1234L, snapshot.toSnapshotMap()["startedAtEpochMs"])
         assertFalse(snapshot.toSnapshotMap().containsKey("cancelling"))
+    }
+
+    @Test
+    fun `requested decoder mode is immutable and strictly validated`() {
+        val registry = ProcessingRegistry()
+        val snapshot =
+            registry.reserve(
+                taskId = "software-task",
+                sourceUri = "content://source",
+                outputFileName = "output.mp4",
+                startedAtEpochMs = 1L,
+                videoDecoderMode = VideoDecoderMode.SOFTWARE.wireName,
+            )
+
+        assertEquals("software", snapshot.videoDecoderMode)
+        assertEquals("software", snapshot.toProgressMap()["videoDecoderMode"])
+        assertRejected {
+            ProcessingRegistry().reserve(
+                taskId = "invalid-task",
+                sourceUri = "content://source",
+                outputFileName = "output.mp4",
+                startedAtEpochMs = 1L,
+                videoDecoderMode = "automatic",
+            )
+        }
     }
 
     @Test

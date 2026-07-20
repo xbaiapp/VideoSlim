@@ -161,11 +161,14 @@ class TranscodePlanTest {
             ).storageEstimate
         assertEquals(0L, remove.audioBytes)
 
-        assertEquals(16L * 1_024L * 1_024L, copy.overheadBytes)
+        assertEquals(4L * 1_024L * 1_024L, copy.overheadBytes)
         assertEquals(copy.videoBytes + copy.audioBytes + copy.overheadBytes, copy.outputBytes)
-        assertEquals(copy.outputBytes + 32L * 1_024L * 1_024L, copy.cacheRequiredBytes)
-        assertEquals(copy.outputBytes + 32L * 1_024L * 1_024L, copy.publicRequiredBytes)
-        assertEquals(copy.outputBytes * 2L + 32L * 1_024L * 1_024L, copy.sharedPoolRequiredBytes)
+        assertEquals(copy.upperOutputBytes + 64L * 1_024L * 1_024L, copy.cacheRequiredBytes)
+        assertEquals(copy.upperOutputBytes + 64L * 1_024L * 1_024L, copy.publicRequiredBytes)
+        assertEquals(
+            copy.upperOutputBytes * 2L + 64L * 1_024L * 1_024L,
+            copy.sharedPoolRequiredBytes,
+        )
     }
 
     @Test
@@ -176,6 +179,8 @@ class TranscodePlanTest {
                 audioBytes = 50L,
                 overheadBytes = 50L,
                 outputBytes = 500L,
+                lowerOutputBytes = 450L,
+                upperOutputBytes = 500L,
                 cacheRequiredBytes = 550L,
                 publicRequiredBytes = 550L,
                 sharedPoolRequiredBytes = 1_050L,
@@ -187,6 +192,24 @@ class TranscodePlanTest {
         assertTrue(hasSufficientStorage(estimate, 1_050L, 1_050L, sharesStoragePool = true))
         assertFalse(hasSufficientStorage(estimate, 549L, 2_000L, sharesStoragePool = false))
         assertFalse(hasSufficientStorage(estimate, 2_000L, 549L, sharesStoragePool = false))
+        assertTrue(
+            hasSufficientStorage(
+                estimate,
+                cacheAvailableBytes = 550L,
+                publicAvailableBytes = 0L,
+                sharesStoragePool = true,
+                requiresPublicDestination = false,
+            ),
+        )
+        assertFalse(
+            hasSufficientStorage(
+                estimate,
+                cacheAvailableBytes = 549L,
+                publicAvailableBytes = Long.MAX_VALUE,
+                sharesStoragePool = false,
+                requiresPublicDestination = false,
+            ),
+        )
     }
 
     @Test
@@ -197,7 +220,7 @@ class TranscodePlanTest {
                 metadata = metadata(durationMs = 10_000, audioBitrate = null),
                 sdkInt = 35,
             ).storageEstimate
-        assertEquals(320_000L, unknownBitrate.audioBytes)
+        assertEquals(160_000L, unknownBitrate.audioBytes)
 
         val noAudio =
             TranscodePlan.create(

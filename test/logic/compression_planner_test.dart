@@ -27,7 +27,9 @@ void main() {
       expect(balanced.outputHeight, 1080);
       expect(balanced.audioBitrate, 128000);
       expect(balanced.audioBitrateIsEstimated, isFalse);
-      expect(balanced.estimatedOutputBytes, 1182600000);
+      expect(balanced.estimatedOutputBytes, 1194426000);
+      expect(balanced.estimatedOutputMinBytes, 969426000);
+      expect(balanced.estimatedOutputMaxBytes, 2325186000);
     });
 
     test('scales preset bitrate by output pixels from 1920x1080', () {
@@ -97,7 +99,7 @@ void main() {
         expect(plan.outputWidth, 854);
         expect(plan.outputHeight, 480);
         expect(plan.audioBitrate, 0);
-        expect(plan.estimatedOutputBytes, 3285000000);
+        expect(plan.estimatedOutputBytes, 3317850000);
         expect(
           plan
               .toProcessRequest(
@@ -108,8 +110,13 @@ void main() {
           <String, Object?>{
             'uri': 'content://source',
             'outputFileName': 'out.mp4',
+            'destination': <String, Object?>{
+              'treeUri': null,
+              'label': '系统相册 > Movies > VideoSlim',
+            },
             'video': <String, Object?>{
               'codec': 'h264',
+              'decoderMode': 'hardware',
               'bitrate': 7300000,
               'longEdge': 854,
               'crop': null,
@@ -133,7 +140,7 @@ void main() {
 
       expect(plan.audioBitrate, CompressionPlanner.estimatedCopyAudioBitrate);
       expect(plan.audioBitrateIsEstimated, isTrue);
-      expect(plan.estimatedOutputBytes, 1182600000);
+      expect(plan.estimatedOutputBytes, 1194426000);
     });
 
     test('does not invent audio bytes when the source has no audio track', () {
@@ -145,7 +152,7 @@ void main() {
 
       expect(plan.audioBitrate, 0);
       expect(plan.audioBitrateIsEstimated, isFalse);
-      expect(plan.estimatedOutputBytes, 1125000000);
+      expect(plan.estimatedOutputBytes, 1136250000);
     });
 
     test('flags low savings at 90 percent of source video bitrate', () {
@@ -212,8 +219,41 @@ void main() {
       );
 
       expect(plan.videoBitrate, 18000000);
-      expect(plan.estimatedOutputBytes, 49118400000);
+      expect(plan.estimatedOutputBytes, 49609584000);
     });
+
+    test(
+      'covers the observed long-video VBR overshoot with its upper bound',
+      () {
+        final plan = planner.plan(
+          source: source(
+            width: 720,
+            height: 1280,
+            durationMs: 5874290,
+            fileSizeBytes: 8885123162,
+            videoBitrate: 12100353,
+            audioBitrate: 96000,
+          ),
+          settings: const CompressionSettings.custom(
+            resolution: CompressionResolution.original,
+            videoCodec: VideoCodec.hevc,
+            videoBitrate: 1111111,
+            audioMode: CompressionAudioMode.copy,
+          ),
+          capabilities: allEncoders,
+        );
+
+        expect(plan.estimatedOutputMinBytes, 732053953);
+        expect(plan.estimatedOutputMaxBytes, 1718151336);
+        expect(
+          1400000000,
+          inInclusiveRange(
+            plan.estimatedOutputMinBytes,
+            plan.estimatedOutputMaxBytes,
+          ),
+        );
+      },
+    );
   });
 
   group('encoder capability planning', () {

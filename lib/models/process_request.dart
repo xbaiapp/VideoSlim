@@ -41,7 +41,10 @@ class ProcessRequest {
   const ProcessRequest({
     required this.uri,
     required this.outputFileName,
+    this.outputLocationLabel = '系统相册 > Movies > VideoSlim',
+    this.outputTreeUri,
     required this.videoCodec,
+    this.videoDecoderMode = 'hardware',
     required this.videoBitrate,
     this.longEdge,
     this.crop,
@@ -51,7 +54,10 @@ class ProcessRequest {
     this.audioBitrate,
   }) : assert(uri != ''),
        assert(outputFileName != ''),
+       assert(outputLocationLabel != ''),
+       assert(outputTreeUri == null || outputTreeUri != ''),
        assert(videoCodec == 'hevc' || videoCodec == 'h264'),
+       assert(videoDecoderMode == 'hardware' || videoDecoderMode == 'software'),
        assert(videoBitrate > 0),
        assert(longEdge == null || longEdge > 0),
        assert(trimStartMs == null || trimStartMs >= 0),
@@ -72,8 +78,17 @@ class ProcessRequest {
   /// Requested output display name.
   final String outputFileName;
 
+  /// User-facing destination shown before, during, and after the task.
+  final String outputLocationLabel;
+
+  /// Persisted SAF tree URI for a custom folder, or null for Movies/VideoSlim.
+  final String? outputTreeUri;
+
   /// Target video codec: `hevc` or `h264`.
   final String videoCodec;
+
+  /// Input decoder policy used by the native transformer.
+  final String videoDecoderMode;
 
   /// Target video bitrate in bits per second.
   final int videoBitrate;
@@ -100,8 +115,13 @@ class ProcessRequest {
   Map<String, Object?> toChannelMap() => <String, Object?>{
     'uri': uri,
     'outputFileName': outputFileName,
+    'destination': <String, Object?>{
+      'treeUri': outputTreeUri,
+      'label': outputLocationLabel,
+    },
     'video': <String, Object?>{
       'codec': videoCodec,
+      'decoderMode': videoDecoderMode,
       'bitrate': videoBitrate,
       'longEdge': longEdge,
       'crop': crop?.toChannelMap(),

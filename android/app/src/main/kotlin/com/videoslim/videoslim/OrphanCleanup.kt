@@ -4,9 +4,9 @@ import android.content.ContentResolver
 import android.content.Context
 import android.database.Cursor
 import android.net.Uri
-import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import java.io.File
 
 enum class CleanupAction {
@@ -22,6 +22,11 @@ data class ScopedMediaEntry(
     val relativePath: String?,
     val isPending: Int?,
     val ownerPackageName: String?,
+)
+
+internal data class DocumentOutputEntry(
+    val uri: String,
+    val displayName: String?,
 )
 
 internal data class LegacyMediaEntry(
@@ -68,8 +73,7 @@ internal object OrphanCleanupPolicy {
                 return CleanupAction.SKIP_UNSAFE
             }
             return when (observed.isPending) {
-                1 -> CleanupAction.DELETE
-                0 -> CleanupAction.KEEP
+                0, 1 -> CleanupAction.DELETE
                 else -> CleanupAction.SKIP_UNSAFE
             }
         }
@@ -141,6 +145,51 @@ internal object OrphanCleanupPolicy {
 
     fun isAppMediaVideoUri(value: String): Boolean = APP_MEDIA_VIDEO_URI.matches(value)
 
+    fun isSafDocumentUri(value: String): Boolean = SAF_DOCUMENT_URI.matches(value)
+
+    fun documentAction(
+        record: TaskRecoveryRecord,
+        observed: DocumentOutputEntry?,
+    ): CleanupAction {
+        val uri = record.mediaStoreUri
+        if (record.stage == RecoveryStage.ALLOCATED) {
+            if (
+                uri == null ||
+                record.actualOutputDisplayName != null ||
+                record.legacyOutputPath != null ||
+                !isSafDocumentUri(uri) ||
+                !isValidRecoveryTempFileName(record.tempFileName)
+            ) {
+                return CleanupAction.SKIP_UNSAFE
+            }
+            if (observed == null) return CleanupAction.ALREADY_ABSENT
+            return if (
+                observed.uri == uri &&
+                observed.displayName?.let(::isSafeOwnedOutputName) == true
+            ) {
+                CleanupAction.DELETE
+            } else {
+                CleanupAction.SKIP_UNSAFE
+            }
+        }
+        val actualName = record.actualOutputDisplayName
+        if (
+            uri == null ||
+            actualName == null ||
+            record.legacyOutputPath != null ||
+            !isSafDocumentUri(uri) ||
+            !isValidRecoveryTempFileName(record.tempFileName) ||
+            !isSafeOwnedOutputName(actualName)
+        ) {
+            return CleanupAction.SKIP_UNSAFE
+        }
+        if (observed == null) return CleanupAction.ALREADY_ABSENT
+        if (observed.uri != uri || observed.displayName != actualName) {
+            return CleanupAction.SKIP_UNSAFE
+        }
+        return if (record.stage == RecoveryStage.PUBLISHED) CleanupAction.KEEP else CleanupAction.DELETE
+    }
+
     private fun isDirectCanonicalChild(
         canonicalOutputDirectory: String,
         candidatePath: String,
@@ -168,6 +217,8 @@ internal object OrphanCleanupPolicy {
 
     private val APP_MEDIA_VIDEO_URI =
         Regex("^content://media/external/video/media/[0-9]+$")
+    private val SAF_DOCUMENT_URI =
+        Regex("^content://[^/]+/(?:tree/[^/]+/)?document/.+$")
 }
 
 /** Mutable per-run evidence suitable for a single bounded F19 log entry plus optional details. */
@@ -325,10 +376,13 @@ class OrphanCleanup(
             clearRecord(record, report)
             return
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            reconcileScopedRecord(record, report)
-        } else {
-            reconcileLegacyRecord(record, report)
+        when {
+            record.legacyOutputPath != null -> reconcileLegacyRecord(record, report)
+            OrphanCleanupPolicy.isAppMediaVideoUri(record.mediaStoreUri.orEmpty()) ->
+                reconcileScopedRecord(record, report)
+            OrphanCleanupPolicy.isSafDocumentUri(record.mediaStoreUri.orEmpty()) ->
+                reconcileDocumentRecord(record, report)
+            else -> unsafe(report, "task=${record.taskId} has an unsupported publication URI")
         }
     }
 
@@ -380,6 +434,48 @@ class OrphanCleanup(
             }
             CleanupAction.SKIP_UNSAFE ->
                 unsafe(report, "scoped output ownership could not be proven task=${record.taskId}")
+        }
+    }
+
+    private fun reconcileDocumentRecord(record: TaskRecoveryRecord, report: CleanupReport) {
+        val uri = record.mediaStoreUri!!
+        val query = queryDocumentEntry(uri, report) ?: return
+        when (OrphanCleanupPolicy.documentAction(record, query.entry)) {
+            CleanupAction.DELETE -> {
+                try {
+                    val count = resolver.delete(Uri.parse(uri), null, null)
+                    var deletionConfirmed = count > 0
+                    if (count > 0) {
+                        report.outputsDeleted += 1
+                        report.addDetail("deleted exact incomplete document output task=${record.taskId}")
+                    } else {
+                        val verification = queryDocumentEntry(uri, report)
+                        if (verification != null && verification.entry == null) {
+                            deletionConfirmed = true
+                            report.alreadyAbsent += 1
+                            report.addDetail("document output confirmed absent task=${record.taskId}")
+                        } else if (verification != null) {
+                            report.failures += 1
+                            report.addDetail("document output still exists after delete task=${record.taskId}")
+                        }
+                    }
+                    if (deletionConfirmed) clearRecord(record, report)
+                } catch (error: Throwable) {
+                    failure(report, "document output delete failed task=${record.taskId}", error)
+                }
+            }
+            CleanupAction.KEEP -> {
+                report.outputsPreserved += 1
+                report.addDetail("preserved completed document output task=${record.taskId}")
+                clearRecord(record, report)
+            }
+            CleanupAction.ALREADY_ABSENT -> {
+                report.alreadyAbsent += 1
+                report.addDetail("document output already absent task=${record.taskId}")
+                clearRecord(record, report)
+            }
+            CleanupAction.SKIP_UNSAFE ->
+                unsafe(report, "document output ownership could not be proven task=${record.taskId}")
         }
     }
 
@@ -466,6 +562,43 @@ class OrphanCleanup(
             report.addDetail("legacy output already absent task=${record.taskId}")
         }
         if (allClean) clearRecord(record, report)
+    }
+
+    private fun queryDocumentEntry(
+        uriString: String,
+        report: CleanupReport,
+    ): EntryQuery<DocumentOutputEntry>? {
+        val cursor =
+            try {
+                resolver.query(
+                    Uri.parse(uriString),
+                    arrayOf(OpenableColumns.DISPLAY_NAME),
+                    null,
+                    null,
+                    null,
+                )
+            } catch (error: Throwable) {
+                failure(report, "document output query failed", error)
+                return null
+            } ?: run {
+                report.failures += 1
+                report.addDetail("document output query returned null cursor")
+                return null
+            }
+        return cursor.use {
+            if (!it.moveToFirst()) return@use EntryQuery(null)
+            try {
+                EntryQuery(
+                    DocumentOutputEntry(
+                        uri = uriString,
+                        displayName = it.nullableString(OpenableColumns.DISPLAY_NAME),
+                    ),
+                )
+            } catch (error: Throwable) {
+                failure(report, "document output row could not be read", error)
+                null
+            }
+        }
     }
 
     private fun queryScopedEntry(uriString: String, report: CleanupReport): EntryQuery<ScopedMediaEntry>? {

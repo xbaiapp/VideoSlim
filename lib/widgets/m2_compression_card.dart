@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../logic/compression_planner.dart';
 import '../models/compression_settings.dart';
+import '../models/output_location.dart';
 import 'video_info_card.dart';
 
 class M2CompressionCard extends StatelessWidget {
@@ -17,6 +18,8 @@ class M2CompressionCard extends StatelessWidget {
     required this.capabilitiesLoading,
     required this.hdrSource,
     required this.disabledReason,
+    required this.outputLocation,
+    required this.outputLocationBusy,
     required this.onPresetChanged,
     required this.onResolutionChanged,
     required this.onCodecChanged,
@@ -24,6 +27,8 @@ class M2CompressionCard extends StatelessWidget {
     required this.onAudioModeChanged,
     required this.onAudioBitrateChanged,
     required this.onCompress,
+    required this.onChooseOutputLocation,
+    required this.onUseDefaultOutputLocation,
   });
 
   final CompressionPreset? selectedPreset;
@@ -36,6 +41,8 @@ class M2CompressionCard extends StatelessWidget {
   final bool capabilitiesLoading;
   final bool hdrSource;
   final String? disabledReason;
+  final OutputLocation outputLocation;
+  final bool outputLocationBusy;
   final ValueChanged<CompressionPreset?> onPresetChanged;
   final ValueChanged<CompressionResolution> onResolutionChanged;
   final ValueChanged<VideoCodec> onCodecChanged;
@@ -43,6 +50,8 @@ class M2CompressionCard extends StatelessWidget {
   final ValueChanged<CompressionAudioMode> onAudioModeChanged;
   final ValueChanged<int> onAudioBitrateChanged;
   final VoidCallback? onCompress;
+  final VoidCallback? onChooseOutputLocation;
+  final VoidCallback? onUseDefaultOutputLocation;
 
   @override
   Widget build(BuildContext context) {
@@ -124,6 +133,13 @@ class M2CompressionCard extends StatelessWidget {
                 warning: true,
               ),
             ],
+            const SizedBox(height: 14),
+            _OutputLocationPanel(
+              location: outputLocation,
+              busy: outputLocationBusy,
+              onChoose: onChooseOutputLocation,
+              onUseDefault: onUseDefaultOutputLocation,
+            ),
             const SizedBox(height: 18),
             FilledButton.icon(
               key: const ValueKey<String>('start-m2-compression'),
@@ -136,7 +152,7 @@ class M2CompressionCard extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             Text(
-              '开始后可切换应用或熄屏；持续通知会显示进度并提供取消入口。',
+              '开始后可切换应用或熄屏；请避免同时播放其他视频。持续通知会显示进度并提供取消入口。',
               textAlign: TextAlign.center,
               style: Theme.of(
                 context,
@@ -273,6 +289,84 @@ class _CustomSettings extends StatelessWidget {
   }
 }
 
+class _OutputLocationPanel extends StatelessWidget {
+  const _OutputLocationPanel({
+    required this.location,
+    required this.busy,
+    required this.onChoose,
+    required this.onUseDefault,
+  });
+
+  final OutputLocation location;
+  final bool busy;
+  final VoidCallback? onChoose;
+  final VoidCallback? onUseDefault;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      key: const ValueKey<String>('output-location-panel'),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: location.writable
+            ? colors.surfaceContainerLow
+            : colors.errorContainer,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Text(
+            '保存到',
+            style: Theme.of(
+              context,
+            ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            location.label,
+            key: const ValueKey<String>('output-location-label'),
+          ),
+          if (!location.writable) ...<Widget>[
+            const SizedBox(height: 6),
+            Text(
+              '这个文件夹的写入权限已失效，请重新选择。',
+              style: TextStyle(color: colors.onErrorContainer),
+            ),
+          ],
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              OutlinedButton.icon(
+                key: const ValueKey<String>('choose-output-location'),
+                onPressed: busy ? null : onChoose,
+                icon: busy
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.folder_open_outlined),
+                label: Text(
+                  location.isCustom && !location.writable ? '重新选择' : '自定义',
+                ),
+              ),
+              if (location.isCustom)
+                TextButton(
+                  key: const ValueKey<String>('use-default-output-location'),
+                  onPressed: busy ? null : onUseDefault,
+                  child: const Text('恢复默认'),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PlanSummary extends StatelessWidget {
   const _PlanSummary({required this.plan});
 
@@ -280,7 +374,7 @@ class _PlanSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final requiredBytes = (plan.estimatedOutputBytes * 3 + 1) ~/ 2;
+    final requiredBytes = plan.estimatedOutputMaxBytes * 2 + 64 * 1024 * 1024;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -294,7 +388,8 @@ class _PlanSummary extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(
-                '预估输出 ${formatFileSize(plan.estimatedOutputBytes)}',
+                '预估输出约 ${formatFileSize(plan.estimatedOutputMinBytes)}'
+                '–${formatFileSize(plan.estimatedOutputMaxBytes)}',
                 key: const ValueKey<String>('estimated-output-size'),
                 style: Theme.of(
                   context,
@@ -307,6 +402,8 @@ class _PlanSummary extends StatelessWidget {
                 '${(plan.videoBitrate / 1000000).toStringAsFixed(1)} Mbps',
               ),
               Text('建议至少保留 ${formatFileSize(requiredBytes)} 可用空间'),
+              const SizedBox(height: 4),
+              const Text('硬件 VBR 的实际码率可能明显偏离目标值，因此这里显示保守区间。'),
             ],
           ),
         ),
@@ -314,7 +411,7 @@ class _PlanSummary extends StatelessWidget {
           const SizedBox(height: 10),
           const _Notice(
             icon: Icons.swap_horiz_rounded,
-            text: '当前手机无法使用 HEVC，已改用 H.264 兼容模式并适当提高目标码率。',
+            text: '当前手机无法使用 HEVC，已改用 H.264 兼容格式并适当提高目标码率。',
             warning: true,
           ),
         ],

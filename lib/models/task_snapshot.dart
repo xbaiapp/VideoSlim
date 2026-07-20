@@ -10,6 +10,9 @@ final class TaskSnapshot {
     required this.percent,
     required this.sourceUri,
     required this.outputFileName,
+    this.outputLocationLabel = '系统相册 > Movies > VideoSlim',
+    this.videoDecoderMode = RequestedVideoDecoderMode.hardware,
+    this.actualVideoEncodingMode = ActualVideoEncodingMode.unknown,
     required this.startedAtEpochMs,
     this.outputUri,
     this.errorCode,
@@ -47,6 +50,15 @@ final class TaskSnapshot {
       percent: percent,
       sourceUri: _requiredNonEmptyString(map, 'sourceUri'),
       outputFileName: _requiredNonEmptyString(map, 'outputFileName'),
+      outputLocationLabel:
+          _optionalString(map, 'outputLocationLabel') ??
+          '系统相册 > Movies > VideoSlim',
+      videoDecoderMode: requestedVideoDecoderModeFromWireName(
+        map['videoDecoderMode'] ?? 'hardware',
+      ),
+      actualVideoEncodingMode: actualVideoEncodingModeFromWireName(
+        map['actualVideoEncodingMode'] ?? 'unknown',
+      ),
       startedAtEpochMs: startedAtEpochMs,
       outputUri: _optionalString(map, 'outputUri'),
       errorCode: _optionalString(map, 'errorCode'),
@@ -72,6 +84,15 @@ final class TaskSnapshot {
   /// Requested public output display name.
   final String outputFileName;
 
+  /// User-facing output destination label.
+  final String outputLocationLabel;
+
+  /// Input decoder mode explicitly requested for this task.
+  final RequestedVideoDecoderMode videoDecoderMode;
+
+  /// Classification of the encoder actually created for the task.
+  final ActualVideoEncodingMode actualVideoEncodingMode;
+
   /// Task start time as Unix epoch milliseconds.
   final int startedAtEpochMs;
 
@@ -96,6 +117,9 @@ final class TaskSnapshot {
     'percent': percent,
     'sourceUri': sourceUri,
     'outputFileName': outputFileName,
+    'outputLocationLabel': outputLocationLabel,
+    'videoDecoderMode': videoDecoderMode.wireName,
+    'actualVideoEncodingMode': actualVideoEncodingMode.wireName,
     'startedAtEpochMs': startedAtEpochMs,
     'outputUri': outputUri,
     'errorCode': errorCode,

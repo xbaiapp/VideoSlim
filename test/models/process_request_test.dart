@@ -22,8 +22,13 @@ void main() {
         expect(request.toChannelMap(), <String, Object?>{
           'uri': 'content://media/video/7',
           'outputFileName': 'slim.mp4',
+          'destination': <String, Object?>{
+            'treeUri': null,
+            'label': '系统相册 > Movies > VideoSlim',
+          },
           'video': <String, Object?>{
             'codec': 'hevc',
+            'decoderMode': 'hardware',
             'bitrate': 2500000,
             'longEdge': 1920,
             'crop': <String, int>{
@@ -54,8 +59,13 @@ void main() {
         expect(request.toChannelMap(), <String, Object?>{
           'uri': 'content://media/video/8',
           'outputFileName': 'balanced.mp4',
+          'destination': <String, Object?>{
+            'treeUri': null,
+            'label': '系统相册 > Movies > VideoSlim',
+          },
           'video': <String, Object?>{
             'codec': 'h264',
+            'decoderMode': 'hardware',
             'bitrate': 1800000,
             'longEdge': null,
             'crop': null,
@@ -66,6 +76,24 @@ void main() {
         });
       },
     );
+
+    test('serializes an explicit software decoder compatibility request', () {
+      const request = ProcessRequest(
+        uri: 'content://media/video/9',
+        outputFileName: 'compat.mp4',
+        videoCodec: 'hevc',
+        videoDecoderMode: 'software',
+        videoBitrate: 800000,
+        audioMode: 'reencode',
+        audioBitrate: 96000,
+      );
+
+      expect(
+        (request.toChannelMap()['video']!
+            as Map<String, Object?>)['decoderMode'],
+        'software',
+      );
+    });
 
     test('asserts on unsupported wire values and invalid dimensions', () {
       expect(
@@ -80,6 +108,17 @@ void main() {
       );
       expect(
         () => CropRect(left: 0, top: 0, width: 0, height: 100),
+        throwsA(isA<AssertionError>()),
+      );
+      expect(
+        () => ProcessRequest(
+          uri: 'content://video',
+          outputFileName: 'out.mp4',
+          videoCodec: 'hevc',
+          videoDecoderMode: 'automatic',
+          videoBitrate: 1000000,
+          audioMode: 'copy',
+        ),
         throwsA(isA<AssertionError>()),
       );
     });

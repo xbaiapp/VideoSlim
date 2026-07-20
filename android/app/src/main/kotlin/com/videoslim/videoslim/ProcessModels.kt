@@ -24,9 +24,14 @@ enum class EngineErrorCode(
     SOURCE_PERMISSION_LOST("SOURCE_PERMISSION_LOST", "无法继续读取这个视频，请重新选择文件"),
     SOURCE_UNAVAILABLE("SOURCE_UNAVAILABLE", "所选视频已移动、删除或暂时不可用"),
     SOURCE_PROVIDER_FAILED("SOURCE_PROVIDER_FAILED", "手机无法持续读取这个视频，请重新选择或稍后重试"),
-    VIDEO_DECODING_FAILED("VIDEO_DECODING_FAILED", "手机在读取视频时中途停止，原视频没有被修改"),
+    VIDEO_DECODING_FAILED("VIDEO_DECODING_FAILED", "手机的视频解码器未能完成此次处理，原视频没有被修改"),
     VIDEO_FORMAT_UNSUPPORTED("VIDEO_FORMAT_UNSUPPORTED", "这台手机暂时无法读取这种视频格式"),
-    VIDEO_ENCODING_FAILED("VIDEO_ENCODING_FAILED", "手机没能按当前设置完成压缩，可以改用兼容模式重试"),
+    COMPATIBILITY_DECODER_UNAVAILABLE(
+        "COMPATIBILITY_DECODER_UNAVAILABLE",
+        "这台手机没有可用于此视频的兼容处理方式，原视频没有被修改",
+    ),
+    VIDEO_ENCODING_FAILED("VIDEO_ENCODING_FAILED", "手机没能按当前设置完成压缩，可按原设置重试或调整格式和画质"),
+    OUTPUT_PERMISSION_LOST("OUTPUT_PERMISSION_LOST", "保存文件夹权限已失效，请重新选择保存位置"),
     CANCELLED("CANCELLED", "任务已取消"),
     UNKNOWN("UNKNOWN", "处理失败，请稍后重试"),
 }
@@ -45,6 +50,15 @@ internal class ProcessRequestException(
     val error: EngineFailure,
 ) : IllegalArgumentException(error.message)
 
+internal enum class VideoEncoderMode(
+    val wireName: String,
+) {
+    UNKNOWN("unknown"),
+    EXPLICIT_HARDWARE("explicit_hardware"),
+    AMBIGUOUS_VENDOR("ambiguous_vendor"),
+    SOFTWARE("software"),
+}
+
 internal enum class VideoCodec(
     val wireName: String,
 ) {
@@ -54,6 +68,16 @@ internal enum class VideoCodec(
 
     companion object {
         fun fromWireName(value: Any?): VideoCodec? = entries.firstOrNull { it.wireName == value }
+    }
+}
+
+internal enum class VideoDecoderMode(val wireName: String) {
+    HARDWARE("hardware"),
+    SOFTWARE("software"),
+    ;
+
+    companion object {
+        fun fromWireName(value: Any?): VideoDecoderMode? = entries.firstOrNull { it.wireName == value }
     }
 }
 
@@ -73,16 +97,28 @@ internal enum class AudioMode(
 internal data class ProcessRequest(
     val sourceUri: String,
     val outputFileName: String,
+    val outputTreeUri: String? = null,
+    val outputLocationLabel: String = "系统相册 > Movies > VideoSlim",
     val videoCodec: VideoCodec,
+    val videoDecoderMode: VideoDecoderMode = VideoDecoderMode.HARDWARE,
     val videoBitrate: Int,
     val longEdge: Int?,
     val audioMode: AudioMode,
     val audioBitrate: Int?,
 ) {
     companion object {
-        private val rootKeys = setOf("uri", "outputFileName", "video", "audio")
+        private val rootKeys = setOf("uri", "outputFileName", "destination", "video", "audio")
+        private val destinationKeys = setOf("treeUri", "label")
         private val videoKeys =
-            setOf("codec", "bitrate", "longEdge", "crop", "trimStartMs", "trimEndMs")
+            setOf(
+                "codec",
+                "decoderMode",
+                "bitrate",
+                "longEdge",
+                "crop",
+                "trimStartMs",
+                "trimEndMs",
+            )
         private val audioKeys = setOf("mode", "bitrate")
         private val allowedLongEdges = setOf(1_920, 1_280, 854)
         private val allowedAudioBitrates = setOf(192_000, 128_000, 96_000, 64_000)
@@ -99,10 +135,29 @@ internal data class ProcessRequest(
                 ?: invalid("outputFileName 必须是安全文件名")
             validateOutputName(outputFileName)
 
+            val destination =
+                root["destination"].exactMap("destination 必须是完整对象", destinationKeys)
+            val outputTreeUri = destination["treeUri"] as? String
+            if (outputTreeUri != null && !isValidContentVideoUri(outputTreeUri)) {
+                invalid("destination.treeUri 必须是系统文件夹 content:// URI 或 null")
+            }
+            val outputLocationLabel = destination["label"] as? String
+                ?: invalid("destination.label 必须是保存位置说明")
+            if (
+                outputLocationLabel.isBlank() ||
+                outputLocationLabel.length > MAX_OUTPUT_LOCATION_LABEL_LENGTH ||
+                outputLocationLabel.any { it.code < SPACE_CHARACTER_CODE || it.code == DELETE_CHARACTER_CODE }
+            ) {
+                invalid("destination.label 格式无效")
+            }
+
             val video = root["video"].exactMap("video 必须是完整对象", videoKeys)
             val videoCodec =
                 VideoCodec.fromWireName(video["codec"])
                     ?: invalid("video.codec 必须严格为 hevc 或 h264")
+            val videoDecoderMode =
+                VideoDecoderMode.fromWireName(video["decoderMode"])
+                    ?: invalid("video.decoderMode 必须严格为 hardware 或 software")
             val videoBitrate = video["bitrate"].positiveChannelInt("video.bitrate")
             val longEdge =
                 video["longEdge"]?.positiveChannelInt("video.longEdge")?.also { value ->
@@ -125,7 +180,10 @@ internal data class ProcessRequest(
             return ProcessRequest(
                 sourceUri = sourceUri,
                 outputFileName = outputFileName,
+                outputTreeUri = outputTreeUri,
+                outputLocationLabel = outputLocationLabel,
                 videoCodec = videoCodec,
+                videoDecoderMode = videoDecoderMode,
                 videoBitrate = videoBitrate,
                 longEdge = longEdge,
                 audioMode = audioMode,
@@ -213,6 +271,7 @@ internal data class ProcessRequest(
             )
 
         private const val MAX_OUTPUT_NAME_LENGTH = 255
+        private const val MAX_OUTPUT_LOCATION_LABEL_LENGTH = 512
         private const val MAX_OUTPUT_NAME_BYTES = 240
         private const val MP4_EXTENSION = ".mp4"
         private const val SPACE_CHARACTER_CODE = 0x20
@@ -255,6 +314,9 @@ internal object EngineErrorMapper {
 
     fun fromThrowable(error: Throwable): EngineFailure {
         val chain = error.causeChain()
+        if (chain.any { it is OutputPermissionException }) {
+            return EngineFailure(EngineErrorCode.OUTPUT_PERMISSION_LOST)
+        }
         if (chain.any { it is CancellationException }) {
             return EngineFailure(EngineErrorCode.CANCELLED)
         }
