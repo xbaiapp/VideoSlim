@@ -111,9 +111,9 @@ internal data class ProcessingNotificationText(
                 EngineErrorCode.SOURCE_CORRUPTED.wireName -> "无法处理这个视频，文件可能损坏或格式不受支持"
                 EngineErrorCode.VIDEO_DECODING_FAILED.wireName ->
                     if (snapshot.videoDecoderMode == VideoDecoderMode.HARDWARE.wireName) {
-                        "视频读取方式未能完成，可打开 VideoSlim 使用兼容模式重试"
+                        "视频读取方式未能完成，原视频没有被修改。可打开 VideoSlim 使用兼容模式重试"
                     } else {
-                        "软件读取方式未能完成，可打开 VideoSlim 查看详情"
+                        "软件读取方式未能完成，原视频没有被修改。可打开 VideoSlim 查看详情"
                     }
                 EngineErrorCode.VIDEO_FORMAT_UNSUPPORTED.wireName -> "这台手机暂时无法读取这种视频格式"
                 EngineErrorCode.COMPATIBILITY_DECODER_UNAVAILABLE.wireName ->
