@@ -58,7 +58,7 @@ internal object OrphanCleanupPolicy {
                 uri == null ||
                 record.actualOutputDisplayName != null ||
                 record.legacyOutputPath != null ||
-                !isAppMediaVideoUri(uri) ||
+                !isAppMediaUri(record.mediaKind, uri) ||
                 !isValidRecoveryTempFileName(record.tempFileName)
             ) {
                 return CleanupAction.SKIP_UNSAFE
@@ -71,9 +71,9 @@ internal object OrphanCleanupPolicy {
             uri == null ||
             actualName == null ||
             record.legacyOutputPath != null ||
-            !isAppMediaVideoUri(uri) ||
+            !isAppMediaUri(record.mediaKind, uri) ||
             !isValidRecoveryTempFileName(record.tempFileName) ||
-            !isSafeOwnedOutputName(actualName)
+            !isSafeOwnedOutputName(actualName, record.mediaKind)
         ) {
             return CleanupAction.SKIP_UNSAFE
         }
@@ -81,7 +81,7 @@ internal object OrphanCleanupPolicy {
         if (
             observed.uri != uri ||
             observed.displayName != actualName ||
-            observed.relativePath != SCOPED_RELATIVE_PATH ||
+            observed.relativePath != record.mediaKind.scopedRelativePath ||
             observed.ownerPackageName != expectedOwnerPackageName
         ) {
             return CleanupAction.SKIP_UNSAFE
@@ -109,9 +109,9 @@ internal object OrphanCleanupPolicy {
             uri == null ||
             actualName == null ||
             recordedPath == null ||
-            !isAppMediaVideoUri(uri) ||
+            !isAppMediaUri(record.mediaKind, uri) ||
             !isValidRecoveryTempFileName(record.tempFileName) ||
-            !isSafeOwnedOutputName(actualName) ||
+            !isSafeOwnedOutputName(actualName, record.mediaKind) ||
             !isDirectCanonicalChild(canonicalOutputDirectory, recordedPath, actualName)
         ) {
             return CleanupAction.SKIP_UNSAFE
@@ -132,7 +132,13 @@ internal object OrphanCleanupPolicy {
             isDirectCanonicalChild(canonicalOutputDirectory, observed.dataPath, name)
     }
 
-    fun isAppMediaVideoUri(value: String): Boolean = APP_MEDIA_VIDEO_URI.matches(value)
+    fun isAppMediaUri(
+        mediaKind: OutputMediaKind,
+        value: String,
+    ): Boolean = isMediaStoreUriForKind(mediaKind, value)
+
+    fun isAppMediaVideoUri(value: String): Boolean =
+        isAppMediaUri(OutputMediaKind.VIDEO_MP4, value)
 
     fun isSafDocumentUri(value: String): Boolean = SAF_DOCUMENT_URI.matches(value)
 
@@ -161,7 +167,7 @@ internal object OrphanCleanupPolicy {
             record.legacyOutputPath != null ||
             !isSafDocumentUri(uri) ||
             !isValidRecoveryTempFileName(record.tempFileName) ||
-            !isSafeOwnedOutputName(actualName)
+            !isSafeOwnedOutputName(actualName, record.mediaKind)
         ) {
             return CleanupAction.SKIP_UNSAFE
         }
@@ -188,17 +194,11 @@ internal object OrphanCleanupPolicy {
                 child.name == expectedName
         }.getOrDefault(false)
 
-    private fun isSafeOwnedOutputName(name: String): Boolean =
-        name.isNotBlank() &&
-            name.length <= 255 &&
-            name.endsWith(".mp4", ignoreCase = true) &&
-            name.substringBeforeLast('.', missingDelimiterValue = "").isNotBlank() &&
-            '/' !in name &&
-            '\\' !in name &&
-            name.none { it.code < 0x20 || it.code == 0x7f }
+    private fun isSafeOwnedOutputName(
+        name: String,
+        mediaKind: OutputMediaKind,
+    ): Boolean = mediaKind.isSafeDisplayName(name)
 
-    private val APP_MEDIA_VIDEO_URI =
-        Regex("^content://media/external/video/media/[0-9]+$")
     private val SAF_DOCUMENT_URI =
         Regex("^content://[^/]+/(?:tree/[^/]+/)?document/.+$")
 }
@@ -366,7 +366,7 @@ class OrphanCleanup(
         }
         when {
             record.legacyOutputPath != null -> reconcileLegacyRecord(record, report)
-            OrphanCleanupPolicy.isAppMediaVideoUri(record.mediaStoreUri.orEmpty()) ->
+            OrphanCleanupPolicy.isAppMediaUri(record.mediaKind, record.mediaStoreUri.orEmpty()) ->
                 reconcileScopedRecord(record, report)
             OrphanCleanupPolicy.isSafDocumentUri(record.mediaStoreUri.orEmpty()) ->
                 reconcileDocumentRecord(record, report)
@@ -375,7 +375,7 @@ class OrphanCleanup(
     }
 
     private fun reconcileScopedRecord(record: TaskRecoveryRecord, report: CleanupReport) {
-        if (!OrphanCleanupPolicy.isAppMediaVideoUri(record.mediaStoreUri.orEmpty())) {
+        if (!OrphanCleanupPolicy.isAppMediaUri(record.mediaKind, record.mediaStoreUri.orEmpty())) {
             unsafe(report, "task=${record.taskId} has a non-app MediaStore URI")
             return
         }
@@ -488,7 +488,12 @@ class OrphanCleanup(
         val outputDirectory =
             try {
                 File(
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                    Environment.getExternalStoragePublicDirectory(
+                        when (record.mediaKind) {
+                            OutputMediaKind.VIDEO_MP4 -> Environment.DIRECTORY_MOVIES
+                            OutputMediaKind.AUDIO_M4A -> Environment.DIRECTORY_MUSIC
+                        },
+                    ),
                     OUTPUT_DIRECTORY,
                 ).canonicalFile
             } catch (error: Throwable) {

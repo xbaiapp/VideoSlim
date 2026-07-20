@@ -65,6 +65,7 @@ internal class ProcessingService : Service() {
                         actualOutputDisplayName = target.actualDisplayName,
                         mediaStoreUri = target.mediaStoreUri,
                         canonicalLegacyOutputPath = target.canonicalLegacyOutputPath,
+                        mediaKind = target.mediaKind,
                     )
                     activeTaskId?.let { publicTaskId ->
                         ProcessingRuntime.registry.updateOutputFileName(

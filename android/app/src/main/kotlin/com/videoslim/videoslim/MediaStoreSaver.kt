@@ -19,6 +19,7 @@ data class PublicationTarget(
     val mediaStoreUri: String,
     val actualDisplayName: String,
     val canonicalLegacyOutputPath: String? = null,
+    val mediaKind: OutputMediaKind = OutputMediaKind.VIDEO_MP4,
 )
 
 interface PublicationObserver {
@@ -59,17 +60,46 @@ internal class MediaStoreSaver(
         requestedName: String,
         outputTreeUri: String? = null,
         shouldCancel: () -> Boolean = { false },
+    ): String =
+        publishMedia(
+            tempFile = tempFile,
+            requestedName = requestedName,
+            mediaKind = OutputMediaKind.VIDEO_MP4,
+            outputTreeUri = outputTreeUri,
+            shouldCancel = shouldCancel,
+        )
+
+    fun publishAudio(
+        tempFile: File,
+        requestedName: String,
+        outputTreeUri: String? = null,
+        shouldCancel: () -> Boolean = { false },
+    ): String =
+        publishMedia(
+            tempFile = tempFile,
+            requestedName = requestedName,
+            mediaKind = OutputMediaKind.AUDIO_M4A,
+            outputTreeUri = outputTreeUri,
+            shouldCancel = shouldCancel,
+        )
+
+    fun publishMedia(
+        tempFile: File,
+        requestedName: String,
+        mediaKind: OutputMediaKind,
+        outputTreeUri: String? = null,
+        shouldCancel: () -> Boolean = { false },
     ): String {
         if (!tempFile.isFile || tempFile.length() <= 0L) {
-            throw IOException("Temporary video output is missing or empty")
+            throw IOException("Temporary media output is missing or empty")
         }
-        validateRequestedName(requestedName)
+        validateRequestedName(requestedName, mediaKind)
         return if (outputTreeUri != null) {
-            publishDocumentTree(tempFile, requestedName, outputTreeUri, shouldCancel)
+            publishDocumentTree(tempFile, requestedName, mediaKind, outputTreeUri, shouldCancel)
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            publishScoped(tempFile, requestedName, shouldCancel)
+            publishScoped(tempFile, requestedName, mediaKind, shouldCancel)
         } else {
-            publishLegacy(tempFile, requestedName, shouldCancel)
+            publishLegacy(tempFile, requestedName, mediaKind, shouldCancel)
         }
     }
 
@@ -130,6 +160,7 @@ internal class MediaStoreSaver(
     private fun publishDocumentTree(
         tempFile: File,
         requestedName: String,
+        mediaKind: OutputMediaKind,
         outputTreeUri: String,
         shouldCancel: () -> Boolean,
     ): String {
@@ -142,15 +173,15 @@ internal class MediaStoreSaver(
             )
         val outputUri =
             try {
-                DocumentsContract.createDocument(resolver, rootUri, VIDEO_MIME_TYPE, requestedName)
-                    ?: throw IOException("Document provider could not create the output video")
+                DocumentsContract.createDocument(resolver, rootUri, mediaKind.mimeType, requestedName)
+                    ?: throw IOException("Document provider could not create the output media")
             } catch (error: SecurityException) {
                 throw OutputPermissionException("Output-folder permission was lost", error)
             }
         var target: PublicationTarget? = null
         try {
             publicationObserver.onPublicationUriAllocated(outputUri.toString())
-            val allocatedTarget = readDocumentPublicationTarget(outputUri)
+            val allocatedTarget = readDocumentPublicationTarget(outputUri, mediaKind)
             target = allocatedTarget
             publicationObserver.onPublicationTargetAllocated(allocatedTarget)
             copyIntoUri(tempFile, outputUri, shouldCancel)
@@ -175,7 +206,10 @@ internal class MediaStoreSaver(
         }
     }
 
-    private fun readDocumentPublicationTarget(outputUri: Uri): PublicationTarget {
+    private fun readDocumentPublicationTarget(
+        outputUri: Uri,
+        mediaKind: OutputMediaKind,
+    ): PublicationTarget {
         val cursor =
             resolver.query(
                 outputUri,
@@ -189,10 +223,11 @@ internal class MediaStoreSaver(
                 throw IOException("Created output document has no display name")
             }
             val actualName = it.getString(0)
-            validateRequestedName(actualName)
+            validateRequestedName(actualName, mediaKind)
             PublicationTarget(
                 mediaStoreUri = outputUri.toString(),
                 actualDisplayName = actualName,
+                mediaKind = mediaKind,
             )
         }
     }
@@ -200,21 +235,22 @@ internal class MediaStoreSaver(
     private fun publishScoped(
         tempFile: File,
         requestedName: String,
+        mediaKind: OutputMediaKind,
         shouldCancel: () -> Boolean,
     ): String {
         val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, requestedName)
-            put(MediaStore.Video.Media.MIME_TYPE, VIDEO_MIME_TYPE)
-            put(MediaStore.Video.Media.RELATIVE_PATH, SCOPED_RELATIVE_PATH)
-            put(MediaStore.Video.Media.IS_PENDING, 1)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, requestedName)
+            put(MediaStore.MediaColumns.MIME_TYPE, mediaKind.mimeType)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, mediaKind.scopedRelativePath)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val outputUri =
-            resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+            resolver.insert(externalContentUri(mediaKind), values)
                 ?: throw IOException("MediaStore insert returned null")
         var target: PublicationTarget? = null
         try {
             publicationObserver.onPublicationUriAllocated(outputUri.toString())
-            val allocatedTarget = readScopedPublicationTarget(outputUri)
+            val allocatedTarget = readScopedPublicationTarget(outputUri, mediaKind)
             target = allocatedTarget
             publicationObserver.onPublicationTargetAllocated(allocatedTarget)
             copyIntoUri(tempFile, outputUri, shouldCancel)
@@ -224,9 +260,9 @@ internal class MediaStoreSaver(
                 shouldCancel,
                 requireReadback = false,
             )
-            val completed = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
+            val completed = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
             if (resolver.update(outputUri, completed, null, null) != 1) {
-                throw IOException("Unable to publish pending MediaStore video")
+                throw IOException("Unable to publish pending MediaStore output")
             }
             publicationObserver.onPublicationCompleted(allocatedTarget)
             return outputUri.toString()
@@ -237,18 +273,21 @@ internal class MediaStoreSaver(
         }
     }
 
-    private fun readScopedPublicationTarget(outputUri: Uri): PublicationTarget {
+    private fun readScopedPublicationTarget(
+        outputUri: Uri,
+        mediaKind: OutputMediaKind,
+    ): PublicationTarget {
         val uriString = outputUri.toString()
-        if (!OrphanCleanupPolicy.isAppMediaVideoUri(uriString)) {
+        if (!OrphanCleanupPolicy.isAppMediaUri(mediaKind, uriString)) {
             throw IOException("MediaStore allocated an unsupported output URI")
         }
         val cursor =
             resolver.query(
                 outputUri,
                 arrayOf(
-                    MediaStore.Video.Media.DISPLAY_NAME,
-                    MediaStore.Video.Media.RELATIVE_PATH,
-                    MediaStore.Video.Media.IS_PENDING,
+                    MediaStore.MediaColumns.DISPLAY_NAME,
+                    MediaStore.MediaColumns.RELATIVE_PATH,
+                    MediaStore.MediaColumns.IS_PENDING,
                 ),
                 null,
                 null,
@@ -258,20 +297,21 @@ internal class MediaStoreSaver(
             if (!it.moveToFirst()) {
                 throw IOException("Allocated MediaStore output is absent")
             }
-            val nameIndex = it.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
-            val pathIndex = it.getColumnIndexOrThrow(MediaStore.Video.Media.RELATIVE_PATH)
-            val pendingIndex = it.getColumnIndexOrThrow(MediaStore.Video.Media.IS_PENDING)
+            val nameIndex = it.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+            val pathIndex = it.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
+            val pendingIndex = it.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_PENDING)
             if (it.isNull(nameIndex) || it.isNull(pathIndex) || it.isNull(pendingIndex)) {
                 throw IOException("Allocated MediaStore output has incomplete ownership fields")
             }
             val actualName = it.getString(nameIndex)
-            validateRequestedName(actualName)
-            if (it.getString(pathIndex) != SCOPED_RELATIVE_PATH || it.getInt(pendingIndex) != 1) {
+            validateRequestedName(actualName, mediaKind)
+            if (it.getString(pathIndex) != mediaKind.scopedRelativePath || it.getInt(pendingIndex) != 1) {
                 throw IOException("Allocated MediaStore output has unexpected ownership fields")
             }
             PublicationTarget(
                 mediaStoreUri = uriString,
                 actualDisplayName = actualName,
+                mediaKind = mediaKind,
             )
         }
     }
@@ -280,18 +320,24 @@ internal class MediaStoreSaver(
     private fun publishLegacy(
         tempFile: File,
         requestedName: String,
+        mediaKind: OutputMediaKind,
         shouldCancel: () -> Boolean,
     ): String {
         val directory =
             File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                Environment.getExternalStoragePublicDirectory(
+                    when (mediaKind) {
+                        OutputMediaKind.VIDEO_MP4 -> Environment.DIRECTORY_MOVIES
+                        OutputMediaKind.AUDIO_M4A -> Environment.DIRECTORY_MUSIC
+                    },
+                ),
                 OUTPUT_DIRECTORY,
             )
         if (
             (!directory.exists() && !directory.mkdirs()) ||
             !directory.isDirectory
         ) {
-            throw IOException("Unable to create public VideoSlim output directory")
+            throw IOException("Unable to create public VideoSlim media directory")
         }
         val canonicalDirectory = directory.canonicalFile
         val destination = uniqueDestination(canonicalDirectory, requestedName).canonicalFile
@@ -299,19 +345,20 @@ internal class MediaStoreSaver(
             throw IOException("Legacy output escaped the VideoSlim directory")
         }
         val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, destination.name)
-            put(MediaStore.Video.Media.TITLE, destination.nameWithoutExtension)
-            put(MediaStore.Video.Media.MIME_TYPE, VIDEO_MIME_TYPE)
-            put(MediaStore.Video.Media.DATA, destination.path)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, destination.name)
+            put(MediaStore.MediaColumns.TITLE, destination.nameWithoutExtension)
+            put(MediaStore.MediaColumns.MIME_TYPE, mediaKind.mimeType)
+            put(MediaStore.MediaColumns.DATA, destination.path)
         }
         val outputUri =
-            resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+            resolver.insert(externalContentUri(mediaKind), values)
                 ?: throw IOException("Legacy MediaStore insert returned null")
         val target =
             PublicationTarget(
                 mediaStoreUri = outputUri.toString(),
                 actualDisplayName = destination.name,
                 canonicalLegacyOutputPath = destination.path,
+                mediaKind = mediaKind,
             )
         try {
             publicationObserver.onPublicationTargetAllocated(target)
@@ -435,29 +482,25 @@ internal class MediaStoreSaver(
             ?.use { it.moveToFirst() }
             ?: true
 
-    private fun validateRequestedName(name: String) {
-        if (
-            name.isBlank() ||
-            name.length > MAX_OUTPUT_NAME_LENGTH ||
-            !name.endsWith(MP4_EXTENSION, ignoreCase = true) ||
-            name.substringBeforeLast('.', missingDelimiterValue = "").isBlank() ||
-            '/' in name ||
-            '\\' in name ||
-            name.any { it.code < 0x20 || it.code == 0x7f }
-        ) {
-            throw IOException("Output display name is not a safe MP4 filename")
+    private fun externalContentUri(mediaKind: OutputMediaKind): Uri =
+        when (mediaKind) {
+            OutputMediaKind.VIDEO_MP4 -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            OutputMediaKind.AUDIO_M4A -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        }
+
+    private fun validateRequestedName(
+        name: String,
+        mediaKind: OutputMediaKind,
+    ) {
+        if (!mediaKind.isSafeDisplayName(name)) {
+            throw IOException("Output display name is not a safe ${mediaKind.extension} filename")
         }
     }
 
     private companion object {
-        const val VIDEO_MIME_TYPE = "video/mp4"
         const val OUTPUT_DIRECTORY = "VideoSlim"
-        const val SCOPED_RELATIVE_PATH = "Movies/VideoSlim/"
         const val WRITE_MODE = "w"
         const val MAX_COLLISION_SUFFIX = 9_999
-        const val MAX_OUTPUT_NAME_LENGTH = 255
-        const val MP4_EXTENSION = ".mp4"
-
     }
 }
 

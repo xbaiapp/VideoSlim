@@ -115,7 +115,7 @@ class TaskRecoveryCodecTest {
             listOf(
                 "",
                 "not-a-recovery-record",
-                encoded.replace("version=1", "version=99"),
+                encoded.replace("version=2", "version=99"),
                 encoded.replace("stage=PUBLISHING", "stage=FUTURE_STAGE"),
                 encoded.replace(Regex("(?m)^taskId=.*$"), "taskId=%%%"),
                 encoded.lines().filterNot { it.startsWith("startedAtEpochMs=") }.joinToString("\n"),

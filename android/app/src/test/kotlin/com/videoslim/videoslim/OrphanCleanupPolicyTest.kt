@@ -18,6 +18,16 @@ class OrphanCleanupPolicyTest {
     }
 
     @Test
+    fun `cache policy also recognizes owned UUID m4a children`() {
+        val orphan = "323e4567-e89b-12d3-a456-426614174000.m4a"
+        val active = "423e4567-e89b-12d3-a456-426614174000.m4a"
+
+        assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.cacheAction(orphan, active))
+        assertEquals(CleanupAction.KEEP, OrphanCleanupPolicy.cacheAction(active, active))
+        assertEquals(CleanupAction.SKIP_UNSAFE, OrphanCleanupPolicy.cacheAction("../$orphan", active))
+    }
+
+    @Test
     fun `scoped media deletes exact pending app output only`() {
         val record = scopedRecord()
         val pending = scopedEntry(isPending = 1)
@@ -104,6 +114,43 @@ class OrphanCleanupPolicyTest {
         assertEquals(
             CleanupAction.SKIP_UNSAFE,
             scopedAction(scopedRecord().copy(mediaStoreUri = "content://other/42"), null),
+        )
+    }
+
+    @Test
+    fun `audio cleanup requires exact audio collection path name and owner`() {
+        val record =
+            scopedRecord().copy(
+                mediaKind = OutputMediaKind.AUDIO_M4A,
+                tempFileName = "123e4567-e89b-12d3-a456-426614174000.m4a",
+                expectedOutputDisplayName = "lecture.m4a",
+                actualOutputDisplayName = "lecture.m4a",
+                mediaStoreUri = "content://media/external/audio/media/42",
+            )
+        val entry =
+            scopedEntry(isPending = 1).copy(
+                uri = "content://media/external/audio/media/42",
+                displayName = "lecture.m4a",
+                relativePath = OutputMediaKind.AUDIO_M4A.scopedRelativePath,
+            )
+
+        assertTrue(
+            OrphanCleanupPolicy.isAppMediaUri(
+                OutputMediaKind.AUDIO_M4A,
+                requireNotNull(record.mediaStoreUri),
+            ),
+        )
+        assertEquals(CleanupAction.DELETE, scopedAction(record, entry))
+        assertEquals(
+            CleanupAction.SKIP_UNSAFE,
+            scopedAction(record, entry.copy(relativePath = OutputMediaKind.VIDEO_MP4.scopedRelativePath)),
+        )
+        assertEquals(
+            CleanupAction.SKIP_UNSAFE,
+            scopedAction(
+                record.copy(mediaStoreUri = "content://media/external/video/media/42"),
+                entry.copy(uri = "content://media/external/video/media/42"),
+            ),
         )
     }
 

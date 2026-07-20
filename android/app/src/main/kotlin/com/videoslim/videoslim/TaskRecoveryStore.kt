@@ -29,6 +29,7 @@ data class TaskRecoveryRecord(
     val mediaStoreUri: String?,
     val legacyOutputPath: String?,
     val startedAtEpochMs: Long,
+    val mediaKind: OutputMediaKind = OutputMediaKind.VIDEO_MP4,
 )
 
 sealed interface TaskRecoveryDecodeResult {
@@ -39,9 +40,10 @@ sealed interface TaskRecoveryDecodeResult {
 
 /** Pure, strict codec for the single in-flight recovery record. */
 internal object TaskRecoveryCodec {
-    private const val VERSION = 1
+    private const val VERSION = 2
+    private const val LEGACY_VERSION = 1
     private const val NULL_VALUE = "~"
-    private val expectedKeys =
+    private val legacyKeys =
         setOf(
             "version",
             "taskId",
@@ -53,12 +55,14 @@ internal object TaskRecoveryCodec {
             "legacyOutputPath",
             "startedAtEpochMs",
         )
+    private val expectedKeys = legacyKeys + "mediaKind"
     private val encoder = Base64.getUrlEncoder().withoutPadding()
     private val decoder = Base64.getUrlDecoder()
 
     fun encode(record: TaskRecoveryRecord): String =
         buildString {
             appendLine("version=$VERSION")
+            appendLine("mediaKind=${record.mediaKind.name}")
             appendLine("taskId=${encodeRequired(record.taskId)}")
             appendLine("stage=${record.stage.name}")
             appendLine("tempFileName=${encodeRequired(record.tempFileName)}")
@@ -82,9 +86,22 @@ internal object TaskRecoveryCodec {
                     return invalid("unknown or duplicate field")
                 }
             }
-            if (values.keys != expectedKeys) return invalid("missing field")
             val version = values.getValue("version").toIntOrNull()
-            if (version != VERSION) return invalid("unsupported version")
+            val requiredKeys =
+                when (version) {
+                    VERSION -> expectedKeys
+                    LEGACY_VERSION -> legacyKeys
+                    else -> return invalid("unsupported version")
+                }
+            if (values.keys != requiredKeys) return invalid("missing field")
+            val mediaKind =
+                if (version == LEGACY_VERSION) {
+                    OutputMediaKind.VIDEO_MP4
+                } else {
+                    runCatching {
+                        OutputMediaKind.valueOf(values.getValue("mediaKind"))
+                    }.getOrNull() ?: return invalid("unknown media kind")
+                }
             val stage =
                 runCatching { RecoveryStage.valueOf(values.getValue("stage")) }.getOrNull()
                     ?: return invalid("unknown stage")
@@ -102,6 +119,7 @@ internal object TaskRecoveryCodec {
                     startedAtEpochMs =
                         values.getValue("startedAtEpochMs").toLongOrNull()
                             ?: return invalid("invalid start time"),
+                    mediaKind = mediaKind,
                 )
             validateRecoveryRecord(record)?.let(::invalid)
                 ?: TaskRecoveryDecodeResult.Success(record)
@@ -154,10 +172,13 @@ internal fun isAllowedRecoveryTransition(
 private fun validateRecoveryRecord(record: TaskRecoveryRecord): String? {
     if (!isSafeJournalText(record.taskId, MAX_TASK_ID_LENGTH)) return "invalid task id"
     if (!isValidRecoveryTempFileName(record.tempFileName)) return "invalid temp filename"
-    if (!isSafeRecoveryOutputName(record.expectedOutputDisplayName)) return "invalid expected output name"
+    if (!record.tempFileName.endsWith(record.mediaKind.extension)) return "temp filename kind mismatch"
+    if (!isSafeRecoveryOutputName(record.expectedOutputDisplayName, record.mediaKind)) {
+        return "invalid expected output name"
+    }
     if (
         record.actualOutputDisplayName != null &&
-        !isSafeRecoveryOutputName(record.actualOutputDisplayName)
+        !isSafeRecoveryOutputName(record.actualOutputDisplayName, record.mediaKind)
     ) {
         return "invalid actual output name"
     }
@@ -190,7 +211,7 @@ private fun validateRecoveryRecord(record: TaskRecoveryRecord): String? {
                 allocationUri == null ||
                 record.legacyOutputPath != null ||
                 (
-                    !OrphanCleanupPolicy.isAppMediaVideoUri(allocationUri) &&
+                    !isMediaStoreUriForKind(record.mediaKind, allocationUri) &&
                         !OrphanCleanupPolicy.isSafDocumentUri(allocationUri)
                 )
             ) {
@@ -201,20 +222,27 @@ private fun validateRecoveryRecord(record: TaskRecoveryRecord): String? {
         RecoveryStage.PUBLISHED,
         RecoveryStage.DISCARDING,
         -> {
-            if (record.actualOutputDisplayName == null || record.mediaStoreUri == null) {
+            val publicationUri = record.mediaStoreUri
+            if (record.actualOutputDisplayName == null || publicationUri == null) {
                 return "publishing record has no complete target"
+            }
+            if (
+                !isMediaStoreUriForKind(record.mediaKind, publicationUri) &&
+                !OrphanCleanupPolicy.isSafDocumentUri(publicationUri)
+            ) {
+                return "publishing record has a cross-kind publication target"
             }
         }
     }
     return null
 }
 
-private fun isSafeRecoveryOutputName(name: String): Boolean =
+private fun isSafeRecoveryOutputName(
+    name: String,
+    mediaKind: OutputMediaKind,
+): Boolean =
     isSafeJournalText(name, MAX_OUTPUT_NAME_LENGTH) &&
-        name.endsWith(".mp4", ignoreCase = true) &&
-        name.substringBeforeLast('.', missingDelimiterValue = "").isNotBlank() &&
-        '/' !in name &&
-        '\\' !in name &&
+        mediaKind.isSafeDisplayName(name) &&
         name != "." &&
         name != ".."
 
@@ -242,6 +270,7 @@ class TaskRecoveryStore(
         tempFileName: String,
         expectedOutputDisplayName: String,
         startedAtEpochMs: Long = System.currentTimeMillis(),
+        mediaKind: OutputMediaKind = OutputMediaKind.VIDEO_MP4,
     ): TaskRecoveryRecord = synchronized(TRANSACTION_LOCK) {
         if (preferences.contains(RECORD_KEY)) {
             log("recovery begin refused because a previous record still exists")
@@ -257,6 +286,7 @@ class TaskRecoveryStore(
                 mediaStoreUri = null,
                 legacyOutputPath = null,
                 startedAtEpochMs = startedAtEpochMs,
+                mediaKind = mediaKind,
             )
         validateRecoveryRecord(record)?.let { throw IllegalArgumentException(it) }
         persist(record, "begin")
@@ -286,8 +316,12 @@ class TaskRecoveryStore(
         actualOutputDisplayName: String,
         mediaStoreUri: String,
         canonicalLegacyOutputPath: String? = null,
+        mediaKind: OutputMediaKind = OutputMediaKind.VIDEO_MP4,
     ): TaskRecoveryRecord = synchronized(TRANSACTION_LOCK) {
         val current = loadForMutation(taskId)
+        if (current.mediaKind != mediaKind) {
+            throw IllegalStateException("Publication target media kind does not match recovery record")
+        }
         if (current.stage == RecoveryStage.PUBLISHING) {
             if (
                 current.actualOutputDisplayName == actualOutputDisplayName &&
@@ -552,7 +586,7 @@ private fun syncDirectoryDurably(directory: File) {
 }
 
 private val RECOVERY_TEMP_NAME =
-    Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\.mp4$")
+    Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\.(?:mp4|m4a)$")
 private const val MAX_TASK_ID_LENGTH = 128
 private const val MAX_OUTPUT_NAME_LENGTH = 255
 private const val MAX_URI_LENGTH = 2048
