@@ -138,16 +138,13 @@ internal data class TranscodePlan(
             val outputBytes = safeAdd(nominalMediaBytes, overheadBytes)
             val lowerOutputBytes =
                 safeAdd(
-                    safeAdd(
-                        safeScale(videoBytes, RATE_CONTROL_LOWER_PERCENT, 100L),
-                        audioBytes,
-                    ),
+                    safeAdd(safeScale(videoBytes, VBR_LOWER_PERCENT, 100L), audioBytes),
                     overheadBytes,
                 )
             val upperOutputBytes =
                 safeAdd(
                     safeAdd(
-                        safeScale(videoBytes, RATE_CONTROL_UPPER_PERCENT, 100L),
+                        safeScale(videoBytes, VBR_UPPER_PERCENT, 100L),
                         safeScale(audioBytes, AUDIO_UPPER_PERCENT, 100L),
                     ),
                     overheadBytes,
@@ -206,8 +203,8 @@ internal data class TranscodePlan(
         private const val MIN_OPEN_GL_TONE_MAPPING_SDK = 29
         private const val CONSERVATIVE_COPY_AUDIO_BITRATE = 128_000
         private const val BITS_PER_MILLISECOND = 8_000L
-        private const val RATE_CONTROL_LOWER_PERCENT = 80L
-        private const val RATE_CONTROL_UPPER_PERCENT = 125L
+        private const val VBR_LOWER_PERCENT = 80L
+        private const val VBR_UPPER_PERCENT = 200L
         private const val AUDIO_UPPER_PERCENT = 110L
         private const val MIN_OVERHEAD_BYTES = 4L * 1024L * 1024L
         private const val STORAGE_HEADROOM_BYTES = 64L * 1024L * 1024L

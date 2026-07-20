@@ -57,7 +57,7 @@ final class CompressionPlan {
   /// Estimated output bytes, including the planned or copied audio track.
   final int estimatedOutputBytes;
 
-  /// Conservative lower bound for hardware CBR output.
+  /// Conservative lower bound for hardware VBR output.
   final int estimatedOutputMinBytes;
 
   /// Conservative upper bound used for storage guidance.
@@ -119,9 +119,9 @@ final class CompressionPlanner {
   /// Explicit fallback when a copied source audio track has no reported rate.
   static const int estimatedCopyAudioBitrate = 128000;
 
-  /// Hardware CBR still receives bounded room for device-level rate-control variance.
-  static const int rateControlLowerPercent = 80;
-  static const int rateControlUpperPercent = 125;
+  /// Hardware VBR may substantially undershoot or overshoot its target bitrate.
+  static const int vbrLowerPercent = 80;
+  static const int vbrUpperPercent = 200;
 
   /// Maximum duration in the verified product range.
   static const int verifiedDurationMs = 6 * 60 * 60 * 1000;
@@ -188,11 +188,11 @@ final class CompressionPlanner {
         : proportionalOverhead;
     final estimatedOutputBytes = nominalMediaBytes + containerOverhead;
     final estimatedOutputMinBytes =
-        _multiplyDivideFloor(videoBytes, rateControlLowerPercent, 100) +
+        _multiplyDivideFloor(videoBytes, vbrLowerPercent, 100) +
         audioBytes +
         containerOverhead;
     final estimatedOutputMaxBytes =
-        _multiplyDivideFloor(videoBytes, rateControlUpperPercent, 100) +
+        _multiplyDivideFloor(videoBytes, vbrUpperPercent, 100) +
         _multiplyDivideFloor(audioBytes, 110, 100) +
         containerOverhead;
 

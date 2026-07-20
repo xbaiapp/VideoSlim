@@ -2,6 +2,7 @@ package com.videoslim.videoslim
 
 import android.content.Context
 import android.media.MediaCodec
+import android.media.MediaCodecInfo
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
@@ -229,7 +230,6 @@ internal class TranscodeEngine(
                 )
             }
             val plan = TranscodePlan.create(task.request, metadata, Build.VERSION.SDK_INT)
-            task.sourceDurationMs = metadata.durationMs
             val outputMime = videoMimeType(task.request.videoCodec)
             val compatibleDecoders =
                 when (task.request.videoDecoderMode) {
@@ -259,7 +259,6 @@ internal class TranscodeEngine(
                     height = plan.outputDimensions.height,
                     frameRate = metadata.frameRate,
                     bitrate = task.request.videoBitrate,
-                    bitrateMode = VideoRateControlPolicy.bitrateMode,
                 )
             log(
                 "task=${task.id} decoder inventory " +
@@ -274,8 +273,7 @@ internal class TranscodeEngine(
                     compatibleDecoders.joinToString { it.name } +
                     " input=${metadata.storageWidth}x${metadata.storageHeight}@${metadata.frameRate}" +
                     " profile=${metadata.videoProfile} level=${metadata.videoLevel}" +
-                    " encoder=${compatibleEncoders.joinToString { it.name }}" +
-                    " rateControl=cbr targetBitrate=${task.request.videoBitrate}",
+                    " encoder=${compatibleEncoders.joinToString { it.name }}",
             )
             if (compatibleDecoders.isEmpty()) {
                 throw EngineOperationException(
@@ -335,7 +333,7 @@ internal class TranscodeEngine(
             val settings =
                 VideoEncoderSettings.Builder()
                     .setBitrate(task.request.videoBitrate)
-                    .setBitrateMode(VideoRateControlPolicy.bitrateMode)
+                    .setBitrateMode(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
                     .build()
             val encoderFactoryBuilder =
                 DefaultEncoderFactory.Builder(appContext)
@@ -527,44 +525,6 @@ internal class TranscodeEngine(
         if (task.cancelRequested) {
             finishCancelled(task)
             return
-        }
-        val plan = checkNotNull(task.plan) { "Transcode plan is missing" }
-        val rateControlCheck =
-            VideoRateControlPolicy.check(
-                actualOutputBytes = task.tempFile.length(),
-                maximumOutputBytes = plan.storageEstimate.upperOutputBytes,
-                durationMs = task.sourceDurationMs,
-            )
-        log(
-            "task=${task.id} target bitrate check status=${rateControlCheck.status} " +
-                "actualBytes=${rateControlCheck.actualOutputBytes} " +
-                "nominalBytes=${plan.storageEstimate.outputBytes} " +
-                "maximumBytes=${rateControlCheck.maximumOutputBytes ?: "unknown"}",
-        )
-        when (rateControlCheck.status) {
-            VideoRateControlStatus.INVALID_OUTPUT -> {
-                fail(
-                    task,
-                    EngineFailure(EngineErrorCode.VIDEO_ENCODING_FAILED),
-                    IllegalStateException("Transformer completed without a non-empty output file"),
-                )
-                return
-            }
-            VideoRateControlStatus.TARGET_EXCEEDED -> {
-                fail(
-                    task,
-                    EngineFailure(EngineErrorCode.TARGET_BITRATE_NOT_HONORED),
-                    IllegalStateException(
-                        "Encoded output exceeded target contract: " +
-                            "actual=${rateControlCheck.actualOutputBytes}, " +
-                            "maximum=${rateControlCheck.maximumOutputBytes}",
-                    ),
-                )
-                return
-            }
-            VideoRateControlStatus.HONORED,
-            VideoRateControlStatus.NOT_VERIFIABLE,
-            -> Unit
         }
         task.publicationBoundary.begin()
         task.stage = Stage.PUBLISHING
@@ -957,7 +917,6 @@ internal class TranscodeEngine(
         @Volatile var recoveryStarted: Boolean = false
         @Volatile var retainRecovery: Boolean = false
         var plan: TranscodePlan? = null
-        var sourceDurationMs: Long = 0L
         var sourceAccessAtStart: SourceAccessProbeResult? = null
         var compatibleDecoderNames: Set<String> = emptySet()
         var compatibleEncoderNames: Set<String> = emptySet()

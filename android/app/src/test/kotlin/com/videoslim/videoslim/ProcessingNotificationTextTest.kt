@@ -131,25 +131,6 @@ class ProcessingNotificationTextTest {
     }
 
     @Test
-    fun `target bitrate failure says oversized output was not saved`() {
-        val text =
-            ProcessingNotificationText.from(
-                snapshot(
-                    state = "failed",
-                    percent = 99.0,
-                    phase = TaskRuntimeSnapshot.PHASE_FINISHED,
-                    errorCode = EngineErrorCode.TARGET_BITRATE_NOT_HONORED.wireName,
-                    errorMessage = "MediaCodec raw target failure",
-                ),
-            )
-
-        assertEquals("没能完成压缩", text.title)
-        assertTrue(text.body.contains("异常体积的视频没有保存"))
-        assertTrue(text.body.contains("调整格式或画质"))
-        assertFalse(text.body.contains("MediaCodec"))
-    }
-
-    @Test
     fun `cancelled state remains readable`() {
         val cancelled =
             ProcessingNotificationText.from(

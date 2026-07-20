@@ -163,7 +163,6 @@ class TranscodePlanTest {
 
         assertEquals(4L * 1_024L * 1_024L, copy.overheadBytes)
         assertEquals(copy.videoBytes + copy.audioBytes + copy.overheadBytes, copy.outputBytes)
-        assertEquals(7_495_304L, copy.upperOutputBytes)
         assertEquals(copy.upperOutputBytes + 64L * 1_024L * 1_024L, copy.cacheRequiredBytes)
         assertEquals(copy.upperOutputBytes + 64L * 1_024L * 1_024L, copy.publicRequiredBytes)
         assertEquals(
