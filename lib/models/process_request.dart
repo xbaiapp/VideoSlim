@@ -1,3 +1,5 @@
+export 'audio_extract_request.dart';
+
 /// A crop rectangle in display-oriented source pixels.
 class CropRect {
   /// Creates a crop rectangle with a non-negative origin and positive size.
@@ -219,39 +221,6 @@ class ProcessRequest {
     audioMode: audioMode,
     audioBitrate: audioBitrate,
   );
-}
-
-/// Parameters for extracting a video's audio track.
-class AudioExtractRequest {
-  /// Creates extraction parameters.
-  const AudioExtractRequest({
-    required this.uri,
-    required this.outputFileName,
-    required this.lossless,
-    this.bitrate,
-  }) : assert(uri != ''),
-       assert(outputFileName != ''),
-       assert(bitrate == null || bitrate > 0);
-
-  /// Source content URI.
-  final String uri;
-
-  /// Requested output display name.
-  final String outputFileName;
-
-  /// Whether to stream-copy the source audio rather than re-encode it.
-  final bool lossless;
-
-  /// Target bitrate in bits per second for lossy extraction.
-  final int? bitrate;
-
-  /// Produces the exact map consumed by the platform engine.
-  Map<String, Object?> toChannelMap() => <String, Object?>{
-    'uri': uri,
-    'outputFileName': outputFileName,
-    'lossless': lossless,
-    'bitrate': bitrate,
-  };
 }
 
 void _requireExactKeys(Map<Object?, Object?> map, Set<String> expected) {
