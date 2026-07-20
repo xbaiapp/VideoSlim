@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.4（补充 M2 正式支持范围、长视频后台验收、输出位置可发现性及 M1 真机反馈） |
-| 日期 | 2026-07-19 |
-| 状态 | M1 真机验收完成，待进入 M2 |
+| 文档版本 | v1.5（M2 私有范围收口，冻结 M3 音频提取与任务契约） |
+| 日期 | 2026-07-20 |
+| 状态 | M2 `ACCEPTED — private scope`；M3 规格已冻结、可实施 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
@@ -14,7 +14,7 @@
 
 本文档为"零编程经验 + AI 辅助开发"模式设计。使用规则：
 
-1. **按里程碑推进**：不要把整个文档一次性丢给 AI 让它"把 App 写完"。每次只做一个里程碑（见第 8 章），完成并在真机上通过验收标准后，再进入下一个。
+1. **按里程碑推进**：不要把整个文档一次性丢给 AI 让它"把 App 写完"。每次只做一个里程碑（见第 8 章）；按明确范围获得接受决定后再进入下一个。已转入 non-blocking hardening 的扩展矩阵不反向阻止后续里程碑，但未经实测不得宣称 PASS 或扩大支持范围。
 2. **每次开发会话的标准开场**：把「第 5 章技术架构」+「当前里程碑章节」+「涉及功能的详细规格章节」一起提供给 AI，并说明"我正在做里程碑 MX，请只完成本里程碑的任务"。
 3. **遇到报错**：把报错信息**原文完整粘贴**给 AI，并说明当时在做哪一步、哪个里程碑。不要自己总结报错。
 4. **AI 给的方案与本文档冲突时**：以本文档的架构决策为准（特别是 5.1 节的技术选型），除非 AI 明确指出文档中某个 API 已过时并给出了官方文档依据。
@@ -137,7 +137,7 @@
 - 视频码率：滑杆 0.5–12 Mbps，步进 0.1；
 - 音频：原样复制（默认）/ AAC 192k / 128k / 96k / 64k / 移除音轨。
 
-**当前范围说明**：M2 的“自定义”是指用户可修改上述编码参数；视频压缩量仍以**目标平均码率（VBR）**控制。当前规格未包含“画质百分比/恒定质量（CQ/CRF）”“CBR/VBR 模式切换”或“按原文件百分比压缩”。“按目标文件大小压缩”已列为 F11，计划在 M5 实现。
+**当前范围说明**：M2 的“自定义”是指用户可修改上述编码参数；视频压缩量继续由设备硬件 Encoder 的**目标平均码率（VBR）**控制。当前规格未包含“画质百分比/恒定质量（CQ/CRF）”“CBR/VBR 模式切换”或“按原文件百分比压缩”。不得新增 CBR，也不得因为实际输出码率没有精确命中目标值而硬拦截发布；目标码率只用于编码配置、体积估算与收益提示。“按目标文件大小压缩”已列为 F11，计划在 M5 实现。
 
 **3.3 智能行为**：
 - **无压缩空间提示**：若目标视频码率 ≥ 原视频码率 × 0.9，弹提示"该视频码率已较低，压缩收益有限"，允许用户坚持继续；
@@ -145,10 +145,10 @@
 - **HEVC 编码器降级**：初始化时探测设备是否有 HEVC 硬件编码器；没有则自动降级 H.264 并把目标码率 × 1.5，同时提示用户；
 - 处理前检查剩余存储空间 ≥ 预估输出大小 × 1.5，不足则报错并说明。
 
-**3.4 M2 正式支持范围**：
-- 经真机边界验收后，正式保证处理同时满足“视频时长 ≤ 6 小时”且“源文件大小 ≤ 50 GB”的输入；仍须通过编码器能力、格式兼容性及处理前空间检查；
-- 超过任一上限时不直接伪装成已支持：UI 明确提示“超出已验证范围”，展示预估输出大小和所需空间；自用阶段可允许用户确认后继续尝试，但只按 best-effort 处理，不承诺完成；
-- 该范围是产品保证边界，不是 MP4/Media3 的理论极限。后续只有在不同芯片、不同 Android 版本真机完成边界测试后才能扩大；
+**3.4 M2 接受范围与扩展 hardening**：
+- M2 已按项目所有者的 Pixel 当前私有使用场景接受，状态为 `ACCEPTED — private scope`；这允许进入 M3，但不是生产发布或多设备支持声明；
+- “接近 6 小时”“接近 50 GB”“输出超过 4 GB”、严格同源 A/B/C、software-only、多 Provider 与多 SoC 均转为 non-blocking hardening。未实际执行时不得标为 PASS；
+- 超出当前已验证私有场景时，UI 应说明处于 best-effort 范围，展示预估输出大小和所需空间，不承诺完成；不同芯片、Android 版本和 Provider 补齐边界证据后才能扩大保证范围；
 - 输入通过 `content://` 直接读取，不复制源文件；处理期间仍会同时存在私有临时输出与正在发布的公共输出，空间检查必须覆盖峰值重叠占用并保留安全余量。
 
 **验收标准**：
@@ -159,19 +159,30 @@
 
 ### F4 音频提取
 
-**模式 A：无损直提（默认）**
-- 原理：视频中的音频本身就是压缩流（几乎总是 AAC），直接抽出音频轨封装为 `.m4a`，**零转码、零质量损失、秒级完成**。
-- 实现：`MediaExtractor` 选中音频轨 → `MediaMuxer`（MPEG_4 容器）写出。**不经过任何编解码器。**
-- 若音频轨编码不是 AAC（极少数，如 AMR），提示用户改用模式 B。
+**共同输入与输出规则（M3）**：
+- 始终使用源文件顺序中的**第一条音频轨**；M3 不提供多音轨或多语言音轨选择。
+- 支持单声道与立体声；遇到超过 2 声道的第一音轨时稳定返回 `AUDIO_CHANNEL_LAYOUT_UNSUPPORTED`，不隐式下混。
+- 视频没有音轨时，入口与引擎均稳定返回 `AUDIO_TRACK_MISSING`，不得启动空任务或产出空文件。
+- 默认发布到 MediaStore `Music/VideoSlim/`；用户可通过 SAF 选择并持久化自定义文件夹。发布、长度回读、取消与异常恢复沿用 M2 的所有权和清理边界。
+- 输出统一为 `.m4a`（`audio/mp4`）。M3 不做 MP3、多音轨选择、trim、音量/降噪、声道混音、采样率选择或标签/封面编辑。
 
-**模式 B：有损转码**
-- 用户选择目标码率：AAC 192 / 128 / 96 / 64 kbps；
-- 实现：`MediaCodec` 解码音频为 PCM → `MediaCodec` AAC 编码器（设置 `KEY_BIT_RATE`）→ `MediaMuxer` 写出 `.m4a`。
-- MP3 输出见 F15（系统无 MP3 编码器，属 P1）。
+**模式 A：AAC copy（默认）**
+- 只接受 AAC-LC 或 HE-AAC，Android 轨道 MIME 必须为 `audio/mp4a-latm`；其他音频编码稳定返回 `AUDIO_COPY_UNSUPPORTED`，提示用户显式改用 AAC 模式，不得静默降级。
+- 使用 `MediaExtractor` 选中第一音轨，逐 sample 写入 `MediaMuxer` 的 MPEG-4 容器形成 `.m4a`；这是纯 sample copy，**不创建音频 Decoder 或 Encoder**，零转码、零质量损失。
+- 保留 sample 相对时间戳并把第一条有效音频 sample 归零；发布前确认输出非空、只有可识别 AAC 音轨且时长有效。
+
+**模式 B：AAC 强制重编码**
+- 固定提供 AAC-LC `192 / 128 / 96 / 64 kbps` 四档，对应请求值 `192000 / 128000 / 96000 / 64000` bps；默认 128 kbps。
+- 使用 Media3 Transformer 的 **audio-only** 管线，移除视频并强制走音频 Decoder → AAC Encoder；即使源轨已经是 AAC，也不得 transmux 或忽略目标码率。
+- 允许可被 Media3 音频 Decoder 读取的非 AAC 源（例如 Opus WebM）由用户显式选择本模式后转为 AAC-LC。F19 必须记录实际音频 Decoder、实际 AAC Encoder、请求码率、源/输出 MIME、采样率与声道。
+- 目标码率是 Encoder 配置与估算依据，不要求实际输出码率逐字节精确命中，也不得把码率偏差作为发布硬拦截；结构性无效输出才返回 `AUDIO_OUTPUT_INVALID`。
 
 **验收标准**：
-- 模式 A：1 小时视频提取耗时 < 10 秒；输出音频时长与原视频一致；频谱与原音轨一致（可抽查）；
-- 模式 B：输出大小符合码率预期；无爆音、无变速。
+- 30–120 秒 AAC 短片 copy 连续 3 次，输出均可播放、时长一致，且 F19 证明未创建音频 Decoder/Encoder；
+- 同一短片分别强制重编码为 192/128/96/64 kbps，F19 证明实际 Decoder/Encoder 已创建，输出 bytes 按 `192 > 128 > 96 > 64` 单调，无爆音、无变速；
+- mono 不被错误改成 stereo；Opus WebM 的 copy 被稳定阻止、显式 AAC 转码成功；无音轨与 >2 声道得到上述稳定错误；
+- 后台、锁屏、转换阶段取消、发布阶段取消、默认 `Music/VideoSlim` 与自定义 SAF 均通过；
+- 1 小时 AAC 视频 copy 耗时 < 10 秒，输出音频时长与源音轨一致；全部结果按 `docs/m3-device-acceptance.md` 留存真实设备与 F19 证据。
 
 ### F5 画面裁剪（crop）
 
@@ -197,27 +208,28 @@
 
 ### F6 任务处理体验
 
-- 任务开始后启动**前台服务**：Android 15+（API 35）声明 `mediaProcessing` 类型，更低版本用 `dataSync`（两者单次运行均有 6 小时系统上限，满足本场景），常驻通知显示进度百分比；
+- 任务开始后启动**前台服务**：Android 15+（API 35）声明 `mediaProcessing` 类型，更低版本用 `dataSync`，常驻通知显示进度百分比；长任务仍受系统 wall-time/OEM 策略约束，不能仅凭 API 理论上限宣称 6 小时保证；
 - 持有部分 WakeLock，保证熄屏后任务继续；
 - App 内进度页：进度条 + 百分比 + 已用时间 + 预计剩余时间 + 取消按钮；
-- 进度来源：引擎回调（Media3 Transformer 的进度 API），经 EventChannel 推送至 Flutter；
-- **取消**：立即停止转码、删除临时文件与半成品输出；
+- 进度来源：视频/AAC 转码使用 Media3 Transformer 进度，音频 copy 按已复制 sample 时间戳/源音轨 span 计算；统一经 EventChannel 推送至 Flutter，事件必须携带 `taskKind`；
+- **取消**：立即停止当前处理、删除临时文件与半成品输出；
 - **失败处理**：错误分类映射为用户可读文案（存储不足 / 编码器初始化失败 / 源文件损坏 / 未知错误+原始错误码），失败后清理临时文件；
 - **异常退出恢复清理（M2 必做）**：每个任务在应用私有持久化存储中维护最小任务日志，至少记录 `taskId`、阶段、私有临时文件标识、已分配的 MediaStore URI（如有）和开始时间；任务成功完成且临时文件已删除后再清除该记录；
 - App/处理服务启动时先与实际活动任务对账。若任务日志存在但已无对应活动任务，则删除该任务的私有临时文件；若日志记录了尚未完成发布的 App 自有 MediaStore URI，Android 10+ 删除 `IS_PENDING=1` 的条目，Android 8～9 删除对应 MediaStore 记录及半成品文件；最后清除任务日志；
 - 启动对账后扫描**仅限 App 自有**的 `cache/transcode/`：删除未被当前活动任务引用的孤儿文件；清理为 best-effort，失败写入 F19 日志但不得阻塞启动或覆盖业务结果；严禁扫描或删除用户其他目录、无日志归属的公共媒体以及已经成功发布的输出；
-- 同一时间只允许一个转码任务（P0 阶段），新任务需等待或取消当前任务。
+- 同一时间只允许一个媒体处理任务（视频压缩或音频提取，P0 阶段），新任务需等待或取消当前任务。
 
-**验收标准**：用一段时长接近 6 小时的源视频和一段大小接近 50 GB 的源视频分别做边界测试；任务开始后切换到其他 App 并熄屏，保持后台直到任务完整结束，而不是只观察固定 10 分钟；进度单调递增不回跳；正常失败或取消后无残留临时文件、MediaStore pending 条目或半成品输出；分别在“转码中”和“发布中”强制结束 App，重启后能自动完成对账清理，`cache/transcode/` 中无未被活动任务引用的文件，系统相册中无不完整输出；连续重复 10 次异常中断后存储占用不单调增长；清理不得误删已成功输出或任何非本 App 文件；杀掉 App 后服务内任务的行为可预期（本期允许任务随进程终止，但重启 App 不出现僵尸任务状态）。
+**验收标准**：M2 已按 Pixel 当前私有使用场景接受；进度、正常失败/取消清理、任务恢复和发布所有权边界保持为产品契约。接近 6 小时、接近 50 GB、持续后台至完成、转码/发布强杀、连续 10 次异常中断、多 Provider 与多 SoC 的组合矩阵保留为 non-blocking hardening：未实际执行不得标为 PASS，补证前不得据此扩大生产支持范围，但不阻止 M3。
 
 ### F7 输出与结果
 
-- 视频输出到相册 `Movies/VideoSlim/`，音频输出到 `Music/VideoSlim/`，通过 `MediaStore` 插入（使用 `IS_PENDING` 标志防止写入中被扫描）；
-- 文件命名：`原文件名_slim_yyyyMMdd_HHmmss.mp4 / .m4a`；
-- 成功后必须在结果页顶部以高显著性文案显示“已保存到：系统相册 > Movies > VideoSlim > 文件名”，不得只显示原始 `content://` URI 或模糊的“保存成功”；同时提供“在相册中查看/播放”主按钮，无法定位具体相册目录的机型至少应直接打开该输出视频；
+- 视频输出到相册 `Movies/VideoSlim/`，音频输出到系统音频 `Music/VideoSlim/`，通过 `MediaStore` 插入（使用 `IS_PENDING` 标志防止写入中被扫描）；视频和音频都允许用户显式改用持久化授权的自定义 SAF 文件夹；
+- 默认文件命名：视频为 `<safe stem>_slim_yyyyMMdd_HHmmss.mp4`，音频固定为 `<safe stem>_slim_yyyyMMdd_HHmmss.m4a`；`safe stem` 是去除扩展名并完成危险字符/路径分隔符清洗后的源文件名主干；
+- MediaStore/SAF provider 在同秒生成或已有同名文件时追加 collision suffix（例如 ` (1)`），它只是第二层冲突保护，不替代时间戳命名；结果页、snapshot 和 F19 必须使用 provider 实际分配的文件名；
+- 成功后必须在结果页顶部以高显著性文案显示实际保存位置与文件名：视频为“系统相册 > Movies > VideoSlim > 文件名”，音频为“系统音频 > Music > VideoSlim > 文件名”，自定义 SAF 显示用户可理解的文件夹标签；不得只显示原始 `content://` URI 或模糊的“保存成功”。同时提供打开/播放主按钮；
 - 结果页展示：原大小 → 新大小、节省百分比（大字号突出）、实际文件名与人类可读保存位置、点击可播放预览、分享按钮（系统分享）、"删除原视频"按钮（需二次确认，且仅对相册来源提供）。
 
-**验收标准**：输出后立即在系统相册可见；用户无需自行搜索即可在 10 秒内从成功页确认保存位置并打开输出；分享到微信可正常发送播放。
+**验收标准**：默认输出后立即在对应系统媒体集合可见；用户无需自行搜索即可在 10 秒内从成功页确认实际保存位置并打开输出；自定义 SAF 输出同样显示实际文件名与文件夹标签；分享时使用真实媒体 MIME 并可正常发送播放。
 
 ### F19 应用内调试日志页
 
@@ -231,6 +243,7 @@
 - 入口：设置页"调试日志"（M1 阶段可临时放首页角落）；
 - 每条含时间戳；提供**一键复制全部**与**分享**按钮（分享出的纯文本直接发给 Hermes）；
 - 日志轮转：最多保留最近 2000 条或 1 MB。
+- 日志、截图和验收文档不得保留任何真实凭据；凭据值始终替换为 `[REDACTED]`。
 
 **验收标准**：人为制造一次失败（如选损坏文件压缩），日志页可见完整错误链路；一键复制后粘贴到聊天软件内容完整可读。
 
@@ -263,7 +276,7 @@
 | 跨平台框架 | **Flutter（Dart）** | AI 训练语料最丰富的跨平台框架，适合 AI 辅助的零基础开发者；UI 与业务逻辑 iOS/Android 复用。备选 React Native 亦可行但视频生态更弱。 |
 | Android 视频引擎 | **Jetpack Media3 Transformer**（+ media3-effect） | Google 官方、Apache 2.0 授权（无开源义务）、基于 MediaCodec 硬件加速、原生支持转码/裁剪/剪辑/效果、自带机型兼容 workaround。 |
 | 无损音频直提 | **MediaExtractor + MediaMuxer** | 系统 API，纯流复制，零依赖。 |
-| 有损音频转码 | **MediaCodec**（AAC 编码器） | 系统 API，标准解码→编码管线。 |
+| 有损音频转码 | **Media3 Transformer audio-only**（底层 MediaCodec） | 强制音频解码→AAC-LC 编码，固定 192/128/96/64 kbps；即使 AAC→AAC 也禁止静默 transmux。 |
 | ❌ 不采用为主引擎 | FFmpegKit / 其 fork | FFmpegKit 官方已退役（2025-04 二进制下架）；社区 fork `ffmpeg_kit_flutter_new` 虽在维护，但内含 x264/x265 等 GPL 库（上架有开源义务风险），且软件编码在手机上处理 1 小时视频需数小时，不符合核心场景。**仅**作为 F15 MP3 等边缘需求的可选附加引擎。 |
 | 数据库（P1） | sqflite | 简单成熟。 |
 | 状态管理 | Riverpod 或 Provider | 由 AI 按其最熟悉的选择，一经选定不再更换。 |
@@ -300,18 +313,22 @@ abstract class VideoEngine {
   /// 读取视频完整信息
   Future<VideoInfo> getVideoInfo(String uri);
 
-  /// 统一处理入口：压缩/裁剪/时间剪辑在一次调用（一次转码）内完成。
+  /// 统一视频处理入口：压缩/裁剪/时间剪辑在一次调用（一次转码）内完成。
   /// 返回 taskId，进度经 progressStream 推送。
   Future<String> process(ProcessRequest request);
 
-  /// 音频提取（lossless=true 走流复制；false 走重编码）
+  /// 提取第一条音轨：mode=copy 仅对 AAC-LC/HE-AAC 做 sample copy；
+  /// mode=aac 用 Media3 audio-only 强制重编码为指定 AAC-LC 码率。
   Future<String> extractAudio(AudioExtractRequest request);
 
-  /// 取消当前任务并清理临时文件
+  /// 取消当前任务并清理临时文件/未完成发布条目
   Future<void> cancel(String taskId);
 
-  /// 进度流：ProgressEvent(taskId, percent 0-100, state)
+  /// 进度流：每个 ProgressEvent 必须携带 taskKind。
   Stream<ProgressEvent> get progressStream;
+
+  /// 恢复当前或最近的可重连任务；snapshot 必须携带 taskKind。
+  Future<TaskSnapshot?> getTaskSnapshot();
 
   /// 设备能力探测（是否有 HEVC 硬件编码器等）
   Future<DeviceCapabilities> getCapabilities();
@@ -323,31 +340,67 @@ abstract class VideoEngine {
 - `MethodChannel`：`videoslim/engine`
 - `EventChannel`：`videoslim/progress`
 
-**方法与 JSON 参数约定**（引擎实现必须严格遵守，iOS 未来同样实现此契约）：
+**方法与 JSON 参数约定**（引擎实现必须严格遵守并拒绝额外/缺失 key，iOS 未来同样实现此契约）：
 
 | 方法 | 入参（JSON） | 出参 |
 |---|---|---|
 | `getVideoInfo` | `{ "uri": String }` | VideoInfo JSON（字段见 §6） |
 | `getCapabilities` | `{}` | `{ "hevcEncoder": bool, "h264Encoder": bool }` |
-| `process` | `{ "uri", "outputFileName", "video": { "codec": "hevc"\|"h264", "bitrate": int(bps), "longEdge": int?(null=保持), "crop": {"left","top","width","height"}?(显示方向像素), "trimStartMs": int?, "trimEndMs": int? }, "audio": { "mode": "copy"\|"reencode"\|"remove", "bitrate": int? } }` | `{ "taskId": String }` |
-| `extractAudio` | `{ "uri", "outputFileName", "lossless": bool, "bitrate": int? }` | `{ "taskId": String }` |
+| `process` | `{ "uri", "outputFileName", "destination": { "treeUri": String?, "label": String }, "video": { "codec": "hevc"\|"h264", "decoderMode": "hardware"\|"software", "bitrate": int(bps), "longEdge": int?(null=保持), "crop": {"left","top","width","height"}?(显示方向像素), "trimStartMs": int?, "trimEndMs": int? }, "audio": { "mode": "copy"\|"reencode"\|"remove", "bitrate": int? } }` | `{ "taskId": String }` |
+| `extractAudio` | `{ "uri": String, "outputFileName": String, "destination": { "treeUri": String?, "label": String }, "audio": { "mode": "copy"\|"aac", "bitrate": int? } }` | `{ "taskId": String }` |
 | `cancel` | `{ "taskId": String }` | `{}` |
+| `getTaskSnapshot` | `{}` | TaskSnapshot JSON 或 `null` |
 
-**进度事件**：`{ "taskId", "percent": double, "state": "running"|"success"|"failed"|"cancelled", "outputUri": String?, "errorCode": String?, "errorMessage": String? }`
+`extractAudio` 的 request 是单一事实源，不存在旧的 `lossless` 布尔字段：
+- `audio.mode="copy"` 时 `audio.bitrate` 必须为 `null`；只接受第一条音轨为 AAC-LC/HE-AAC（`audio/mp4a-latm`）。
+- `audio.mode="aac"` 时 `audio.bitrate` 必须严格为 `192000|128000|96000|64000`；Media3 audio-only 必须强制实际重编码。
+- 默认 destination 为 `{ "treeUri": null, "label": "系统音频 > Music > VideoSlim" }`；自定义保存使用已持久化授权的 SAF tree URI 与用户可读 label。
+- `outputFileName` 必须是安全的 `.m4a` 名称；默认 `<safe stem>_slim_yyyyMMdd_HHmmss.m4a`，provider collision suffix 仅作为第二层保护。
 
-**错误码约定**：`INSUFFICIENT_STORAGE` / `ENCODER_UNAVAILABLE` / `SOURCE_CORRUPTED` / `CANCELLED` / `UNKNOWN`。
+**任务类型**：`taskKind` 只允许 `"video_compression"|"audio_extraction"`。native 新建的每个 progress event 与 snapshot 都必须显式携带；Dart 仅为升级前缺少该字段的旧 snapshot 回退到 `video_compression`，不得对新事件静默猜测。
+
+**进度事件**：
+
+```json
+{
+  "taskKind": "video_compression|audio_extraction",
+  "taskId": "String",
+  "percent": 0.0,
+  "state": "running|success|failed|cancelled",
+  "phase": "preparing|encoding|publishing|cancelling|finished",
+  "outputUri": null,
+  "outputFileName": null,
+  "outputLocationLabel": "String",
+  "errorCode": null,
+  "errorMessage": null
+}
+```
+
+视频任务可继续携带 `videoDecoderMode` 与 `actualVideoEncodingMode`；音频任务不得据此显示视频 Decoder/Encoder 状态。百分比、状态与阶段仍遵守 M2 的单调和终态规则。
+
+**TaskSnapshot**：至少携带进度事件的全部公共字段，加上 `sourceUri`、`startedAtEpochMs` 与 `retryRequest`。`taskKind=video_compression` 时 `retryRequest` 严格解析为 `ProcessRequest`；`taskKind=audio_extraction` 时严格解析为 `AudioExtractRequest`，两者不得串线。
+
+**M3 稳定错误码**：
+- `AUDIO_TRACK_MISSING`：没有第一条可提取音轨；
+- `AUDIO_COPY_UNSUPPORTED`：copy 的第一音轨不是 AAC-LC/HE-AAC；
+- `AUDIO_CHANNEL_LAYOUT_UNSUPPORTED`：第一音轨超过 2 声道；
+- `AUDIO_DECODING_FAILED` / `AUDIO_ENCODING_FAILED`：实际音频 Decoder/AAC Encoder 失败或不可用；
+- `AUDIO_OUTPUT_INVALID`：临时输出为空、没有可识别 AAC 音轨或明显截断。
+
+继续复用 `INSUFFICIENT_STORAGE`、source/provider 权限错误、`OUTPUT_PERMISSION_LOST`、`CANCELLED` 与 `UNKNOWN`；普通 UI 不泄露原始异常，技术细节只进入 F19，任何凭据一律写为 `[REDACTED]`。
 
 ### 5.5 Android 端实现要点
 
 - 依赖（版本号以开发时最新稳定版为准，三者必须同版本）：
   `androidx.media3:media3-transformer`、`media3-effect`、`media3-common`
 - **压缩**：`Transformer.Builder` + `setVideoMimeType`（H.265/H.264）；码率经 `DefaultEncoderFactory` + `VideoEncoderSettings.Builder().setBitrate()` 设置；分辨率缩放用 `Presentation` 效果；裁剪用 `Crop` 效果（NDC 坐标）；时间剪辑用 `MediaItem.ClippingConfiguration`。
-- **音频 copy 模式**：不设置音频 MIME、不加音频处理器，让 Transformer 对音轨走转封装路径。
-- **无损音频直提**：独立实现类，MediaExtractor → MediaMuxer，不经过 Transformer。
+- **视频压缩的音频 copy 模式**：不设置音频 MIME、不加音频处理器，让 Transformer 对视频内音轨走转封装路径。
+- **M3 音频 copy**：独立实现类，`MediaExtractor` → `MediaMuxer` 逐 sample 复制第一条 AAC-LC/HE-AAC（`audio/mp4a-latm`）音轨，不经过 Transformer，也不创建 Decoder/Encoder。
+- **M3 AAC 模式**：Media3 Transformer audio-only，`setRemoveVideo(true)`，并强制 `audioNeedsEncoding=true` 以保证 AAC→AAC 仍实际创建音频 Decoder/AAC Encoder；目标码率只允许 192000/128000/96000/64000 bps。
 - **前台服务**：任务在 `ForegroundService` 中执行；建通知渠道；进度节流为每秒 ≤ 2 次更新。
 - **权限清单**：`FOREGROUND_SERVICE` + 对应类型权限（`FOREGROUND_SERVICE_MEDIA_PROCESSING` / `FOREGROUND_SERVICE_DATA_SYNC`，Android 14+ 缺失会直接崩溃）、`POST_NOTIFICATIONS`（Android 13+ 需运行时申请，否则进度通知不显示）、`WAKE_LOCK`。Photo Picker 选取与 MediaStore 写入自有输出文件均**无需**存储权限。
 - **输出流程**：先写入应用私有缓存目录的临时文件 → 将任务阶段、临时文件标识及已分配的 App 自有 MediaStore URI 持久化到最小任务日志 → 成功后经 MediaStore 拷入公共目录 → 删除临时文件并清除任务日志。失败/取消立即删除临时文件和未完成发布条目；异常退出由下次 App/服务启动对账清理，确保公共目录无半成品污染。
-- **进度**：使用 Transformer 的进度查询 API 轮询（如 `getProgress`），经 EventChannel 推送。
+- **进度**：视频/AAC 转码使用 Transformer 进度查询；音频 copy 按 sample PTS 计算。所有 EventChannel 事件与 task snapshot 显式输出 `taskKind`。
 
 ### 5.6 项目目录结构（建议）
 
@@ -421,8 +474,10 @@ class VideoInfo {
 
 class ProcessRequest {
   String uri; String outputFileName;
+  String outputLocationLabel; String? outputTreeUri;
   String videoCodec;            // "hevc" | "h264"
-  int videoBitrate;             // bps
+  String videoDecoderMode;      // "hardware" | "software"
+  int videoBitrate;             // bps，硬件 Encoder 目标平均码率 VBR
   int? longEdge;                // null = 保持原分辨率
   CropRect? crop;               // 显示方向像素坐标
   int? trimStartMs; int? trimEndMs;
@@ -432,12 +487,37 @@ class ProcessRequest {
 
 class CropRect { int left; int top; int width; int height; }
 
-enum TaskState { idle, running, success, failed, cancelled }
+enum AudioExtractMode { copy, aac }
 
-class TaskInfo {
-  String taskId; TaskState state; double percent;
+class AudioExtractRequest {
+  String uri; String outputFileName;
+  String outputLocationLabel;   // 默认“系统音频 > Music > VideoSlim”
+  String? outputTreeUri;        // null=默认 MediaStore；否则为持久化 SAF tree
+  AudioExtractMode mode;
+  int? bitrate;                 // copy=null；aac=192000|128000|96000|64000
+
+  // Wire 序列化必须生成 §5.4 的 destination 与 audio 两个对象。
+}
+
+enum TaskKind { videoCompression, audioExtraction }
+enum TaskState { idle, running, success, failed, cancelled }
+enum TaskPhase { preparing, encoding, publishing, cancelling, finished }
+
+class ProgressEvent {
+  TaskKind taskKind;             // 新事件必填
+  String taskId; TaskState state; TaskPhase phase; double percent;
+  String? outputUri; String? outputFileName; String outputLocationLabel;
+  String? errorCode; String? errorMessage;
+}
+
+class TaskSnapshot {
+  TaskKind taskKind;             // 新 snapshot 必填
+  String taskId; TaskState state; TaskPhase phase; double percent;
+  String sourceUri; String outputFileName; String outputLocationLabel;
+  int startedAtEpochMs;
+  ProcessRequest? videoRetryRequest;
+  AudioExtractRequest? audioRetryRequest; // 与 taskKind 严格匹配，不能同时存在
   String? outputUri; String? errorCode; String? errorMessage;
-  DateTime startedAt;
 }
 
 // P1
@@ -458,9 +538,10 @@ class HistoryRecord {
 | S1 首页 | 三张大功能卡片：压缩视频 / 提取音频 / 裁剪画面；底部最近一次结果摘要（P1 换成历史入口 + 累计节省空间） |
 | S2 视频信息页 | 视频封面帧 + F2 全部字段列表 + 底部主按钮进入所选功能配置 |
 | S3 压缩配置页 | 预设三选一（分段控件）+ "自定义"展开高级参数 + 顶部实时预估大小（原大小 → 预估大小，绿色箭头）+ 开始按钮 |
+| S3A 音频提取配置 | copy / AAC 192/128/96/64；AAC 源默认 copy，非 AAC 禁用 copy 并默认 AAC 128；显示默认/SAF 位置与时间戳文件名 |
 | S4 裁剪编辑器 | 预览帧 + 裁剪框 + 比例选择条 + 帧位置滑杆 + 像素尺寸标签 + 下一步（进入 S3） |
 | S5 进度页 | 圆形进度 + 百分比 + 预计剩余 + 取消；提示"可退出界面，处理会在后台继续" |
-| S6 结果页 | 顶部醒目显示“已保存到：系统相册 > Movies > VideoSlim > 文件名” + “在相册中查看/播放”主按钮 + 节省百分比大字 + 前后大小 + 分享 + 删除原视频（二次确认） |
+| S6 结果页 | 按 `taskKind` 显示“视频/音频已保存”、人类可读位置与 provider 实际文件名；打开/播放 + 分享；视频保留节省信息和受限的删除原视频入口，音频显示大小/时长/采样率/声道/码率 |
 | S7 历史页（P1） | 任务列表 + 累计节省统计 |
 | S8 设置/关于 | 版本、开源许可证列表（合规要求）、默认预设选择 |
 
@@ -484,11 +565,17 @@ class HistoryRecord {
 
 ### M2 压缩功能完整化
 - 任务：F3 全部规格（预设/自定义/预估/智能提示/降级）+ F6 全部（前台服务、通知、取消、失败分类、空间检查、最小任务日志、启动对账与孤儿文件/半成品输出清理）+ F7 完整结果页。
-- 验收：F3、F6、F7 验收标准全部通过；完成“接近 6 小时”和“接近 50 GB”两类边界输入测试，任务切到后台并熄屏后持续运行直至结束；成功页明确显示实际文件名和 `系统相册 > Movies > VideoSlim`，用户可直接打开输出；分别在转码中和 MediaStore 发布中强制结束 App，重启后自动清理残留；连续 10 次异常中断后缓存和公共存储占用不持续增长，且不误删任何成功输出或非本 App 文件。
+- 状态：`ACCEPTED — private scope`（2026-07-20）。项目所有者已接受 Pixel 当前私有使用场景，可进入 M3；不等同于生产发布或多设备保证。
+- non-blocking hardening：严格同源 A/B/C、显式 software-only、Photo Picker/多 DocumentsProvider、多 SoC/Android、接近 6 小时/50 GB、>4 GB 输出、持续后台与扩展破坏性恢复矩阵。未执行项不得预填 PASS，补证前不得扩大支持范围。
+- 视频编码决策：设备硬件 Encoder + 目标平均码率 VBR；不引入 CBR，也不以实际输出码率偏离目标值硬拦截成功发布。
 
 ### M3 音频提取
-- 任务：F4 模式 A + 模式 B，入口接入首页与信息页。
-- 验收：F4 验收标准通过。
+- 任务：实现 F4 AAC copy + AAC 强制重编码，入口接入首页与信息页；复用 M2 前台服务、通知、取消、snapshot、发布、恢复与 F19，并以 `taskKind=audio_extraction` 与视频任务隔离。
+- copy：第一音轨必须为 AAC-LC/HE-AAC（`audio/mp4a-latm`），使用 `MediaExtractor + MediaMuxer` 纯 sample copy 到 `.m4a`，不得创建 Decoder/Encoder；非 AAC 稳定返回 `AUDIO_COPY_UNSUPPORTED`。
+- AAC：Media3 audio-only 强制重编码为 AAC-LC 192/128/96/64 kbps；即使 AAC→AAC 也不得 transmux。支持 mono/stereo，>2 声道拒绝；无音轨返回 `AUDIO_TRACK_MISSING`。
+- 输出：默认 `Music/VideoSlim`，可选持久化 SAF；默认名 `<safe stem>_slim_yyyyMMdd_HHmmss.m4a`，provider collision suffix 是第二层保护。
+- 不做：MP3、多音轨选择、trim、音量/降噪、混音、采样率选择、标签/封面。
+- 验收：按 `docs/m3-device-acceptance.md` 实测 copy 短片 3 次、同源 AAC 四码率 bytes 单调及实际 Decoder/Encoder、mono、Opus WebM、无音轨、后台/锁屏、转换/发布取消、默认/SAF、1 小时 copy <10 秒和 F19。未实际执行不得预填 PASS。
 
 ### M4 裁剪编辑器 + 时间裁剪
 - 任务：F5 全部（含坐标换算纯函数与单元测试）+ F8；裁剪参数并入压缩管线一次转码。
