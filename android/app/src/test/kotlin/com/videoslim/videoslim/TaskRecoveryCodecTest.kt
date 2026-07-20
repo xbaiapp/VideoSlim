@@ -15,15 +15,38 @@ class TaskRecoveryCodecTest {
         assertThrows(IOException::class.java) {
             commitQuarantineBoundary(
                 commitDestination = { actions += "destination" },
-                syncDirectory = {
-                    actions += "sync"
+                syncQuarantineDirectory = {
+                    actions += "quarantine-sync"
                     throw IOException("sync failed")
+                },
+                syncParentDirectory = { actions += "parent-sync" },
+                clearActiveJournal = { actions += "clear" },
+            )
+        }
+
+        assertEquals(listOf("destination", "quarantine-sync"), actions)
+    }
+
+    @Test
+    fun `active journal is not cleared when quarantine parent sync fails`() {
+        val actions = mutableListOf<String>()
+
+        assertThrows(IOException::class.java) {
+            commitQuarantineBoundary(
+                commitDestination = { actions += "destination" },
+                syncQuarantineDirectory = { actions += "quarantine-sync" },
+                syncParentDirectory = {
+                    actions += "parent-sync"
+                    throw IOException("parent sync failed")
                 },
                 clearActiveJournal = { actions += "clear" },
             )
         }
 
-        assertEquals(listOf("destination", "sync"), actions)
+        assertEquals(
+            listOf("destination", "quarantine-sync", "parent-sync"),
+            actions,
+        )
     }
 
     @Test

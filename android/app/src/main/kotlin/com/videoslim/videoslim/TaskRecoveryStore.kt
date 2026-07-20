@@ -426,6 +426,9 @@ class TaskRecoveryStore(
         if (!quarantineDirectory.exists() && !quarantineDirectory.mkdirs()) {
             throw IOException("Unable to create recovery quarantine directory")
         }
+        val quarantineParent =
+            quarantineDirectory.parentFile
+                ?: throw IOException("Recovery quarantine directory has no parent")
         val stableName =
             UUID.nameUUIDFromBytes(taskId.toByteArray(StandardCharsets.UTF_8)).toString() +
                 QUARANTINE_EXTENSION
@@ -456,7 +459,8 @@ class TaskRecoveryStore(
                         throw IOException("Committed recovery quarantine record is unavailable")
                     }
                 },
-                syncDirectory = { syncDirectoryDurably(quarantineDirectory) },
+                syncQuarantineDirectory = { syncDirectoryDurably(quarantineDirectory) },
+                syncParentDirectory = { syncDirectoryDurably(quarantineParent) },
                 clearActiveJournal = {
                     commit(preferences.edit().remove(RECORD_KEY), "quarantine-clear")
                 },
@@ -516,11 +520,13 @@ class TaskRecoveryStore(
 
 internal fun commitQuarantineBoundary(
     commitDestination: () -> Unit,
-    syncDirectory: () -> Unit,
+    syncQuarantineDirectory: () -> Unit,
+    syncParentDirectory: () -> Unit,
     clearActiveJournal: () -> Unit,
 ) {
     commitDestination()
-    syncDirectory()
+    syncQuarantineDirectory()
+    syncParentDirectory()
     clearActiveJournal()
 }
 
