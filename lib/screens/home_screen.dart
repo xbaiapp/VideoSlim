@@ -13,6 +13,7 @@ import '../logic/eta_estimator.dart';
 import '../models/compression_settings.dart';
 import '../models/device_capabilities.dart';
 import '../models/output_location.dart';
+import '../models/process_request.dart';
 import '../models/progress_event.dart';
 import '../models/task_snapshot.dart';
 import '../models/video_info.dart';
@@ -58,6 +59,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _lastFailureCode;
   RequestedVideoDecoderMode _lastVideoDecoderMode =
       RequestedVideoDecoderMode.hardware;
+  ProcessRequest? _lastProcessRequest;
 
   int get _generation => _flow.generation;
   set _generation(int value) => _flow.generation = value;
@@ -302,6 +304,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _taskPhase = snapshot.phase;
         _taskOutputLocationLabel = snapshot.outputLocationLabel;
         _lastVideoDecoderMode = snapshot.videoDecoderMode;
+        _lastProcessRequest = snapshot.retryRequest;
         _actualVideoEncodingMode = snapshot.actualVideoEncodingMode;
         _preparing = false;
         _processing = true;
@@ -500,12 +503,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _compress() => _startCompression(videoDecoderMode: 'hardware');
 
   Future<void> _retryLastMode() =>
-      _startCompression(videoDecoderMode: _lastVideoDecoderMode.wireName);
+      _submitRetry(videoDecoderMode: _lastVideoDecoderMode.wireName);
 
   Future<void> _retryWithCompatibilityMode() async {
     if (_interactionLocked ||
         _lastFailureCode != 'VIDEO_DECODING_FAILED' ||
-        _lastVideoDecoderMode != RequestedVideoDecoderMode.hardware) {
+        _lastVideoDecoderMode != RequestedVideoDecoderMode.hardware ||
+        _lastProcessRequest == null) {
       return;
     }
     final confirmed = await showDialog<bool>(
@@ -529,8 +533,46 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (confirmed == true && mounted) {
-      await _startCompression(videoDecoderMode: 'software');
+      await _submitRetry(videoDecoderMode: 'software');
     }
+  }
+
+  Future<void> _submitRetry({required String videoDecoderMode}) async {
+    final previous = _lastProcessRequest;
+    if (_interactionLocked || previous == null || _outputPublished) return;
+    if (_progressStreamClosed) {
+      _flow.update(() {
+        _errorText = '处理状态连接已中断，请重启应用后再压缩。';
+      });
+      return;
+    }
+    if (previous.outputTreeUri != null) {
+      try {
+        final current = await widget.picker.getOutputLocation();
+        if (!mounted) return;
+        if (!current.writable || current.treeUri != previous.outputTreeUri) {
+          _flow.update(() {
+            _errorText = '原任务的保存文件夹已更改或需要重新授权，请重新选择后开始新任务。';
+          });
+          return;
+        }
+      } catch (error, stackTrace) {
+        if (mounted) {
+          _flow.update(() {
+            _errorText = _errorTextFor(
+              error,
+              fallback: '无法确认原任务的保存文件夹权限，请重新选择保存位置。',
+            );
+          });
+        }
+        _logError('重试前保存位置检查失败', error, stackTrace);
+        return;
+      }
+    }
+    await _submitCompression(
+      previous.withVideoDecoderMode(videoDecoderMode),
+      estimatedOutputBytes: null,
+    );
   }
 
   Future<void> _startCompression({required String videoDecoderMode}) async {
@@ -581,8 +623,29 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    final generation = ++_generation;
     final startedAt = _now();
+    final request = plan.toProcessRequest(
+      uri: uri,
+      outputFileName: _buildOutputFileName(info.fileName, startedAt),
+      outputLocationLabel: verifiedLocation.label,
+      outputTreeUri: verifiedLocation.treeUri,
+      videoDecoderMode: videoDecoderMode,
+    );
+    await _submitCompression(
+      request,
+      estimatedOutputBytes: plan.estimatedOutputBytes,
+      startedAt: startedAt,
+    );
+  }
+
+  Future<void> _submitCompression(
+    ProcessRequest request, {
+    required int? estimatedOutputBytes,
+    DateTime? startedAt,
+  }) async {
+    if (_interactionLocked || _outputPublished) return;
+    final generation = ++_generation;
+    final taskStartedAt = startedAt ?? _now();
     _activeGeneration = generation;
     _terminalEventHandled = false;
     _bufferedProgress.clear();
@@ -598,26 +661,19 @@ class _HomeScreenState extends State<HomeScreen> {
       _errorText = null;
       _lastFailureCode = null;
       _lastVideoDecoderMode = requestedVideoDecoderModeFromWireName(
-        videoDecoderMode,
+        request.videoDecoderMode,
       );
+      _lastProcessRequest = request;
       _outputInfo = null;
       _outputPublished = false;
       _publishedOutputUri = null;
-      _publishedOutputFileName = null;
+      _publishedOutputFileName = request.outputFileName;
       _taskId = null;
-      _taskOutputLocationLabel = verifiedLocation.label;
+      _taskOutputLocationLabel = request.outputLocationLabel;
       _actualVideoEncodingMode = ActualVideoEncodingMode.unknown;
     });
-    _startTiming(startedAt);
+    _startTiming(taskStartedAt);
 
-    final request = plan.toProcessRequest(
-      uri: uri,
-      outputFileName: _buildOutputFileName(info.fileName, startedAt),
-      outputLocationLabel: verifiedLocation.label,
-      outputTreeUri: verifiedLocation.treeUri,
-      videoDecoderMode: videoDecoderMode,
-    );
-    _publishedOutputFileName = request.outputFileName;
     try {
       _awaitingTaskId = true;
       _logFlow('提交 M2 压缩任务', details: request.toChannelMap());
@@ -636,7 +692,7 @@ class _HomeScreenState extends State<HomeScreen> {
         details: <String, Object?>{
           'taskId': taskId,
           'request': request.toChannelMap(),
-          'estimatedOutputBytes': plan.estimatedOutputBytes,
+          'estimatedOutputBytes': estimatedOutputBytes,
         },
       );
 
@@ -665,7 +721,7 @@ class _HomeScreenState extends State<HomeScreen> {
         'M2 压缩任务启动失败',
         error,
         stackTrace,
-        details: <String, Object?>{'uri': uri},
+        details: <String, Object?>{'uri': request.uri},
       );
     }
   }
@@ -1023,6 +1079,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _errorText = null;
       _lastFailureCode = null;
       _lastVideoDecoderMode = RequestedVideoDecoderMode.hardware;
+      _lastProcessRequest = null;
       _sourceInfo = null;
       _outputInfo = null;
       _outputPublished = false;
@@ -1231,14 +1288,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     _ErrorCard(
                       message: _errorText!,
                       canRetry:
-                          sourceInfo != null &&
-                          _compressionPlan?.isSupported == true &&
+                          _lastProcessRequest != null &&
                           !_outputPublished &&
                           _lastFailureCode !=
                               'COMPATIBILITY_DECODER_UNAVAILABLE' &&
                           !_progressStreamClosed,
                       onRetry: _interactionLocked ? null : _retryLastMode,
                       canCompatibilityRetry:
+                          _lastProcessRequest != null &&
                           _lastFailureCode == 'VIDEO_DECODING_FAILED' &&
                           _lastVideoDecoderMode ==
                               RequestedVideoDecoderMode.hardware,
@@ -2127,7 +2184,10 @@ bool _isNewerThanSnapshot(ProgressEvent event, TaskSnapshot snapshot) {
   if (event.state != TaskState.running) return true;
   if (event.percent > snapshot.percent) return true;
   if (event.percent < snapshot.percent) return false;
-  return _phaseRank(event.phase) > _phaseRank(snapshot.phase);
+  final phaseComparison = _phaseRank(event.phase) - _phaseRank(snapshot.phase);
+  if (phaseComparison != 0) return phaseComparison > 0;
+  return snapshot.actualVideoEncodingMode == ActualVideoEncodingMode.unknown &&
+      event.actualVideoEncodingMode != ActualVideoEncodingMode.unknown;
 }
 
 String _stableCode(String? value, {String fallback = 'UNKNOWN'}) {

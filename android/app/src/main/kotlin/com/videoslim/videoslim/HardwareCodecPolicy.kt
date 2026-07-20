@@ -398,7 +398,9 @@ internal class LoggingEncoderFactory(
         logSessionId: LogSessionId?,
     ): Codec =
         delegate.createForAudioEncoding(requestedFormat, logSessionId).also { codec ->
-            logger("actual audio encoder name=${codec.name} format=${codec.configurationFormat}")
+            runCatching {
+                logger("actual audio encoder name=${codec.name} format=${codec.configurationFormat}")
+            }
         }
 
     override fun createForVideoEncoding(
@@ -406,8 +408,10 @@ internal class LoggingEncoderFactory(
         logSessionId: LogSessionId?,
     ): Codec =
         delegate.createForVideoEncoding(requestedFormat, logSessionId).also { codec ->
-            logger("actual video encoder name=${codec.name} format=${codec.configurationFormat}")
-            onVideoEncoderCreated(codec.name)
+            runCatching {
+                logger("actual video encoder name=${codec.name} format=${codec.configurationFormat}")
+            }
+            runCatching { onVideoEncoderCreated(codec.name) }
         }
 
     override fun audioNeedsEncoding(): Boolean = delegate.audioNeedsEncoding()

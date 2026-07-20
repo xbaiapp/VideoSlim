@@ -37,4 +37,24 @@ class MediaPublicationCopyTest {
 
         assertEquals(8, output.size())
     }
+
+    @Test
+    fun `readback counting detects short exact and oversized provider outputs`() {
+        assertEquals(
+            7L,
+            countPublicationBytes(
+                ByteArrayInputStream(ByteArray(7)),
+                shouldCancel = { false },
+                stopAfterBytes = 9,
+                bufferSize = 3,
+            ),
+        )
+        requirePublishedByteCount(expectedBytes = 7, observedBytes = 7)
+        assertThrows(IOException::class.java) {
+            requirePublishedByteCount(expectedBytes = 8, observedBytes = 7)
+        }
+        assertThrows(IOException::class.java) {
+            requirePublishedByteCount(expectedBytes = 6, observedBytes = 7)
+        }
+    }
 }

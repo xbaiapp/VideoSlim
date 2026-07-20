@@ -1,4 +1,5 @@
 import 'progress_event.dart';
+import 'process_request.dart';
 
 /// Reconnectable snapshot of an active or terminal processing task.
 final class TaskSnapshot {
@@ -10,6 +11,7 @@ final class TaskSnapshot {
     required this.percent,
     required this.sourceUri,
     required this.outputFileName,
+    this.retryRequest,
     this.outputLocationLabel = '系统相册 > Movies > VideoSlim',
     this.videoDecoderMode = RequestedVideoDecoderMode.hardware,
     this.actualVideoEncodingMode = ActualVideoEncodingMode.unknown,
@@ -43,6 +45,7 @@ final class TaskSnapshot {
       );
     }
 
+    final retryRequestValue = map['retryRequest'];
     return TaskSnapshot(
       taskId: _requiredNonEmptyString(map, 'taskId'),
       state: state,
@@ -50,6 +53,15 @@ final class TaskSnapshot {
       percent: percent,
       sourceUri: _requiredNonEmptyString(map, 'sourceUri'),
       outputFileName: _requiredNonEmptyString(map, 'outputFileName'),
+      retryRequest: retryRequestValue == null
+          ? null
+          : ProcessRequest.fromChannelMap(
+              retryRequestValue is Map<Object?, Object?>
+                  ? retryRequestValue
+                  : throw const FormatException(
+                      'Expected nullable Map for retryRequest',
+                    ),
+            ),
       outputLocationLabel:
           _optionalString(map, 'outputLocationLabel') ??
           '系统相册 > Movies > VideoSlim',
@@ -84,6 +96,9 @@ final class TaskSnapshot {
   /// Requested public output display name.
   final String outputFileName;
 
+  /// Immutable original request used only for explicit user-invoked retries.
+  final ProcessRequest? retryRequest;
+
   /// User-facing output destination label.
   final String outputLocationLabel;
 
@@ -117,6 +132,7 @@ final class TaskSnapshot {
     'percent': percent,
     'sourceUri': sourceUri,
     'outputFileName': outputFileName,
+    'retryRequest': retryRequest?.toChannelMap(),
     'outputLocationLabel': outputLocationLabel,
     'videoDecoderMode': videoDecoderMode.wireName,
     'actualVideoEncodingMode': actualVideoEncodingMode.wireName,

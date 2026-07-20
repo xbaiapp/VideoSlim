@@ -95,6 +95,39 @@ void main() {
       );
     });
 
+    test(
+      'round-trips the complete retryable request without changing output settings',
+      () {
+        const request = ProcessRequest(
+          uri: 'content://media/video/10',
+          outputFileName: 'retry_exact.mp4',
+          outputTreeUri: 'content://provider/tree/custom',
+          outputLocationLabel: '自定义文件夹 > Archive',
+          videoCodec: 'hevc',
+          videoDecoderMode: 'hardware',
+          videoBitrate: 800000,
+          longEdge: 1280,
+          trimStartMs: 1000,
+          trimEndMs: 5000,
+          audioMode: 'reencode',
+          audioBitrate: 96000,
+        );
+
+        final restored = ProcessRequest.fromChannelMap(request.toChannelMap());
+        expect(restored.toChannelMap(), request.toChannelMap());
+        expect(
+          restored.withVideoDecoderMode('software').toChannelMap(),
+          <String, Object?>{
+            ...request.toChannelMap(),
+            'video': <String, Object?>{
+              ...(request.toChannelMap()['video']! as Map<String, Object?>),
+              'decoderMode': 'software',
+            },
+          },
+        );
+      },
+    );
+
     test('asserts on unsupported wire values and invalid dimensions', () {
       expect(
         () => ProcessRequest(

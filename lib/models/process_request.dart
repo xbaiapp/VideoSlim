@@ -11,6 +11,17 @@ class CropRect {
        assert(width > 0),
        assert(height > 0);
 
+  /// Strictly reconstructs a crop rectangle from its channel map.
+  factory CropRect.fromChannelMap(Map<Object?, Object?> map) {
+    _requireExactKeys(map, const <String>{'left', 'top', 'width', 'height'});
+    return CropRect(
+      left: _requiredWholeInt(map, 'left', minimum: 0),
+      top: _requiredWholeInt(map, 'top', minimum: 0),
+      width: _requiredWholeInt(map, 'width', minimum: 1),
+      height: _requiredWholeInt(map, 'height', minimum: 1),
+    );
+  }
+
   /// Horizontal origin in pixels.
   final int left;
 
@@ -72,6 +83,66 @@ class ProcessRequest {
        ),
        assert(audioBitrate == null || audioBitrate > 0);
 
+  /// Strictly reconstructs the immutable request carried by a native task
+  /// snapshot. It is used only for explicit user-invoked retries.
+  factory ProcessRequest.fromChannelMap(Map<Object?, Object?> map) {
+    _requireExactKeys(map, const <String>{
+      'uri',
+      'outputFileName',
+      'destination',
+      'video',
+      'audio',
+    });
+    final destination = _requiredMap(map, 'destination');
+    _requireExactKeys(destination, const <String>{'treeUri', 'label'});
+    final video = _requiredMap(map, 'video');
+    _requireExactKeys(video, const <String>{
+      'codec',
+      'decoderMode',
+      'bitrate',
+      'longEdge',
+      'crop',
+      'trimStartMs',
+      'trimEndMs',
+    });
+    final audio = _requiredMap(map, 'audio');
+    _requireExactKeys(audio, const <String>{'mode', 'bitrate'});
+
+    final cropValue = video['crop'];
+    return ProcessRequest(
+      uri: _requiredString(map, 'uri'),
+      outputFileName: _requiredString(map, 'outputFileName'),
+      outputLocationLabel: _requiredString(destination, 'label'),
+      outputTreeUri: _optionalString(destination, 'treeUri'),
+      videoCodec: _requiredEnumString(video, 'codec', const <String>{
+        'hevc',
+        'h264',
+      }),
+      videoDecoderMode: _requiredEnumString(
+        video,
+        'decoderMode',
+        const <String>{'hardware', 'software'},
+      ),
+      videoBitrate: _requiredWholeInt(video, 'bitrate', minimum: 1),
+      longEdge: _optionalWholeInt(video, 'longEdge', minimum: 1),
+      crop: cropValue == null
+          ? null
+          : CropRect.fromChannelMap(
+              cropValue is Map<Object?, Object?>
+                  ? cropValue
+                  : throw const FormatException('Expected Map for video.crop'),
+            ),
+      trimStartMs: _optionalWholeInt(video, 'trimStartMs', minimum: 0),
+      trimEndMs: _optionalWholeInt(video, 'trimEndMs', minimum: 0),
+      audioMode: _requiredEnumString(audio, 'mode', const <String>{
+        'copy',
+        'reencode',
+        'remove',
+      }),
+      audioBitrate: _optionalWholeInt(audio, 'bitrate', minimum: 1),
+    );
+  }
+
   /// Source content URI.
   final String uri;
 
@@ -130,11 +201,29 @@ class ProcessRequest {
     },
     'audio': <String, Object?>{'mode': audioMode, 'bitrate': audioBitrate},
   };
+
+  /// Returns the same immutable request with only its input decoder policy
+  /// changed for an explicit retry.
+  ProcessRequest withVideoDecoderMode(String value) => ProcessRequest(
+    uri: uri,
+    outputFileName: outputFileName,
+    outputLocationLabel: outputLocationLabel,
+    outputTreeUri: outputTreeUri,
+    videoCodec: videoCodec,
+    videoDecoderMode: value,
+    videoBitrate: videoBitrate,
+    longEdge: longEdge,
+    crop: crop,
+    trimStartMs: trimStartMs,
+    trimEndMs: trimEndMs,
+    audioMode: audioMode,
+    audioBitrate: audioBitrate,
+  );
 }
 
 /// Parameters for extracting a video's audio track.
 class AudioExtractRequest {
-  /// Creates an immutable audio extraction request.
+  /// Creates extraction parameters.
   const AudioExtractRequest({
     required this.uri,
     required this.outputFileName,
@@ -164,3 +253,60 @@ class AudioExtractRequest {
     'bitrate': bitrate,
   };
 }
+
+void _requireExactKeys(Map<Object?, Object?> map, Set<String> expected) {
+  if (map.keys.any((key) => key is! String) ||
+      !map.keys.toSet().containsAll(expected) ||
+      map.length != expected.length) {
+    throw FormatException('Unexpected channel-map keys: ${map.keys}');
+  }
+}
+
+Map<Object?, Object?> _requiredMap(Map<Object?, Object?> map, String key) {
+  final value = map[key];
+  if (value is Map<Object?, Object?>) return value;
+  throw FormatException('Expected Map for $key');
+}
+
+String _requiredString(Map<Object?, Object?> map, String key) {
+  final value = map[key];
+  if (value is String && value.isNotEmpty) return value;
+  throw FormatException('Expected non-empty String for $key');
+}
+
+String? _optionalString(Map<Object?, Object?> map, String key) {
+  final value = map[key];
+  if (value == null || value is String) return value as String?;
+  throw FormatException('Expected nullable String for $key');
+}
+
+String _requiredEnumString(
+  Map<Object?, Object?> map,
+  String key,
+  Set<String> allowed,
+) {
+  final value = _requiredString(map, key);
+  if (allowed.contains(value)) return value;
+  throw FormatException('Unexpected $key: $value');
+}
+
+int _requiredWholeInt(
+  Map<Object?, Object?> map,
+  String key, {
+  required int minimum,
+}) {
+  final value = map[key];
+  if (value is num &&
+      value.isFinite &&
+      value == value.toInt() &&
+      value >= minimum) {
+    return value.toInt();
+  }
+  throw FormatException('Expected whole $key >= $minimum');
+}
+
+int? _optionalWholeInt(
+  Map<Object?, Object?> map,
+  String key, {
+  required int minimum,
+}) => map[key] == null ? null : _requiredWholeInt(map, key, minimum: minimum);

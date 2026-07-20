@@ -759,14 +759,15 @@ void main() {
 
     expect(engine.processRequests, hasLength(2));
     expect(engine.processRequests.last.videoDecoderMode, 'software');
-    expect(
-      engine.processRequests.last.videoCodec,
-      engine.processRequests.first.videoCodec,
-    );
-    expect(
-      engine.processRequests.last.videoBitrate,
-      engine.processRequests.first.videoBitrate,
-    );
+    final firstRetryMap = engine.processRequests.first.toChannelMap();
+    final compatibilityRetryMap = engine.processRequests.last.toChannelMap();
+    expect(compatibilityRetryMap, <String, Object?>{
+      ...firstRetryMap,
+      'video': <String, Object?>{
+        ...(firstRetryMap['video']! as Map<String, Object?>),
+        'decoderMode': 'software',
+      },
+    });
 
     engine.progress.add(
       const ProgressEvent(
@@ -1194,6 +1195,64 @@ void main() {
     expect(cancelButton.onPressed, isNull);
   });
 
+  testWidgets('restored decoder failure retries the exact persisted request', (
+    WidgetTester tester,
+  ) async {
+    const retryRequest = ProcessRequest(
+      uri: _sourceUri,
+      outputFileName: 'persisted_output_name.mp4',
+      videoCodec: 'hevc',
+      videoDecoderMode: 'hardware',
+      videoBitrate: 812345,
+      longEdge: 1280,
+      audioMode: 'reencode',
+      audioBitrate: 96000,
+    );
+    final engine = _FakeEngine()
+      ..snapshot = TaskSnapshot(
+        taskId: 'restored-failed-task',
+        sourceUri: _sourceUri,
+        outputFileName: retryRequest.outputFileName,
+        retryRequest: retryRequest,
+        state: TaskState.failed,
+        phase: TaskPhase.finished,
+        percent: 89,
+        videoDecoderMode: RequestedVideoDecoderMode.hardware,
+        errorCode: 'VIDEO_DECODING_FAILED',
+        errorMessage: 'internal detail',
+        startedAtEpochMs: DateTime(2026, 7, 19, 1).millisecondsSinceEpoch,
+      )
+      ..infoByUri[_sourceUri] = _videoInfo();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+
+    final retry = find.byKey(const ValueKey<String>('compatibility-retry'));
+    await tester.ensureVisible(retry);
+    await tester.tap(retry);
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('confirm-compatibility-retry')),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(engine.processRequests, hasLength(1));
+    expect(engine.lastRequest?.outputFileName, retryRequest.outputFileName);
+    expect(engine.lastRequest?.videoBitrate, retryRequest.videoBitrate);
+    expect(engine.lastRequest?.longEdge, retryRequest.longEdge);
+    expect(engine.lastRequest?.audioMode, retryRequest.audioMode);
+    expect(engine.lastRequest?.audioBitrate, retryRequest.audioBitrate);
+    expect(engine.lastRequest?.videoDecoderMode, 'software');
+  });
+
   testWidgets('running native task snapshot reconnects the progress page', (
     WidgetTester tester,
   ) async {
@@ -1262,6 +1321,49 @@ void main() {
       await tester.pump();
 
       expect(find.text('73%'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'equal progress event can enrich an unknown restored encoding mode',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine()
+        ..snapshotCompleter = Completer<TaskSnapshot?>()
+        ..infoByUri[_sourceUri] = _videoInfo();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await tester.pump();
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'restored-task',
+          percent: 42,
+          state: TaskState.running,
+          phase: TaskPhase.encoding,
+          actualVideoEncodingMode: ActualVideoEncodingMode.software,
+        ),
+      );
+      await tester.pump();
+      engine.snapshotCompleter!.complete(
+        TaskSnapshot(
+          taskId: 'restored-task',
+          percent: 42,
+          state: TaskState.running,
+          phase: TaskPhase.encoding,
+          sourceUri: _sourceUri,
+          outputFileName: 'restored_slim.mp4',
+          startedAtEpochMs: DateTime(2026, 7, 19, 1).millisecondsSinceEpoch,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('实际编码：软件'), findsOneWidget);
     },
   );
 

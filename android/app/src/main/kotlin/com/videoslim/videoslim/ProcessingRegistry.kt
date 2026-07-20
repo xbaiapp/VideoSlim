@@ -8,6 +8,7 @@ internal data class TaskRuntimeSnapshot(
     val sourceUri: String,
     val outputFileName: String,
     val startedAtEpochMs: Long,
+    val retryRequest: Map<String, Any?>? = null,
     val outputLocationLabel: String = DEFAULT_OUTPUT_LOCATION_LABEL,
     val videoDecoderMode: String = VideoDecoderMode.HARDWARE.wireName,
     val actualVideoEncodingMode: String = VideoEncoderMode.UNKNOWN.wireName,
@@ -34,6 +35,7 @@ internal data class TaskRuntimeSnapshot(
         LinkedHashMap<String, Any?>(toProgressMap()).apply {
             this["sourceUri"] = sourceUri
             this["outputFileName"] = outputFileName
+            this["retryRequest"] = retryRequest
             this["startedAtEpochMs"] = startedAtEpochMs
         }
 
@@ -72,6 +74,7 @@ internal class ProcessingRegistry {
         startedAtEpochMs: Long,
         outputLocationLabel: String = TaskRuntimeSnapshot.DEFAULT_OUTPUT_LOCATION_LABEL,
         videoDecoderMode: String = VideoDecoderMode.HARDWARE.wireName,
+        retryRequest: Map<String, Any?>? = null,
     ): TaskRuntimeSnapshot {
         require(taskId.isNotBlank()) { "taskId must not be blank" }
         require(sourceUri.isNotBlank()) { "sourceUri must not be blank" }
@@ -93,6 +96,7 @@ internal class ProcessingRegistry {
                     phase = TaskRuntimeSnapshot.PHASE_PREPARING,
                     sourceUri = sourceUri,
                     outputFileName = outputFileName,
+                    retryRequest = retryRequest,
                     outputLocationLabel = outputLocationLabel,
                     videoDecoderMode = videoDecoderMode,
                     startedAtEpochMs = startedAtEpochMs,

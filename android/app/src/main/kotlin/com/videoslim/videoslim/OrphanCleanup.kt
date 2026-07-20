@@ -64,18 +64,7 @@ internal object OrphanCleanupPolicy {
                 return CleanupAction.SKIP_UNSAFE
             }
             if (observed == null) return CleanupAction.ALREADY_ABSENT
-            if (
-                observed.uri != uri ||
-                observed.relativePath != SCOPED_RELATIVE_PATH ||
-                observed.displayName?.let(::isSafeOwnedOutputName) != true ||
-                observed.ownerPackageName != expectedOwnerPackageName
-            ) {
-                return CleanupAction.SKIP_UNSAFE
-            }
-            return when (observed.isPending) {
-                0, 1 -> CleanupAction.DELETE
-                else -> CleanupAction.SKIP_UNSAFE
-            }
+            return CleanupAction.SKIP_UNSAFE
         }
         val actualName = record.actualOutputDisplayName
         if (
@@ -163,14 +152,7 @@ internal object OrphanCleanupPolicy {
                 return CleanupAction.SKIP_UNSAFE
             }
             if (observed == null) return CleanupAction.ALREADY_ABSENT
-            return if (
-                observed.uri == uri &&
-                observed.displayName?.let(::isSafeOwnedOutputName) == true
-            ) {
-                CleanupAction.DELETE
-            } else {
-                CleanupAction.SKIP_UNSAFE
-            }
+            return CleanupAction.SKIP_UNSAFE
         }
         val actualName = record.actualOutputDisplayName
         if (
@@ -370,6 +352,12 @@ class OrphanCleanup(
     }
 
     private fun reconcileRecord(record: TaskRecoveryRecord, report: CleanupReport) {
+        if (record.stage == RecoveryStage.PUBLISHED) {
+            report.outputsPreserved += 1
+            report.addDetail("preserved completed published output task=${record.taskId}")
+            clearRecord(record, report)
+            return
+        }
         if (record.mediaStoreUri == null && record.legacyOutputPath == null) {
             report.alreadyAbsent += 1
             report.addDetail("task=${record.taskId} had no allocated publication target")
@@ -391,7 +379,11 @@ class OrphanCleanup(
             unsafe(report, "task=${record.taskId} has a non-app MediaStore URI")
             return
         }
-        val query = queryScopedEntry(record.mediaStoreUri!!, report) ?: return
+        val query =
+            queryScopedEntry(record.mediaStoreUri!!, report) ?: run {
+                quarantineUnsafeRecord(record, report, "scoped output query unavailable")
+                return
+            }
         val observed = query.entry
         when (OrphanCleanupPolicy.scopedAction(record, observed, appContext.packageName)) {
             CleanupAction.DELETE -> {
@@ -433,13 +425,21 @@ class OrphanCleanup(
                 clearRecord(record, report)
             }
             CleanupAction.SKIP_UNSAFE ->
-                unsafe(report, "scoped output ownership could not be proven task=${record.taskId}")
+                quarantineUnsafeRecord(
+                    record,
+                    report,
+                    "scoped output ownership could not be proven",
+                )
         }
     }
 
     private fun reconcileDocumentRecord(record: TaskRecoveryRecord, report: CleanupReport) {
         val uri = record.mediaStoreUri!!
-        val query = queryDocumentEntry(uri, report) ?: return
+        val query =
+            queryDocumentEntry(uri, report) ?: run {
+                quarantineUnsafeRecord(record, report, "document output query unavailable")
+                return
+            }
         when (OrphanCleanupPolicy.documentAction(record, query.entry)) {
             CleanupAction.DELETE -> {
                 try {
@@ -475,7 +475,11 @@ class OrphanCleanup(
                 clearRecord(record, report)
             }
             CleanupAction.SKIP_UNSAFE ->
-                unsafe(report, "document output ownership could not be proven task=${record.taskId}")
+                quarantineUnsafeRecord(
+                    record,
+                    report,
+                    "document output ownership could not be proven",
+                )
         }
     }
 
@@ -493,17 +497,21 @@ class OrphanCleanup(
             }
         val action = OrphanCleanupPolicy.legacyAction(record, outputDirectory.path)
         if (action == CleanupAction.SKIP_UNSAFE) {
-            unsafe(report, "legacy output ownership could not be proven task=${record.taskId}")
+            quarantineUnsafeRecord(record, report, "legacy output ownership could not be proven")
             return
         }
         val uri = record.mediaStoreUri!!
-        val rowQuery = queryLegacyEntry(uri, report) ?: return
+        val rowQuery =
+            queryLegacyEntry(uri, report) ?: run {
+                quarantineUnsafeRecord(record, report, "legacy output query unavailable")
+                return
+            }
         val observed = rowQuery.entry
         if (
             observed != null &&
             !OrphanCleanupPolicy.isOwnedLegacyEntry(record, outputDirectory.path, observed)
         ) {
-            unsafe(report, "legacy MediaStore row ownership mismatch task=${record.taskId}")
+            quarantineUnsafeRecord(record, report, "legacy MediaStore row ownership mismatch")
             return
         }
         if (action == CleanupAction.KEEP) {
@@ -516,21 +524,35 @@ class OrphanCleanup(
         val destination = File(record.legacyOutputPath!!)
         var allClean = true
         var deletedSomething = false
+        var allowFileDelete = observed == null
         if (observed != null) {
             try {
                 val count = resolver.delete(Uri.parse(uri), null, null)
                 if (count > 0) {
                     report.mediaRowsDeleted += count
                     deletedSomething = true
+                    allowFileDelete = true
                 } else {
                     val verification = queryLegacyEntry(uri, report)
                     if (verification == null) {
                         allClean = false
-                    } else if (verification.entry != null) {
+                    } else if (verification.entry == null) {
+                        allowFileDelete = true
+                    } else {
                         allClean = false
                         report.failures += 1
+                        val identityStillMatches =
+                            OrphanCleanupPolicy.isOwnedLegacyEntry(
+                                record,
+                                outputDirectory.path,
+                                verification.entry,
+                            )
                         report.addDetail(
-                            "legacy row still exists after zero-row delete task=${record.taskId}",
+                            if (identityStillMatches) {
+                                "legacy row still exists after zero-row delete task=${record.taskId}"
+                            } else {
+                                "legacy row identity changed after zero-row delete task=${record.taskId}"
+                            },
                         )
                     }
                 }
@@ -539,20 +561,22 @@ class OrphanCleanup(
                 failure(report, "legacy MediaStore row delete failed task=${record.taskId}", error)
             }
         }
-        try {
-            if (destination.exists()) {
-                if (destination.delete() || !destination.exists()) {
-                    report.legacyFilesDeleted += 1
-                    deletedSomething = true
-                } else {
-                    allClean = false
-                    report.failures += 1
-                    report.addDetail("legacy output file delete returned false task=${record.taskId}")
+        if (allowFileDelete) {
+            try {
+                if (destination.exists()) {
+                    if (destination.delete() || !destination.exists()) {
+                        report.legacyFilesDeleted += 1
+                        deletedSomething = true
+                    } else {
+                        allClean = false
+                        report.failures += 1
+                        report.addDetail("legacy output file delete returned false task=${record.taskId}")
+                    }
                 }
+            } catch (error: Throwable) {
+                allClean = false
+                failure(report, "legacy output file delete failed task=${record.taskId}", error)
             }
-        } catch (error: Throwable) {
-            allClean = false
-            failure(report, "legacy output file delete failed task=${record.taskId}", error)
         }
         if (deletedSomething) {
             report.outputsDeleted += 1
@@ -695,6 +719,21 @@ class OrphanCleanup(
             report.journalRecordsCleared += 1
         } catch (error: Throwable) {
             failure(report, "recovery journal clear failed task=${record.taskId}", error)
+        }
+    }
+
+    private fun quarantineUnsafeRecord(
+        record: TaskRecoveryRecord,
+        report: CleanupReport,
+        reason: String,
+    ) {
+        unsafe(report, "$reason task=${record.taskId}")
+        try {
+            recoveryStore.quarantine(record.taskId, reason)
+            report.journalRecordsCleared += 1
+            report.addDetail("quarantined unsafe recovery evidence task=${record.taskId}")
+        } catch (error: Throwable) {
+            failure(report, "recovery evidence quarantine failed task=${record.taskId}", error)
         }
     }
 

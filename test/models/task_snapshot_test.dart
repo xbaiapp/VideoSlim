@@ -51,6 +51,7 @@ void main() {
         'percent': 3.5,
         'sourceUri': 'content://source',
         'outputFileName': 'output.mp4',
+        'retryRequest': null,
         'outputLocationLabel': '系统相册 > Movies > VideoSlim',
         'videoDecoderMode': 'hardware',
         'actualVideoEncodingMode': 'unknown',

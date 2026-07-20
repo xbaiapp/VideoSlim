@@ -54,7 +54,7 @@ class OrphanCleanupPolicyTest {
     }
 
     @Test
-    fun `unverified scoped allocation deletes only its exact pending row`() {
+    fun `unverified scoped allocation is never deletion authority`() {
         val record =
             scopedRecord().copy(
                 stage = RecoveryStage.ALLOCATED,
@@ -62,9 +62,9 @@ class OrphanCleanupPolicyTest {
             )
         val pending = scopedEntry(isPending = 1)
 
-        assertEquals(CleanupAction.DELETE, scopedAction(record, pending))
+        assertEquals(CleanupAction.SKIP_UNSAFE, scopedAction(record, pending))
         assertEquals(
-            CleanupAction.DELETE,
+            CleanupAction.SKIP_UNSAFE,
             scopedAction(record, pending.copy(isPending = 0)),
         )
         assertEquals(
@@ -108,7 +108,7 @@ class OrphanCleanupPolicyTest {
     }
 
     @Test
-    fun `unverified SAF allocation deletes only its exact safe document`() {
+    fun `unverified SAF allocation is never deletion authority`() {
         val uri =
             "content://com.android.externalstorage.documents/tree/primary%3AMovies/" +
                 "document/primary%3AMovies%2FVideoSlim%2Flecture.mp4"
@@ -120,7 +120,7 @@ class OrphanCleanupPolicyTest {
             )
         val observed = DocumentOutputEntry(uri = uri, displayName = "lecture.mp4")
 
-        assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.documentAction(record, observed))
+        assertEquals(CleanupAction.SKIP_UNSAFE, OrphanCleanupPolicy.documentAction(record, observed))
         assertEquals(CleanupAction.ALREADY_ABSENT, OrphanCleanupPolicy.documentAction(record, null))
         assertEquals(
             CleanupAction.SKIP_UNSAFE,

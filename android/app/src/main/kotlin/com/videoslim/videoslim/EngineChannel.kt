@@ -162,21 +162,7 @@ internal class EngineChannel(
             )
             return
         }
-        waitingForLegacyPermission = true
-        requestLegacyWritePermission legacyPermission@{ granted ->
-            if (disposed) return@legacyPermission
-            waitingForLegacyPermission = false
-            if (!granted) {
-                replyError(
-                    result,
-                    EngineFailure(
-                        EngineErrorCode.UNKNOWN,
-                        "Android 8–9 保存到相册需要存储写入权限",
-                    ),
-                    null,
-                )
-                return@legacyPermission
-            }
+        val requestNotificationAndLaunch: () -> Unit = {
             waitingForNotificationPermission = true
             requestNotificationPermission notificationPermission@{ notificationGranted ->
                 if (disposed) return@notificationPermission
@@ -203,6 +189,27 @@ internal class EngineChannel(
                     replyError(result, EngineErrorMapper.fromThrowable(error), error)
                 }
             }
+        }
+        if (request.outputTreeUri != null) {
+            requestNotificationAndLaunch()
+            return
+        }
+        waitingForLegacyPermission = true
+        requestLegacyWritePermission legacyPermission@{ granted ->
+            if (disposed) return@legacyPermission
+            waitingForLegacyPermission = false
+            if (!granted) {
+                replyError(
+                    result,
+                    EngineFailure(
+                        EngineErrorCode.UNKNOWN,
+                        "Android 8–9 保存到相册需要存储写入权限",
+                    ),
+                    null,
+                )
+                return@legacyPermission
+            }
+            requestNotificationAndLaunch()
         }
     }
 

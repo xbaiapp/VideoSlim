@@ -61,6 +61,7 @@ internal object ProcessingRuntime {
             outputFileName = request.outputFileName,
             outputLocationLabel = request.outputLocationLabel,
             videoDecoderMode = request.videoDecoderMode.wireName,
+            retryRequest = request.toChannelMap(),
             startedAtEpochMs = System.currentTimeMillis(),
         )
         val intent =

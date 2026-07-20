@@ -106,6 +106,32 @@ internal data class ProcessRequest(
     val audioMode: AudioMode,
     val audioBitrate: Int?,
 ) {
+    fun toChannelMap(): Map<String, Any?> =
+        linkedMapOf(
+            "uri" to sourceUri,
+            "outputFileName" to outputFileName,
+            "destination" to
+                linkedMapOf(
+                    "treeUri" to outputTreeUri,
+                    "label" to outputLocationLabel,
+                ),
+            "video" to
+                linkedMapOf(
+                    "codec" to videoCodec.wireName,
+                    "decoderMode" to videoDecoderMode.wireName,
+                    "bitrate" to videoBitrate,
+                    "longEdge" to longEdge,
+                    "crop" to null,
+                    "trimStartMs" to null,
+                    "trimEndMs" to null,
+                ),
+            "audio" to
+                linkedMapOf(
+                    "mode" to audioMode.wireName,
+                    "bitrate" to audioBitrate,
+                ),
+        )
+
     companion object {
         private val rootKeys = setOf("uri", "outputFileName", "destination", "video", "audio")
         private val destinationKeys = setOf("treeUri", "label")

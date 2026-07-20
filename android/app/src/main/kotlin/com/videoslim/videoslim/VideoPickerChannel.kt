@@ -19,6 +19,8 @@ internal data class OpenDocumentSelection(
     val returnedFlags: Int,
 )
 
+private data class VerifiedOutputTree(val label: String)
+
 internal object PickerGrantPolicy {
     fun offersRead(flags: Int): Boolean =
         flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0
@@ -41,6 +43,26 @@ internal object OutputFolderGrantPolicy {
         offersRead(flags) &&
             offersWrite(flags) &&
             PickerGrantPolicy.offersPersistable(flags)
+
+    fun newlyAcquiredGrantFlags(
+        requestedFlags: Int,
+        persistedBefore: Int,
+    ): Int =
+        requestedFlags and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) and
+            persistedBefore.inv()
+
+    fun rollbackGrantFlags(
+        selectedUri: String,
+        previousPreference: String?,
+        requestedFlags: Int,
+        persistedBefore: Int,
+    ): Int =
+        if (selectedUri == previousPreference) {
+            0
+        } else {
+            newlyAcquiredGrantFlags(requestedFlags, persistedBefore)
+        }
 
     fun safeDisplayName(raw: String?): String {
         val normalized =
@@ -113,6 +135,7 @@ internal class VideoPickerChannel(
     messenger: BinaryMessenger,
     private val logger: ((String) -> Unit)? = null,
 ) : MethodChannel.MethodCallHandler {
+    private val appContext = activity.applicationContext
     private val contentResolver: ContentResolver = activity.contentResolver
     private val outputPreferences =
         activity.getSharedPreferences(OUTPUT_PREFERENCES_NAME, Context.MODE_PRIVATE)
@@ -271,9 +294,11 @@ internal class VideoPickerChannel(
             result.error(ERROR_OUTPUT_PERMISSION, "所选文件夹没有提供持续写入权限，请选择其他文件夹", null)
             return
         }
+        val previous = outputPreferences.getString(OUTPUT_TREE_URI_KEY, null)
         val takeFlags =
             flags and
                 (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        val persistedBefore = persistedGrantFlags(uri)
         try {
             contentResolver.takePersistableUriPermission(uri, takeFlags)
         } catch (error: SecurityException) {
@@ -281,25 +306,33 @@ internal class VideoPickerChannel(
             result.error(ERROR_OUTPUT_PERMISSION, "系统没有授予这个文件夹的写入权限", null)
             return
         }
-        if (!hasPersistedWritePermission(uri)) {
-            result.error(ERROR_OUTPUT_PERMISSION, "文件夹写入权限没有保存，请重新选择", null)
+        if (!hasPersistedReadPermission(uri) || !hasPersistedWritePermission(uri)) {
+            rollbackNewTreeGrant(uri, takeFlags, persistedBefore, previous)
+            result.error(ERROR_OUTPUT_PERMISSION, "文件夹读写权限没有保存，请重新选择", null)
             return
         }
-        val label = OutputFolderGrantPolicy.safeDisplayName(readTreeDisplayName(uri))
-        val previous = outputPreferences.getString(OUTPUT_TREE_URI_KEY, null)
+        val destination =
+            try {
+                verifyOutputTree(uri)
+            } catch (error: Throwable) {
+                rollbackNewTreeGrant(uri, takeFlags, persistedBefore, previous)
+                log("输出文件夹能力验证失败 uri=$uri error=${error.javaClass.simpleName}")
+                result.error(ERROR_OUTPUT_PERMISSION, "所选文件夹无法创建新文件，请选择其他文件夹", null)
+                return
+            }
         val saved =
             outputPreferences.edit()
                 .putString(OUTPUT_TREE_URI_KEY, uri.toString())
-                .putString(OUTPUT_LABEL_KEY, label)
+                .putString(OUTPUT_LABEL_KEY, destination.label)
                 .commit()
         if (!saved) {
-            releaseTreeGrant(uri)
+            rollbackNewTreeGrant(uri, takeFlags, persistedBefore, previous)
             result.error(ERROR_UNKNOWN, "无法保存文件夹设置", null)
             return
         }
         if (previous != null && previous != uri.toString()) releaseTreeGrant(Uri.parse(previous))
-        log("输出文件夹授权已保存 authority=${uri.authority ?: "none"} label=$label")
-        result.success(outputLocationMap(uri, label))
+        log("输出文件夹授权已保存 authority=${uri.authority ?: "none"} label=${destination.label}")
+        result.success(outputLocationMap(uri, destination.label))
     }
 
     private fun getOutputLocation(result: MethodChannel.Result) {
@@ -325,7 +358,29 @@ internal class VideoPickerChannel(
     }
 
     private fun resetOutputLocation(result: MethodChannel.Result) {
+        val runningSnapshot = ProcessingRuntime.registry.snapshot()
+        if (runningSnapshot?.state == TaskRuntimeSnapshot.STATE_RUNNING) {
+            result.error(ERROR_UNKNOWN, "视频处理期间不能更改保存位置", null)
+            return
+        }
         val previous = outputPreferences.getString(OUTPUT_TREE_URI_KEY, null)
+        if (previous != null) {
+            try {
+                val recoveryStore = TaskRecoveryStore(appContext)
+                val record = recoveryStore.load()
+                if (record?.stage == RecoveryStage.PUBLISHED) {
+                    recoveryStore.clear(record.taskId)
+                } else if (
+                    record?.mediaStoreUri?.let(OrphanCleanupPolicy::isSafDocumentUri) == true
+                ) {
+                    recoveryStore.quarantine(record.taskId, "output tree grant reset")
+                }
+            } catch (error: Throwable) {
+                log("重置输出位置前隔离恢复证据失败 ${error.javaClass.simpleName}")
+                result.error(ERROR_UNKNOWN, "仍有未完成文件需要保留恢复信息，请稍后重试", null)
+                return
+            }
+        }
         if (!outputPreferences.edit().clear().commit()) {
             result.error(ERROR_UNKNOWN, "无法恢复默认保存位置", null)
             return
@@ -338,7 +393,7 @@ internal class VideoPickerChannel(
     private fun outputLocationMap(
         uri: Uri,
         label: String,
-        writable: Boolean = hasPersistedWritePermission(uri),
+        writable: Boolean = hasPersistedReadPermission(uri) && hasPersistedWritePermission(uri),
     ): Map<String, Any?> =
         linkedMapOf(
             "kind" to "custom",
@@ -355,23 +410,54 @@ internal class VideoPickerChannel(
             "treeUri" to null,
         )
 
-    private fun readTreeDisplayName(treeUri: Uri): String? =
-        runCatching {
-            val documentUri =
-                DocumentsContract.buildDocumentUriUsingTree(
-                    treeUri,
-                    DocumentsContract.getTreeDocumentId(treeUri),
-                )
+    private fun verifyOutputTree(treeUri: Uri): VerifiedOutputTree {
+        val documentUri =
+            DocumentsContract.buildDocumentUriUsingTree(
+                treeUri,
+                DocumentsContract.getTreeDocumentId(treeUri),
+            )
+        val cursor =
             contentResolver.query(
                 documentUri,
-                arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_FLAGS,
+                ),
                 null,
                 null,
                 null,
-            )?.use { cursor ->
-                if (!cursor.moveToFirst()) null else cursor.getString(0)?.takeIf { it.isNotBlank() }
+            ) ?: throw IllegalStateException("Output tree query returned null")
+        return cursor.use {
+            if (!it.moveToFirst() || it.isNull(0) || it.isNull(1)) {
+                throw IllegalStateException("Output tree capabilities are incomplete")
             }
-        }.getOrNull()
+            val rawLabel = it.getString(0)
+            if (rawLabel.isBlank()) {
+                throw IllegalStateException("Output tree display name is blank")
+            }
+            val flags = it.getInt(1)
+            if (flags and DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE == 0) {
+                throw IllegalStateException("Output tree does not support file creation")
+            }
+            VerifiedOutputTree(OutputFolderGrantPolicy.safeDisplayName(rawLabel))
+        }
+    }
+
+    private fun rollbackNewTreeGrant(
+        uri: Uri,
+        takeFlags: Int,
+        persistedBefore: Int,
+        previousPreference: String?,
+    ) {
+        val newlyAcquired =
+            OutputFolderGrantPolicy.rollbackGrantFlags(
+                selectedUri = uri.toString(),
+                previousPreference = previousPreference,
+                requestedFlags = takeFlags,
+                persistedBefore = persistedBefore,
+            )
+        if (newlyAcquired != 0) releaseTreeGrant(uri, newlyAcquired)
+    }
 
     private fun hasPersistedReadPermission(uri: Uri): Boolean =
         runCatching {
@@ -387,12 +473,23 @@ internal class VideoPickerChannel(
             }
         }.getOrDefault(false)
 
-    private fun releaseTreeGrant(uri: Uri) {
+    private fun persistedGrantFlags(uri: Uri): Int =
         runCatching {
-            contentResolver.releasePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
+            contentResolver.persistedUriPermissions
+                .firstOrNull { permission -> permission.uri == uri }
+                ?.let { permission ->
+                    (if (permission.isReadPermission) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
+                        (if (permission.isWritePermission) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
+                } ?: 0
+        }.getOrDefault(0)
+
+    private fun releaseTreeGrant(
+        uri: Uri,
+        flags: Int =
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+    ) {
+        runCatching {
+            contentResolver.releasePersistableUriPermission(uri, flags)
         }.onFailure { error -> log("释放旧输出文件夹授权失败 ${error.javaClass.simpleName}") }
     }
 

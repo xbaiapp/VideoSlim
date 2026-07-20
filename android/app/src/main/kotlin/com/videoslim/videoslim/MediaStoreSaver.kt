@@ -77,8 +77,12 @@ internal class MediaStoreSaver(
         if (outputTreeUri == null) return
         val treeUri = runCatching { Uri.parse(outputTreeUri) }.getOrNull()
             ?: throw OutputPermissionException("Invalid output tree URI")
-        if (!DocumentsContract.isTreeUri(treeUri) || !hasPersistedWritePermission(treeUri)) {
-            throw OutputPermissionException("Persisted output-folder write permission is missing")
+        if (
+            !DocumentsContract.isTreeUri(treeUri) ||
+            !hasPersistedReadPermission(treeUri) ||
+            !hasPersistedWritePermission(treeUri)
+        ) {
+            throw OutputPermissionException("Persisted output-folder read/write permission is missing")
         }
         val rootUri =
             runCatching {
@@ -98,11 +102,12 @@ internal class MediaStoreSaver(
                 ) ?: throw OutputPermissionException("Output folder is unavailable")
             cursor.use {
                 if (!it.moveToFirst()) throw OutputPermissionException("Output folder is unavailable")
-                if (!it.isNull(0)) {
-                    val flags = it.getInt(0)
-                    if (flags and DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE == 0) {
-                        throw OutputPermissionException("Output folder does not allow new files")
-                    }
+                if (it.isNull(0)) {
+                    throw OutputPermissionException("Output folder capabilities are unavailable")
+                }
+                val flags = it.getInt(0)
+                if (flags and DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE == 0) {
+                    throw OutputPermissionException("Output folder does not allow new files")
                 }
             }
         } catch (error: OutputPermissionException) {
@@ -149,6 +154,12 @@ internal class MediaStoreSaver(
             target = allocatedTarget
             publicationObserver.onPublicationTargetAllocated(allocatedTarget)
             copyIntoUri(tempFile, outputUri, shouldCancel)
+            verifyPublishedLength(
+                outputUri,
+                tempFile.length(),
+                shouldCancel,
+                requireReadback = true,
+            )
             publicationObserver.onPublicationCompleted(allocatedTarget)
             return outputUri.toString()
         } catch (error: Throwable) {
@@ -207,6 +218,12 @@ internal class MediaStoreSaver(
             target = allocatedTarget
             publicationObserver.onPublicationTargetAllocated(allocatedTarget)
             copyIntoUri(tempFile, outputUri, shouldCancel)
+            verifyPublishedLength(
+                outputUri,
+                tempFile.length(),
+                shouldCancel,
+                requireReadback = false,
+            )
             val completed = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
             if (resolver.update(outputUri, completed, null, null) != 1) {
                 throw IOException("Unable to publish pending MediaStore video")
@@ -299,6 +316,12 @@ internal class MediaStoreSaver(
         try {
             publicationObserver.onPublicationTargetAllocated(target)
             copyIntoUri(tempFile, outputUri, shouldCancel)
+            verifyPublishedLength(
+                outputUri,
+                tempFile.length(),
+                shouldCancel,
+                requireReadback = false,
+            )
             publicationObserver.onPublicationCompleted(target)
             return outputUri.toString()
         } catch (error: Throwable) {
@@ -332,6 +355,54 @@ internal class MediaStoreSaver(
         }
     }
 
+    private fun verifyPublishedLength(
+        outputUri: Uri,
+        expectedBytes: Long,
+        shouldCancel: () -> Boolean,
+        requireReadback: Boolean,
+    ) {
+        if (!requireReadback) {
+            val descriptorLength =
+                runCatching {
+                    resolver.openFileDescriptor(outputUri, "r")?.use { descriptor ->
+                        descriptor.statSize.takeIf { it >= 0L }
+                    }
+                }.getOrNull()
+            if (descriptorLength != null) {
+                requirePublishedByteCount(expectedBytes, descriptorLength)
+                return
+            }
+            val queriedLength =
+                runCatching {
+                    resolver.query(
+                        outputUri,
+                        arrayOf(OpenableColumns.SIZE),
+                        null,
+                        null,
+                        null,
+                    )?.use { cursor ->
+                        if (!cursor.moveToFirst() || cursor.isNull(0)) null else cursor.getLong(0)
+                    }
+                }.getOrNull()
+            if (queriedLength != null) {
+                requirePublishedByteCount(expectedBytes, queriedLength)
+                return
+            }
+        }
+        val input =
+            resolver.openInputStream(outputUri)
+                ?: throw IOException("Published output cannot be reopened for verification")
+        val observedBytes =
+            input.use {
+                countPublicationBytes(
+                    input = it,
+                    shouldCancel = shouldCancel,
+                    stopAfterBytes = expectedBytes + 1L,
+                )
+            }
+        requirePublishedByteCount(expectedBytes, observedBytes)
+    }
+
     private fun uniqueDestination(directory: File, requestedName: String): File {
         val requested = File(directory, requestedName)
         if (!requested.exists()) return requested
@@ -344,6 +415,11 @@ internal class MediaStoreSaver(
         }
         throw IOException("Unable to allocate a unique output filename")
     }
+
+    private fun hasPersistedReadPermission(uri: Uri): Boolean =
+        resolver.persistedUriPermissions.any { permission ->
+            permission.uri == uri && permission.isReadPermission
+        }
 
     private fun hasPersistedWritePermission(uri: Uri): Boolean =
         resolver.persistedUriPermissions.any { permission ->
@@ -396,8 +472,54 @@ internal fun copyPublicationBytes(
         }
         val count = input.read(buffer)
         if (count < 0) return copiedBytes
+        if (count == 0) {
+            val single = input.read()
+            if (single < 0) return copiedBytes
+            output.write(single)
+            copiedBytes += 1L
+            continue
+        }
         output.write(buffer, 0, count)
         copiedBytes += count
+    }
+}
+
+internal fun countPublicationBytes(
+    input: InputStream,
+    shouldCancel: () -> Boolean,
+    stopAfterBytes: Long,
+    bufferSize: Int = 1024 * 1024,
+): Long {
+    require(stopAfterBytes > 0L) { "stopAfterBytes must be positive" }
+    require(bufferSize > 0) { "bufferSize must be positive" }
+    val buffer = ByteArray(bufferSize)
+    var count = 0L
+    while (count < stopAfterBytes) {
+        if (shouldCancel() || Thread.currentThread().isInterrupted) {
+            throw IOException("Video publication verification cancelled")
+        }
+        val requested = minOf(buffer.size.toLong(), stopAfterBytes - count).toInt()
+        val read = input.read(buffer, 0, requested)
+        if (read < 0) return count
+        if (read == 0) {
+            val single = input.read()
+            if (single < 0) return count
+            count += 1L
+            continue
+        }
+        count += read
+    }
+    return count
+}
+
+internal fun requirePublishedByteCount(
+    expectedBytes: Long,
+    observedBytes: Long,
+) {
+    if (expectedBytes <= 0L || observedBytes != expectedBytes) {
+        throw IOException(
+            "Published output length $observedBytes did not match source length $expectedBytes",
+        )
     }
 }
 

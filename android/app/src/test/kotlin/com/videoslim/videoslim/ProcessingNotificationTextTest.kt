@@ -103,6 +103,32 @@ class ProcessingNotificationTextTest {
     }
 
     @Test
+    fun `decoder failure notification suggests compatibility only after hardware mode`() {
+        val hardware =
+            ProcessingNotificationText.from(
+                snapshot(
+                    state = "failed",
+                    percent = 80.0,
+                    errorCode = EngineErrorCode.VIDEO_DECODING_FAILED.wireName,
+                    videoDecoderMode = VideoDecoderMode.HARDWARE.wireName,
+                ),
+            )
+        val software =
+            ProcessingNotificationText.from(
+                snapshot(
+                    state = "failed",
+                    percent = 80.0,
+                    errorCode = EngineErrorCode.VIDEO_DECODING_FAILED.wireName,
+                    videoDecoderMode = VideoDecoderMode.SOFTWARE.wireName,
+                ),
+            )
+
+        assertTrue(hardware.body.contains("使用兼容模式重试"))
+        assertFalse(software.body.contains("使用兼容模式重试"))
+        assertTrue(software.body.contains("兼容读取方式未能完成"))
+    }
+
+    @Test
     fun `cancelled state remains readable`() {
         val cancelled =
             ProcessingNotificationText.from(
@@ -124,6 +150,7 @@ class ProcessingNotificationTextTest {
         outputUri: String? = null,
         errorCode: String? = null,
         errorMessage: String? = null,
+        videoDecoderMode: String = VideoDecoderMode.HARDWARE.wireName,
     ) =
         TaskRuntimeSnapshot(
             taskId = "task-1",
@@ -136,5 +163,6 @@ class ProcessingNotificationTextTest {
             outputUri = outputUri,
             errorCode = errorCode,
             errorMessage = errorMessage,
+            videoDecoderMode = videoDecoderMode,
         )
 }

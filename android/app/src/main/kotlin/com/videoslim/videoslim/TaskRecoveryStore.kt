@@ -3,9 +3,11 @@ package com.videoslim.videoslim
 import android.content.Context
 import android.content.SharedPreferences
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.util.Base64
+import java.util.UUID
 
 enum class RecoveryStage {
     PREPARING,
@@ -229,6 +231,8 @@ class TaskRecoveryStore(
 ) {
     private val preferences: SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+    private val quarantineDirectory =
+        File(context.applicationContext.filesDir, QUARANTINE_DIRECTORY_NAME)
 
     @Throws(IOException::class)
     fun begin(
@@ -407,6 +411,46 @@ class TaskRecoveryStore(
         log("recovery record cleared task=${current.taskId}")
     }
 
+    /**
+     * Moves an ownership-unprovable record out of the single active slot. The
+     * exact journal remains durable without permanently blocking new tasks.
+     */
+    @Throws(IOException::class)
+    fun quarantine(
+        taskId: String,
+        reason: String,
+    ): File = synchronized(TRANSACTION_LOCK) {
+        val current = loadForMutation(taskId)
+        if (!quarantineDirectory.exists() && !quarantineDirectory.mkdirs()) {
+            throw IOException("Unable to create recovery quarantine directory")
+        }
+        val stableName =
+            UUID.nameUUIDFromBytes(taskId.toByteArray(StandardCharsets.UTF_8)).toString() +
+                QUARANTINE_EXTENSION
+        val destination = File(quarantineDirectory, stableName)
+        val encoded = TaskRecoveryCodec.encode(current)
+        val temporary = File.createTempFile("recovery-", ".tmp", quarantineDirectory)
+        try {
+            FileOutputStream(temporary).use { output ->
+                output.write(encoded.toByteArray(StandardCharsets.UTF_8))
+                output.fd.sync()
+            }
+            if (destination.exists()) {
+                val existing = runCatching { destination.readText(StandardCharsets.UTF_8) }.getOrNull()
+                if (existing != encoded) {
+                    throw IOException("Conflicting recovery quarantine record already exists")
+                }
+            } else if (!temporary.renameTo(destination)) {
+                throw IOException("Unable to commit recovery quarantine record")
+            }
+            commit(preferences.edit().remove(RECORD_KEY), "quarantine-clear")
+            log("recovery record quarantined task=${current.taskId} reason=$reason")
+            destination
+        } finally {
+            if (temporary.exists()) temporary.delete()
+        }
+    }
+
     private fun requireCurrent(): TaskRecoveryRecord =
         load() ?: throw IllegalStateException("No valid task recovery record exists")
 
@@ -447,6 +491,8 @@ class TaskRecoveryStore(
     private companion object {
         const val PREFERENCES_NAME = "videoslim_task_recovery"
         const val RECORD_KEY = "active_task_v1"
+        const val QUARANTINE_DIRECTORY_NAME = "videoslim-recovery-quarantine"
+        const val QUARANTINE_EXTENSION = ".journal"
         val TRANSACTION_LOCK = Any()
     }
 }
