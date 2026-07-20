@@ -57,6 +57,7 @@ class _HomeScreenState extends State<HomeScreen> {
   EtaEstimator? _etaEstimator;
   Timer? _timingTimer;
   OutputLocation _outputLocation = OutputLocation.defaultGallery;
+  int _outputLocationRevision = 0;
   bool _outputLocationLoading = true;
   String _taskOutputLocationLabel = OutputLocation.defaultGallery.label;
   ActualVideoEncodingMode _actualVideoEncodingMode =
@@ -85,6 +86,7 @@ class _HomeScreenState extends State<HomeScreen> {
   set _selectingOutputLocation(bool value) =>
       _flow.selectingOutputLocation = value;
   set _validatingDestination(bool value) => _flow.validatingDestination = value;
+  bool get _validatingDestination => _flow.validatingDestination;
   bool get _preparing => _flow.preparing;
   set _preparing(bool value) => _flow.preparing = value;
   bool get _processing => _flow.processing;
@@ -192,7 +194,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final location = await widget.picker.getOutputLocation();
       if (!mounted) return;
       _flow.update(() {
-        _outputLocation = location;
+        _applyOutputLocation(location);
         _outputLocationLoading = false;
       });
     } catch (error, stackTrace) {
@@ -209,7 +211,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final location = await widget.picker.chooseOutputFolder();
       if (!mounted || location == null) return;
       _flow.update(() {
-        _outputLocation = location;
+        _applyOutputLocation(location);
         _errorText = null;
       });
     } catch (error, stackTrace) {
@@ -231,7 +233,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final location = await widget.picker.resetOutputLocation();
       if (!mounted) return;
       _flow.update(() {
-        _outputLocation = location;
+        _applyOutputLocation(location);
         _errorText = null;
       });
     } catch (error, stackTrace) {
@@ -244,6 +246,24 @@ class _HomeScreenState extends State<HomeScreen> {
     } finally {
       if (mounted) _flow.update(() => _selectingOutputLocation = false);
     }
+  }
+
+  void _applyOutputLocation(OutputLocation location) {
+    _outputLocation = location;
+    _outputLocationRevision += 1;
+  }
+
+  bool _destinationMatchesRequest(String? outputTreeUri) =>
+      _outputLocation.writable &&
+      _outputLocation.treeUri == outputTreeUri &&
+      (_outputLocation.isCustom == (outputTreeUri != null));
+
+  void _rejectDestinationValidation(int generation, String message) {
+    if (!_isCurrent(generation) || !_validatingDestination) return;
+    _flow.update(() {
+      _validatingDestination = false;
+      _errorText = message;
+    });
   }
 
   CompressionSettings get _compressionSettings {
@@ -585,6 +605,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    final outputLocationRevision = _outputLocationRevision;
     final generation = ++_generation;
     _flow.update(() {
       _validatingDestination = true;
@@ -595,7 +616,11 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       verifiedLocation = await widget.picker.getOutputLocation();
       if (!_isCurrent(generation)) return;
-      _flow.update(() => _outputLocation = verifiedLocation);
+      if (_outputLocationRevision != outputLocationRevision) {
+        _rejectDestinationValidation(generation, '保存位置已更改，请重新开始音频提取。');
+        return;
+      }
+      _flow.update(() => _applyOutputLocation(verifiedLocation));
     } catch (error, stackTrace) {
       if (_isCurrent(generation)) {
         _flow.update(() {
@@ -642,65 +667,157 @@ class _HomeScreenState extends State<HomeScreen> {
     await _submitAudio(request, reservedGeneration: generation);
   }
 
-  Future<void> _retryAudio() async {
-    final previous = _lastAudioExtractRequest;
-    if (previous == null || _interactionLocked || _outputPublished) return;
-    final generation = ++_generation;
-    if (!await _canReuseAudioDestination(previous, generation)) return;
-    await _submitAudio(previous, reservedGeneration: generation);
-  }
+  Future<void> _retryAudio() => _submitAudioRetry(asAac: false);
 
-  Future<void> _retryAudioAsAac() async {
+  Future<void> _retryAudioAsAac() => _submitAudioRetry(asAac: true);
+
+  Future<void> _submitAudioRetry({required bool asAac}) async {
     final previous = _lastAudioExtractRequest;
-    if (previous == null || _interactionLocked || _outputPublished) return;
+    final source = _sourceInfo;
+    if (previous == null ||
+        source == null ||
+        !_canBeginAudioRetry(previous, asAac: asAac)) {
+      return;
+    }
+    final outputLocationRevision = _outputLocationRevision;
     final generation = ++_generation;
-    if (!await _canReuseAudioDestination(previous, generation)) return;
-    final request = AudioExtractRequest(
-      uri: previous.uri,
-      outputFileName: previous.outputFileName,
-      outputLocationLabel: previous.outputLocationLabel,
-      outputTreeUri: previous.outputTreeUri,
-      mode: AudioExtractMode.aac,
-      bitrate: 128000,
-    );
-    if (!_isCurrent(generation)) return;
     _flow.update(() {
-      _audioExtractMode = AudioExtractMode.aac;
-      _audioExtractBitrate = 128000;
+      _validatingDestination = true;
+      _errorText = null;
     });
+    if (!await _canReuseAudioDestination(
+      previous,
+      generation,
+      source,
+      outputLocationRevision,
+      asAac: asAac,
+    )) {
+      return;
+    }
+    final request = asAac
+        ? AudioExtractRequest(
+            uri: previous.uri,
+            outputFileName: previous.outputFileName,
+            outputLocationLabel: previous.outputLocationLabel,
+            outputTreeUri: previous.outputTreeUri,
+            mode: AudioExtractMode.aac,
+            bitrate: 128000,
+          )
+        : previous;
+    if (!_isAudioRetryContextCurrent(
+      previous,
+      source,
+      generation,
+      outputLocationRevision,
+      asAac: asAac,
+    )) {
+      return;
+    }
+    if (asAac) {
+      _flow.update(() {
+        _audioExtractMode = AudioExtractMode.aac;
+        _audioExtractBitrate = 128000;
+      });
+    }
     await _submitAudio(request, reservedGeneration: generation);
   }
+
+  bool _canBeginAudioRetry(
+    AudioExtractRequest request, {
+    required bool asAac,
+  }) => !_interactionLocked && _isAudioRetryEligible(request, asAac: asAac);
+
+  bool _isAudioRetryEligible(
+    AudioExtractRequest request, {
+    required bool asAac,
+  }) {
+    final source = _sourceInfo;
+    final codeEligible = asAac
+        ? request.mode == AudioExtractMode.copy &&
+              _lastFailureCode == 'AUDIO_COPY_UNSUPPORTED'
+        : _canRetryAudioFailure(_lastFailureCode);
+    return !_outputLocationLoading &&
+        !_outputPublished &&
+        !_progressStreamClosed &&
+        source != null &&
+        _selectedUri == request.uri &&
+        source.uri == request.uri &&
+        _destinationMatchesRequest(request.outputTreeUri) &&
+        codeEligible;
+  }
+
+  bool _isAudioRetryContextCurrent(
+    AudioExtractRequest request,
+    VideoInfo source,
+    int generation,
+    int outputLocationRevision, {
+    required bool asAac,
+  }) =>
+      _isCurrent(generation) &&
+      _validatingDestination &&
+      identical(_lastAudioExtractRequest, request) &&
+      identical(_sourceInfo, source) &&
+      _selectedUri == request.uri &&
+      _outputLocationRevision == outputLocationRevision &&
+      !_outputPublished &&
+      !_progressStreamClosed &&
+      (asAac
+          ? request.mode == AudioExtractMode.copy &&
+                _lastFailureCode == 'AUDIO_COPY_UNSUPPORTED'
+          : _canRetryAudioFailure(_lastFailureCode));
 
   Future<bool> _canReuseAudioDestination(
     AudioExtractRequest request,
     int generation,
-  ) async {
-    if (!_isCurrent(generation)) return false;
-    if (_progressStreamClosed) {
-      _flow.update(() {
-        _errorText = '处理状态连接已中断，请重启应用后再提取音频。';
-      });
+    VideoInfo source,
+    int outputLocationRevision, {
+    required bool asAac,
+  }) async {
+    if (!_isAudioRetryContextCurrent(
+      request,
+      source,
+      generation,
+      outputLocationRevision,
+      asAac: asAac,
+    )) {
       return false;
     }
-    if (request.outputTreeUri == null) return _isCurrent(generation);
+    if (request.outputTreeUri == null) {
+      return _destinationMatchesRequest(null);
+    }
     try {
       final current = await widget.picker.getOutputLocation();
-      if (!_isCurrent(generation)) return false;
-      if (!current.writable || current.treeUri != request.outputTreeUri) {
-        _flow.update(() {
-          _errorText = '原任务的保存文件夹已更改或需要重新授权，请重新选择后开始新任务。';
-        });
+      if (!_isAudioRetryContextCurrent(
+        request,
+        source,
+        generation,
+        outputLocationRevision,
+        asAac: asAac,
+      )) {
+        return false;
+      }
+      if (!current.writable ||
+          current.treeUri != request.outputTreeUri ||
+          !_destinationMatchesRequest(request.outputTreeUri)) {
+        _rejectDestinationValidation(
+          generation,
+          '原任务的保存文件夹已更改或需要重新授权，请重新选择后开始新任务。',
+        );
         return false;
       }
       return true;
     } catch (error, stackTrace) {
-      if (_isCurrent(generation)) {
-        _flow.update(() {
-          _errorText = _errorTextFor(
-            error,
-            fallback: '无法确认原任务的保存文件夹权限，请重新选择保存位置。',
-          );
-        });
+      if (_isAudioRetryContextCurrent(
+        request,
+        source,
+        generation,
+        outputLocationRevision,
+        asAac: asAac,
+      )) {
+        _rejectDestinationValidation(
+          generation,
+          _errorTextFor(error, fallback: '无法确认原任务的保存文件夹权限，请重新选择保存位置。'),
+        );
       }
       _logError('音频重试前保存位置检查失败', error, stackTrace);
       return false;
@@ -712,7 +829,10 @@ class _HomeScreenState extends State<HomeScreen> {
     int? reservedGeneration,
   }) async {
     final generation = reservedGeneration ?? ++_generation;
-    if (!_isCurrent(generation)) return;
+    if (!_isCurrent(generation) ||
+        (reservedGeneration != null && !_validatingDestination)) {
+      return;
+    }
     _activeGeneration = generation;
     _terminalEventHandled = false;
     _bufferedProgress.clear();
@@ -782,78 +902,168 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _compress() => _startCompression(videoDecoderMode: 'hardware');
 
-  Future<void> _retryLastMode() =>
-      _submitRetry(videoDecoderMode: _lastVideoDecoderMode.wireName);
+  Future<void> _retryLastMode() => _submitRetry(
+    videoDecoderMode: _lastVideoDecoderMode.wireName,
+    confirmCompatibility: false,
+  );
 
-  Future<void> _retryWithCompatibilityMode() async {
-    if (_interactionLocked ||
-        _lastFailureCode != 'VIDEO_DECODING_FAILED' ||
-        _lastVideoDecoderMode != RequestedVideoDecoderMode.hardware ||
-        _lastProcessRequest == null) {
-      return;
-    }
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('使用兼容模式重试？'),
-        content: const Text(
-          '兼容模式会改用软件方式读取视频，并从头重新压缩。速度可能更慢，也会增加耗电和发热；输出编码设置保持不变。',
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('返回'),
-          ),
-          FilledButton.tonal(
-            key: const ValueKey<String>('confirm-compatibility-retry'),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('开始兼容重试'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true && mounted) {
-      await _submitRetry(videoDecoderMode: 'software');
-    }
-  }
+  Future<void> _retryWithCompatibilityMode() =>
+      _submitRetry(videoDecoderMode: 'software', confirmCompatibility: true);
 
-  Future<void> _submitRetry({required String videoDecoderMode}) async {
+  Future<void> _submitRetry({
+    required String videoDecoderMode,
+    required bool confirmCompatibility,
+  }) async {
     final previous = _lastProcessRequest;
-    if (_interactionLocked || previous == null || _outputPublished) return;
-    if (_progressStreamClosed) {
-      _flow.update(() {
-        _errorText = '处理状态连接已中断，请重启应用后再压缩。';
-      });
+    final source = _sourceInfo;
+    if (previous == null ||
+        source == null ||
+        !_canBeginVideoRetry(previous, compatibility: confirmCompatibility)) {
       return;
     }
+    final outputLocationRevision = _outputLocationRevision;
+    final generation = ++_generation;
+    _flow.update(() {
+      _validatingDestination = true;
+      _errorText = null;
+    });
+
+    if (confirmCompatibility) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('使用兼容模式重试？'),
+          content: const Text(
+            '兼容模式会改用软件方式读取视频，并从头重新压缩。速度可能更慢，也会增加耗电和发热；输出编码设置保持不变。',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('返回'),
+            ),
+            FilledButton.tonal(
+              key: const ValueKey<String>('confirm-compatibility-retry'),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('开始兼容重试'),
+            ),
+          ],
+        ),
+      );
+      if (!_isVideoRetryContextCurrent(
+        previous,
+        source,
+        generation,
+        outputLocationRevision,
+        compatibility: true,
+      )) {
+        return;
+      }
+      if (confirmed != true) {
+        _flow.update(() => _validatingDestination = false);
+        return;
+      }
+    }
+
     if (previous.outputTreeUri != null) {
       try {
         final current = await widget.picker.getOutputLocation();
-        if (!mounted) return;
-        if (!current.writable || current.treeUri != previous.outputTreeUri) {
-          _flow.update(() {
-            _errorText = '原任务的保存文件夹已更改或需要重新授权，请重新选择后开始新任务。';
-          });
+        if (!_isVideoRetryContextCurrent(
+          previous,
+          source,
+          generation,
+          outputLocationRevision,
+          compatibility: confirmCompatibility,
+        )) {
+          return;
+        }
+        if (!current.writable ||
+            current.treeUri != previous.outputTreeUri ||
+            !_destinationMatchesRequest(previous.outputTreeUri)) {
+          _rejectDestinationValidation(
+            generation,
+            '原任务的保存文件夹已更改或需要重新授权，请重新选择后开始新任务。',
+          );
           return;
         }
       } catch (error, stackTrace) {
-        if (mounted) {
-          _flow.update(() {
-            _errorText = _errorTextFor(
-              error,
-              fallback: '无法确认原任务的保存文件夹权限，请重新选择保存位置。',
-            );
-          });
+        if (_isVideoRetryContextCurrent(
+          previous,
+          source,
+          generation,
+          outputLocationRevision,
+          compatibility: confirmCompatibility,
+        )) {
+          _rejectDestinationValidation(
+            generation,
+            _errorTextFor(error, fallback: '无法确认原任务的保存文件夹权限，请重新选择保存位置。'),
+          );
         }
         _logError('重试前保存位置检查失败', error, stackTrace);
         return;
       }
     }
+    if (!_isVideoRetryContextCurrent(
+          previous,
+          source,
+          generation,
+          outputLocationRevision,
+          compatibility: confirmCompatibility,
+        ) ||
+        !_destinationMatchesRequest(previous.outputTreeUri)) {
+      return;
+    }
     await _submitCompression(
       previous.withVideoDecoderMode(videoDecoderMode),
       estimatedOutputBytes: null,
+      reservedGeneration: generation,
     );
   }
+
+  bool _canBeginVideoRetry(
+    ProcessRequest request, {
+    required bool compatibility,
+  }) =>
+      !_interactionLocked &&
+      _isVideoRetryEligible(request, compatibility: compatibility);
+
+  bool _isVideoRetryEligible(
+    ProcessRequest request, {
+    required bool compatibility,
+  }) {
+    final source = _sourceInfo;
+    final codeEligible = compatibility
+        ? _lastFailureCode == 'VIDEO_DECODING_FAILED' &&
+              _lastVideoDecoderMode == RequestedVideoDecoderMode.hardware
+        : _canRetryVideoFailure(_lastFailureCode);
+    return !_outputLocationLoading &&
+        !_outputPublished &&
+        !_progressStreamClosed &&
+        source != null &&
+        _selectedUri == request.uri &&
+        source.uri == request.uri &&
+        _destinationMatchesRequest(request.outputTreeUri) &&
+        codeEligible;
+  }
+
+  bool _isVideoRetryContextCurrent(
+    ProcessRequest request,
+    VideoInfo source,
+    int generation,
+    int outputLocationRevision, {
+    required bool compatibility,
+  }) =>
+      _isCurrent(generation) &&
+      _validatingDestination &&
+      identical(_lastProcessRequest, request) &&
+      identical(_sourceInfo, source) &&
+      _selectedUri == request.uri &&
+      _outputLocationRevision == outputLocationRevision &&
+      !_outputPublished &&
+      !_progressStreamClosed &&
+      (compatibility
+          ? _lastFailureCode == 'VIDEO_DECODING_FAILED' &&
+                _lastVideoDecoderMode == RequestedVideoDecoderMode.hardware
+          : _canRetryVideoFailure(_lastFailureCode));
 
   Future<void> _startCompression({required String videoDecoderMode}) async {
     final info = _sourceInfo;
@@ -881,6 +1091,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    final outputLocationRevision = _outputLocationRevision;
     final generation = ++_generation;
     _flow.update(() {
       _validatingDestination = true;
@@ -891,7 +1102,11 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       verifiedLocation = await widget.picker.getOutputLocation();
       if (!_isCurrent(generation)) return;
-      _flow.update(() => _outputLocation = verifiedLocation);
+      if (_outputLocationRevision != outputLocationRevision) {
+        _rejectDestinationValidation(generation, '保存位置已更改，请重新开始压缩。');
+        return;
+      }
+      _flow.update(() => _applyOutputLocation(verifiedLocation));
     } catch (error, stackTrace) {
       if (!_isCurrent(generation)) return;
       _flow.update(() {
@@ -948,7 +1163,10 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     final generation = reservedGeneration ?? ++_generation;
-    if (!_isCurrent(generation)) return;
+    if (!_isCurrent(generation) ||
+        (reservedGeneration != null && !_validatingDestination)) {
+      return;
+    }
     final taskStartedAt = startedAt ?? _now();
     _activeGeneration = generation;
     _terminalEventHandled = false;
@@ -1020,9 +1238,17 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!_isCurrent(generation)) return;
       _awaitingTaskId = false;
       _bufferedProgress.clear();
+      final failureCode = error is VideoEngineException
+          ? _stableCode(error.code)
+          : 'UNKNOWN';
+      _lastFailureCode = failureCode;
       _failGeneration(
         generation,
-        _errorTextFor(error, fallback: '压缩任务无法启动，请稍后重试。'),
+        _messageForCode(
+          failureCode,
+          error is VideoEngineException ? error.message : null,
+          fallback: '压缩任务无法启动，请稍后重试。',
+        ),
       );
       _logError(
         'M2 压缩任务启动失败',
@@ -1696,15 +1922,18 @@ class _HomeScreenState extends State<HomeScreen> {
                     _ErrorCard(
                       message: _errorText!,
                       canRetry:
-                          !_outputPublished &&
-                          !_progressStreamClosed &&
-                          ((_activeTaskKind == TaskKind.audioExtraction &&
-                                  _lastAudioExtractRequest != null &&
-                                  _canRetryAudioFailure(_lastFailureCode)) ||
-                              (_activeTaskKind == TaskKind.videoCompression &&
-                                  _lastProcessRequest != null &&
-                                  _lastFailureCode !=
-                                      'COMPATIBILITY_DECODER_UNAVAILABLE')),
+                          (_activeTaskKind == TaskKind.audioExtraction &&
+                              _lastAudioExtractRequest != null &&
+                              _isAudioRetryEligible(
+                                _lastAudioExtractRequest!,
+                                asAac: false,
+                              )) ||
+                          (_activeTaskKind == TaskKind.videoCompression &&
+                              _lastProcessRequest != null &&
+                              _isVideoRetryEligible(
+                                _lastProcessRequest!,
+                                compatibility: false,
+                              )),
                       retryLabel: _activeTaskKind == TaskKind.audioExtraction
                           ? '重试音频提取'
                           : '重试压缩',
@@ -1715,17 +1944,19 @@ class _HomeScreenState extends State<HomeScreen> {
                           : _retryLastMode,
                       canAacRetry:
                           _activeTaskKind == TaskKind.audioExtraction &&
-                          _lastAudioExtractRequest?.mode ==
-                              AudioExtractMode.copy &&
-                          _lastFailureCode == 'AUDIO_COPY_UNSUPPORTED' &&
-                          !_outputPublished &&
-                          !_progressStreamClosed,
+                          _lastAudioExtractRequest != null &&
+                          _isAudioRetryEligible(
+                            _lastAudioExtractRequest!,
+                            asAac: true,
+                          ),
                       onAacRetry: _interactionLocked ? null : _retryAudioAsAac,
                       canCompatibilityRetry:
+                          _activeTaskKind == TaskKind.videoCompression &&
                           _lastProcessRequest != null &&
-                          _lastFailureCode == 'VIDEO_DECODING_FAILED' &&
-                          _lastVideoDecoderMode ==
-                              RequestedVideoDecoderMode.hardware,
+                          _isVideoRetryEligible(
+                            _lastProcessRequest!,
+                            compatibility: true,
+                          ),
                       onCompatibilityRetry: _interactionLocked
                           ? null
                           : _retryWithCompatibilityMode,
@@ -2794,6 +3025,16 @@ String _stableCode(String? value, {String fallback = 'UNKNOWN'}) {
   }
   return normalized.replaceAll(RegExp(r'[^A-Z0-9_\-]'), '_');
 }
+
+bool _canRetryVideoFailure(String? code) => switch (code) {
+  'INSUFFICIENT_STORAGE' ||
+  'SOURCE_PROVIDER_FAILED' ||
+  'VIDEO_DECODING_FAILED' ||
+  'VIDEO_ENCODING_FAILED' ||
+  'OUTPUT_PERMISSION_LOST' ||
+  'UNKNOWN' => true,
+  _ => false,
+};
 
 bool _canRetryAudioFailure(String? code) => switch (code) {
   'INSUFFICIENT_STORAGE' ||

@@ -167,7 +167,7 @@
 - 输出统一为 `.m4a`（`audio/mp4`）。M3 不做 MP3、多音轨选择、trim、音量/降噪、声道混音、采样率选择或标签/封面编辑。
 
 **模式 A：AAC copy（默认）**
-- 只接受 AAC-LC 或 HE-AAC，Android 轨道 MIME 必须为 `audio/mp4a-latm`；其他音频编码稳定返回 `AUDIO_COPY_UNSUPPORTED`，提示用户显式改用 AAC 模式，不得静默降级。
+- 只接受有明确 profile 证据的 AAC-LC、HE-AAC 或 HE-AAC-v2，Android 轨道 MIME 必须为 `audio/mp4a-latm`；其他音频编码稳定返回 `AUDIO_COPY_UNSUPPORTED`，提示用户显式改用 AAC 模式，不得静默降级。
 - 使用 `MediaExtractor` 选中第一音轨，逐 sample 写入 `MediaMuxer` 的 MPEG-4 容器形成 `.m4a`；这是纯 sample copy，**不创建音频 Decoder 或 Encoder**，零转码、零质量损失。
 - 保留 sample 相对时间戳并把第一条有效音频 sample 归零；发布前逐 sample 使用有界 `readSampleData` 证明索引 payload 可完整物理读取，拒绝失败/短读/超界读，并确认 payload bytes 不超过物理文件 bytes。
 
@@ -216,7 +216,7 @@
 - **取消**：立即停止当前处理、删除临时文件与半成品输出；
 - **失败处理**：错误分类映射为用户可读文案（存储不足 / 编码器初始化失败 / 源文件损坏 / 未知错误+原始错误码），失败后清理临时文件；
 - **异常退出恢复清理（M2 必做）**：每个任务在应用私有持久化存储中维护最小任务日志，至少记录 `taskId`、阶段、私有临时文件标识、已分配的 MediaStore URI（如有）和开始时间；任务成功完成且临时文件已删除后再清除该记录；
-- App/处理服务启动时先与实际活动任务对账。若任务日志存在但已无对应活动任务，则删除该任务的私有临时文件；若日志记录了尚未完成发布的 App 自有 MediaStore URI，Android 10+ 删除 `IS_PENDING=1` 的条目，Android 8～9 删除对应 MediaStore 记录及半成品文件；最后清除任务日志；
+- App/处理服务启动时先与实际活动任务对账。若任务日志存在但已无对应活动任务，可删除由私有目录边界证明所有权的临时文件；公共输出只有在**当前对象**所有权可被不可变证据证明时才允许删除。`ALLOCATED` 阶段、相同 SAF URI、相同 legacy MediaStore URI/名称/路径都不单独授予删除权。Android 8～9 无法区分原半成品与同 URI/路径被替换写入的新对象，因此所有未发布 legacy 记录一律进入 durable quarantine、释放 active journal 槽但不删除公共对象；`PUBLISHED` 只保留输出并清理过期日志；
 - 启动对账后扫描**仅限 App 自有**的 `cache/transcode/`：删除未被当前活动任务引用的孤儿文件；清理为 best-effort，失败写入 F19 日志但不得阻塞启动或覆盖业务结果；严禁扫描或删除用户其他目录、无日志归属的公共媒体以及已经成功发布的输出；
 - 同一时间只允许一个媒体处理任务（视频压缩或音频提取，P0 阶段），新任务需等待或取消当前任务。
 
@@ -383,12 +383,14 @@ abstract class VideoEngine {
 
 **M3 稳定错误码**：
 - `AUDIO_TRACK_MISSING`：没有第一条可提取音轨；
-- `AUDIO_COPY_UNSUPPORTED`：copy 的第一音轨不是 AAC-LC/HE-AAC；
+- `AUDIO_COPY_UNSUPPORTED`：copy 的第一音轨没有可接受的 AAC-LC/HE-AAC/HE-AAC-v2 profile 证据；
 - `AUDIO_CHANNEL_LAYOUT_UNSUPPORTED`：第一音轨超过 2 声道；
 - `AUDIO_DECODING_FAILED` / `AUDIO_ENCODING_FAILED`：实际音频 Decoder/AAC Encoder 失败或不可用；
 - `AUDIO_OUTPUT_INVALID`：临时输出为空、没有可识别 AAC 音轨或明显截断。
 
 继续复用 `INSUFFICIENT_STORAGE`、source/provider 权限错误、`OUTPUT_PERMISSION_LOST`、`CANCELLED` 与 `UNKNOWN`；普通 UI 不泄露原始异常，技术细节只进入 F19，任何凭据一律写为 `[REDACTED]`。
+
+**重试契约**：视频和音频重试必须在第一次 `await` 前预留新的 workflow generation，并置位全局 destination-validation/single-flight 锁；每次异步返回后同时复核 generation、源 URI/源对象、原 retry request、保存位置 revision、输出未发布及 EventChannel 未关闭。锁定期间重置、重新选源、切换保存文件夹和重复重试均不得启动第二条工作流。视频普通重试只对可恢复错误开放（存储不足、provider 瞬态失败、视频解码/编码失败、输出权限丢失、未知瞬态错误）；`CANCELLED`、源权限永久丢失、源损坏/不可用、格式不支持、Encoder 不可用和 compatibility decoder 不可用均不得显示或执行重试。hardware `VIDEO_DECODING_FAILED` 的兼容入口还必须满足同一组未发布/通道存活/源与保存位置前置条件。
 
 ### 5.5 Android 端实现要点
 
@@ -396,11 +398,11 @@ abstract class VideoEngine {
   `androidx.media3:media3-transformer`、`media3-effect`、`media3-common`
 - **压缩**：`Transformer.Builder` + `setVideoMimeType`（H.265/H.264）；码率经 `DefaultEncoderFactory` + `VideoEncoderSettings.Builder().setBitrate()` 设置；分辨率缩放用 `Presentation` 效果；裁剪用 `Crop` 效果（NDC 坐标）；时间剪辑用 `MediaItem.ClippingConfiguration`。
 - **视频压缩的音频 copy 模式**：不设置音频 MIME、不加音频处理器，让 Transformer 对视频内音轨走转封装路径。
-- **M3 音频 copy**：独立实现类，`MediaExtractor` → `MediaMuxer` 逐 sample 复制第一条 AAC-LC/HE-AAC（`audio/mp4a-latm`）音轨，不经过 Transformer，也不创建 Decoder/Encoder。
+- **M3 音频 copy**：独立实现类，`MediaExtractor` → `MediaMuxer` 逐 sample 复制第一条有明确 profile 证据的 AAC-LC/HE-AAC/HE-AAC-v2（`audio/mp4a-latm`）音轨，不经过 Transformer，也不创建 Decoder/Encoder。
 - **M3 AAC 模式**：Media3 Transformer audio-only，`setRemoveVideo(true)`，并强制 `audioNeedsEncoding=true` 以保证 AAC→AAC 仍实际创建音频 Decoder/AAC Encoder；目标码率只允许 192000/128000/96000/64000 bps。
 - **前台服务**：任务在 `ForegroundService` 中执行；建通知渠道；进度节流为每秒 ≤ 2 次更新。
 - **权限清单**：`FOREGROUND_SERVICE` + 对应类型权限（`FOREGROUND_SERVICE_MEDIA_PROCESSING` / `FOREGROUND_SERVICE_DATA_SYNC`，Android 14+ 缺失会直接崩溃）、`POST_NOTIFICATIONS`（Android 13+ 需运行时申请，否则进度通知不显示）、`WAKE_LOCK`。Photo Picker 选取与 MediaStore 写入自有输出文件均**无需**存储权限。
-- **输出流程**：先写入应用私有缓存目录的临时文件 → 将任务阶段、临时文件标识及已分配的 App 自有 MediaStore URI 持久化到最小任务日志 → 成功后经 MediaStore 拷入公共目录 → 删除临时文件并清除任务日志。失败/取消立即删除临时文件和未完成发布条目；异常退出由下次 App/服务启动对账清理，确保公共目录无半成品污染。
+- **输出流程**：先写入应用私有缓存目录的临时文件 → 将任务阶段、临时文件标识及已分配的 App 自有 MediaStore URI 持久化到最小任务日志 → 成功后经 MediaStore 拷入公共目录 → 删除临时文件并清除任务日志。失败/取消只允许当前持有精确创建句柄的发布流程立即回滚公共对象；异常退出后的启动对账遵守当前对象所有权证明，证据不足即 quarantine，绝不以 URI/名称/路径相等猜测删除。
 - **进度**：视频/AAC 转码使用 Transformer 进度查询；音频 copy 按 sample PTS 计算。所有 EventChannel 事件与 task snapshot 显式输出 `taskKind`。
 
 ### 5.6 项目目录结构（建议）

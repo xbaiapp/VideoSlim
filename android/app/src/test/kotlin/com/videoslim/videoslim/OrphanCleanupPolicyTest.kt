@@ -239,9 +239,9 @@ class OrphanCleanupPolicyTest {
                 journalVersion = 1,
             )
 
-        assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.legacyAction(record, root))
+        assertEquals(CleanupAction.SKIP_UNSAFE, OrphanCleanupPolicy.legacyAction(record, root))
         assertTrue(
-            OrphanCleanupPolicy.isOwnedLegacyEntry(
+            OrphanCleanupPolicy.hasMatchingLegacyLocatorMetadata(
                 record,
                 root,
                 LegacyMediaEntry(uri, historicalName, "$root/$historicalName"),
@@ -254,7 +254,7 @@ class OrphanCleanupPolicyTest {
     }
 
     @Test
-    fun `legacy policy deletes only direct canonical app output and keeps published`() {
+    fun `legacy policy quarantines exact non-published app output and keeps published`() {
         val root = "/storage/emulated/0/Movies/VideoSlim"
         val record =
             scopedRecord().copy(
@@ -262,7 +262,7 @@ class OrphanCleanupPolicyTest {
                 actualOutputDisplayName = "lecture.mp4",
             )
 
-        assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.legacyAction(record, root))
+        assertEquals(CleanupAction.SKIP_UNSAFE, OrphanCleanupPolicy.legacyAction(record, root))
         assertEquals(
             CleanupAction.KEEP,
             OrphanCleanupPolicy.legacyAction(record.copy(stage = RecoveryStage.PUBLISHED), root),
@@ -285,7 +285,7 @@ class OrphanCleanupPolicyTest {
         )
         val recordedUri = requireNotNull(record.mediaStoreUri)
         assertTrue(
-            OrphanCleanupPolicy.isOwnedLegacyEntry(
+            OrphanCleanupPolicy.hasMatchingLegacyLocatorMetadata(
                 record,
                 root,
                 LegacyMediaEntry(
@@ -296,7 +296,7 @@ class OrphanCleanupPolicyTest {
             ),
         )
         assertFalse(
-            OrphanCleanupPolicy.isOwnedLegacyEntry(
+            OrphanCleanupPolicy.hasMatchingLegacyLocatorMetadata(
                 record,
                 root,
                 LegacyMediaEntry(
@@ -306,6 +306,61 @@ class OrphanCleanupPolicyTest {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun `legacy replacement in place with identical row fields remains quarantined`() {
+        val root = "/storage/emulated/0/Movies/VideoSlim"
+        val uri = "content://media/external/video/media/42"
+        val record =
+            scopedRecord().copy(
+                stage = RecoveryStage.DISCARDING,
+                mediaStoreUri = uri,
+                legacyOutputPath = "$root/lecture.mp4",
+                actualOutputDisplayName = "lecture.mp4",
+            )
+        val replacementWithSameMetadata =
+            LegacyMediaEntry(
+                uri = uri,
+                displayName = "lecture.mp4",
+                dataPath = "$root/lecture.mp4",
+            )
+
+        // These legacy metadata fields cannot distinguish the interrupted bytes from a
+        // replacement written in place after a crash.
+        assertTrue(
+            OrphanCleanupPolicy.hasMatchingLegacyLocatorMetadata(
+                record,
+                root,
+                replacementWithSameMetadata,
+            ),
+        )
+        assertEquals(
+            CleanupAction.SKIP_UNSAFE,
+            OrphanCleanupPolicy.legacyAction(record, root),
+        )
+    }
+
+    @Test
+    fun `legacy audio replacement in place is quarantined for every pre-published stage`() {
+        val root = "/storage/emulated/0/Music/VideoSlim"
+        val record =
+            scopedRecord().copy(
+                mediaKind = OutputMediaKind.AUDIO_M4A,
+                tempFileName = "323e4567-e89b-12d3-a456-426614174000.m4a",
+                expectedOutputDisplayName = "lecture.m4a",
+                actualOutputDisplayName = "lecture.m4a",
+                mediaStoreUri = "content://media/external/audio/media/84",
+                legacyOutputPath = "$root/lecture.m4a",
+            )
+
+        for (stage in listOf(RecoveryStage.PUBLISHING, RecoveryStage.DISCARDING)) {
+            assertEquals(
+                stage.name,
+                CleanupAction.SKIP_UNSAFE,
+                OrphanCleanupPolicy.legacyAction(record.copy(stage = stage), root),
+            )
+        }
     }
 
     @Test
@@ -324,16 +379,16 @@ class OrphanCleanupPolicyTest {
 
         assertTrue(OrphanCleanupPolicy.isAppMediaUri(OutputMediaKind.AUDIO_M4A, uri))
         assertFalse(OrphanCleanupPolicy.isAppMediaVideoUri(uri))
-        assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.legacyAction(record, root))
+        assertEquals(CleanupAction.SKIP_UNSAFE, OrphanCleanupPolicy.legacyAction(record, root))
         assertTrue(
-            OrphanCleanupPolicy.isOwnedLegacyEntry(
+            OrphanCleanupPolicy.hasMatchingLegacyLocatorMetadata(
                 record,
                 root,
                 LegacyMediaEntry(uri, "lecture.m4a", "$root/lecture.m4a"),
             ),
         )
         assertFalse(
-            OrphanCleanupPolicy.isOwnedLegacyEntry(
+            OrphanCleanupPolicy.hasMatchingLegacyLocatorMetadata(
                 record,
                 root,
                 LegacyMediaEntry(

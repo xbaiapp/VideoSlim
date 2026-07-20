@@ -808,10 +808,16 @@ void main() {
 
     expect(find.text('手机的视频解码器未能完成此次处理，原视频没有被修改。'), findsOneWidget);
     final retry = find.byKey(const ValueKey<String>('compatibility-retry'));
+    final compatibilityFlow = Provider.of<HomeFlowState>(
+      tester.element(retry),
+      listen: false,
+    );
     await tester.ensureVisible(retry);
     await tester.tap(retry);
     await tester.pump();
     expect(find.text('使用兼容模式重试？'), findsOneWidget);
+    expect(compatibilityFlow.validatingDestination, isTrue);
+    expect(compatibilityFlow.interactionLocked, isTrue);
 
     await tester.tap(
       find.byKey(const ValueKey<String>('confirm-compatibility-retry')),
@@ -882,6 +888,306 @@ void main() {
     expect(find.text('使用兼容模式重试'), findsNothing);
     expect(find.text('重试压缩'), findsNothing);
   });
+
+  testWidgets(
+    'custom video retry is visibly single-flight and preserves source ownership',
+    (WidgetTester tester) async {
+      const treeUri =
+          'content://com.android.externalstorage.documents/tree/primary%3AExports';
+      const location = OutputLocation(
+        kind: OutputLocationKind.customFolder,
+        label: '自定义文件夹 > Exports',
+        writable: true,
+        treeUri: treeUri,
+      );
+      final engine = _FakeEngine();
+      final picker = _FakePicker()..chooseOutputResult = location;
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey<String>('choose-output-location')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey<String>('choose-output-location')),
+      );
+      await tester.pump();
+      await tester.pump();
+      final capturedDestinationChange = tester
+          .widget<OutlinedButton>(
+            find.byKey(const ValueKey<String>('choose-output-location')),
+          )
+          .onPressed!;
+      await _tapCompression(tester);
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'task-1',
+          percent: 40,
+          state: TaskState.failed,
+          phase: TaskPhase.encoding,
+          errorCode: 'VIDEO_ENCODING_FAILED',
+        ),
+      );
+      await tester.pump();
+
+      final validation = Completer<OutputLocation>();
+      picker.outputLocationCompleter = validation;
+      final capturedRetry = tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, '重试压缩'))
+          .onPressed!;
+      final capturedReset = tester
+          .widget<TextButton>(find.widgetWithText(TextButton, '重新选择'))
+          .onPressed!;
+      final capturedGalleryReselection = tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey<String>('pick-gallery')),
+          )
+          .onPressed!;
+      final callsBeforeValidation = picker.outputLocationCalls;
+
+      capturedRetry();
+      capturedRetry();
+      await tester.pump();
+
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(
+          find.byKey(const ValueKey<String>('start-m2-compression')),
+        ),
+        listen: false,
+      );
+      expect(flow.validatingDestination, isTrue);
+      expect(flow.interactionLocked, isTrue);
+      expect(picker.outputLocationCalls, callsBeforeValidation + 1);
+      expect(engine.processRequests, hasLength(1));
+
+      capturedReset();
+      capturedDestinationChange();
+      capturedGalleryReselection();
+      await tester.pump();
+      expect(picker.chooseOutputCalls, 1);
+      expect(picker.galleryCalls, 1);
+
+      validation.complete(location);
+      await tester.pump();
+      await tester.pump();
+
+      expect(engine.processRequests, hasLength(2));
+      expect(engine.processRequests.last.uri, _sourceUri);
+      expect(engine.processRequests.last.outputTreeUri, treeUri);
+      expect(
+        engine.processRequests.last.outputFileName,
+        engine.processRequests.first.outputFileName,
+      );
+      expect(flow.validatingDestination, isFalse);
+    },
+  );
+
+  testWidgets(
+    'stale video retry completion cannot bind old request to new source',
+    (WidgetTester tester) async {
+      const treeUri =
+          'content://com.android.externalstorage.documents/tree/primary%3AExports';
+      const location = OutputLocation(
+        kind: OutputLocationKind.customFolder,
+        label: '自定义文件夹 > Exports',
+        writable: true,
+        treeUri: treeUri,
+      );
+      const retryRequest = ProcessRequest(
+        uri: _sourceUri,
+        outputFileName: 'old-source.mp4',
+        outputLocationLabel: '自定义文件夹 > Exports',
+        outputTreeUri: treeUri,
+        videoCodec: 'hevc',
+        videoDecoderMode: 'hardware',
+        videoBitrate: 2500000,
+        audioMode: 'copy',
+      );
+      final engine = _FakeEngine()
+        ..snapshot = TaskSnapshot(
+          taskId: 'restored-video',
+          state: TaskState.failed,
+          phase: TaskPhase.encoding,
+          percent: 40,
+          sourceUri: _sourceUri,
+          outputFileName: retryRequest.outputFileName,
+          retryRequest: retryRequest,
+          outputLocationLabel: retryRequest.outputLocationLabel,
+          startedAtEpochMs: DateTime(2026, 7, 19, 1).millisecondsSinceEpoch,
+          errorCode: 'VIDEO_ENCODING_FAILED',
+        )
+        ..infoByUri[_sourceUri] = _videoInfo();
+      final picker = _FakePicker()..outputLocation = location;
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      final validation = Completer<OutputLocation>();
+      picker.outputLocationCompleter = validation;
+      await tester.tap(find.text('重试压缩'));
+      await tester.pump();
+
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(
+          find.byKey(const ValueKey<String>('start-m2-compression')),
+        ),
+        listen: false,
+      );
+      flow.update(() {
+        flow.generation += 1;
+        flow.validatingDestination = false;
+        flow.selectedUri = 'content://media/video/new-source';
+        flow.sourceInfo = _videoInfo(uri: 'content://media/video/new-source');
+      });
+      validation.complete(location);
+      await tester.pump();
+      await tester.pump();
+
+      expect(engine.processRequests, isEmpty);
+      expect(flow.selectedUri, 'content://media/video/new-source');
+    },
+  );
+
+  testWidgets('immutable video terminal failures never expose retry', (
+    WidgetTester tester,
+  ) async {
+    for (final code in <String>[
+      'CANCELLED',
+      'SOURCE_PERMISSION_LOST',
+      'SOURCE_CORRUPTED',
+      'SOURCE_UNAVAILABLE',
+      'VIDEO_FORMAT_UNSUPPORTED',
+      'ENCODER_UNAVAILABLE',
+      'COMPATIBILITY_DECODER_UNAVAILABLE',
+    ]) {
+      final engine = _FakeEngine();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      await _tapCompression(tester);
+      engine.progress.add(
+        ProgressEvent(
+          taskId: 'task-1',
+          percent: 20,
+          state: code == 'CANCELLED' ? TaskState.cancelled : TaskState.failed,
+          phase: code == 'CANCELLED'
+              ? TaskPhase.cancelling
+              : TaskPhase.encoding,
+          errorCode: code,
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('重试压缩'), findsNothing, reason: code);
+      expect(
+        find.byKey(const ValueKey<String>('compatibility-retry')),
+        findsNothing,
+        reason: code,
+      );
+      expect(engine.processRequests, hasLength(1), reason: code);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await engine.close();
+    }
+  });
+
+  testWidgets(
+    'every recoverable video policy exposes a reachable exact retry',
+    (WidgetTester tester) async {
+      for (final code in <String>[
+        'INSUFFICIENT_STORAGE',
+        'SOURCE_PROVIDER_FAILED',
+        'VIDEO_DECODING_FAILED',
+        'VIDEO_ENCODING_FAILED',
+        'OUTPUT_PERMISSION_LOST',
+        'UNKNOWN',
+      ]) {
+        final engine = _FakeEngine();
+        final picker = _FakePicker();
+        final backend = _MemoryBackend();
+        await tester.pumpWidget(
+          _app(engine: engine, picker: picker, logger: _logger(backend)),
+        );
+        await _selectGallery(tester, engine, picker);
+        await _tapCompression(tester);
+        engine.progress.add(
+          ProgressEvent(
+            taskId: 'task-1',
+            percent: 20,
+            state: TaskState.failed,
+            phase: TaskPhase.encoding,
+            errorCode: code,
+          ),
+        );
+        await tester.pump();
+
+        expect(find.text('重试压缩'), findsOneWidget, reason: code);
+        await tester.ensureVisible(find.text('重试压缩'));
+        await tester.tap(find.text('重试压缩'));
+        await tester.pump();
+        await tester.pump();
+
+        expect(engine.processRequests, hasLength(2), reason: code);
+        expect(
+          engine.processRequests.last.toChannelMap(),
+          engine.processRequests.first.toChannelMap(),
+          reason: code,
+        );
+        await tester.pumpWidget(const SizedBox.shrink());
+        await engine.close();
+      }
+    },
+  );
+
+  testWidgets(
+    'progress closure removes compatibility and ordinary retry actions',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      await _tapCompression(tester);
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'task-1',
+          percent: 80,
+          state: TaskState.failed,
+          phase: TaskPhase.encoding,
+          errorCode: 'VIDEO_DECODING_FAILED',
+        ),
+      );
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey<String>('compatibility-retry')),
+        findsOneWidget,
+      );
+      expect(find.text('重试压缩'), findsOneWidget);
+
+      await engine.close();
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey<String>('compatibility-retry')),
+        findsNothing,
+      );
+      expect(find.text('重试压缩'), findsNothing);
+    },
+  );
 
   testWidgets('stream error invalidates a pending process future', (
     WidgetTester tester,
@@ -2162,9 +2468,109 @@ void main() {
       writable: true,
       treeUri: treeUri,
     );
+    final engine = _FakeEngine();
+    final picker = _FakePicker()..chooseOutputResult = location;
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey<String>('choose-output-location')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('choose-output-location')),
+    );
+    await tester.pump();
+    await tester.pump();
+    final capturedDestinationChange = tester
+        .widget<OutlinedButton>(
+          find.byKey(const ValueKey<String>('choose-output-location')),
+        )
+        .onPressed!;
+    await _tapAudioExtraction(tester);
+    engine.progress.add(
+      const ProgressEvent(
+        taskKind: TaskKind.audioExtraction,
+        taskId: 'task-1',
+        percent: 30,
+        state: TaskState.failed,
+        phase: TaskPhase.encoding,
+        errorCode: 'AUDIO_OUTPUT_INVALID',
+      ),
+    );
+    await tester.pump();
+    expect(find.text('重试音频提取'), findsOneWidget);
+
+    final validation = Completer<OutputLocation>();
+    picker.outputLocationCompleter = validation;
+    final retryButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, '重试音频提取'),
+    );
+    final capturedRetry = retryButton.onPressed!;
+    final capturedReset = tester
+        .widget<TextButton>(find.widgetWithText(TextButton, '重新选择'))
+        .onPressed!;
+    final capturedGalleryReselection = tester
+        .widget<FilledButton>(
+          find.byKey(const ValueKey<String>('pick-gallery')),
+        )
+        .onPressed!;
+    final callsBeforeValidation = picker.outputLocationCalls;
+
+    capturedRetry();
+    capturedRetry();
+    await tester.pump();
+
+    final flow = Provider.of<HomeFlowState>(
+      tester.element(
+        find.byKey(const ValueKey<String>('m3-audio-extract-card')),
+      ),
+      listen: false,
+    );
+    expect(flow.validatingDestination, isTrue);
+    expect(flow.interactionLocked, isTrue);
+    expect(picker.outputLocationCalls, callsBeforeValidation + 1);
+    expect(engine.audioProcessRequests, hasLength(1));
+
+    capturedReset();
+    capturedDestinationChange();
+    capturedGalleryReselection();
+    await tester.pump();
+    expect(picker.chooseOutputCalls, 1);
+    expect(picker.galleryCalls, 1);
+
+    validation.complete(location);
+    await tester.pump();
+    await tester.pump();
+
+    expect(engine.audioProcessRequests, hasLength(2));
+    expect(engine.audioProcessRequests.last.uri, _sourceUri);
+    expect(engine.audioProcessRequests.last.outputTreeUri, treeUri);
+    expect(
+      engine.audioProcessRequests.last.outputFileName,
+      engine.audioProcessRequests.first.outputFileName,
+    );
+    expect(flow.validatingDestination, isFalse);
+    expect(flow.processing, isTrue);
+  });
+
+  testWidgets('stale audio retry validation cannot submit an old source tree', (
+    WidgetTester tester,
+  ) async {
+    const treeUri =
+        'content://com.android.externalstorage.documents/tree/primary%3AExports';
+    const location = OutputLocation(
+      kind: OutputLocationKind.customFolder,
+      label: '自定义文件夹 > Exports',
+      writable: true,
+      treeUri: treeUri,
+    );
     const retryRequest = AudioExtractRequest(
       uri: _sourceUri,
-      outputFileName: '旅行_音频.m4a',
+      outputFileName: 'old-source.m4a',
       outputLocationLabel: '自定义文件夹 > Exports',
       outputTreeUri: treeUri,
       mode: AudioExtractMode.aac,
@@ -2195,23 +2601,29 @@ void main() {
     await tester.pump();
     await tester.pump();
     await tester.pump();
-    expect(find.text('重试音频提取'), findsOneWidget);
-
     final validation = Completer<OutputLocation>();
     picker.outputLocationCompleter = validation;
-    await tester.ensureVisible(find.text('重试音频提取'));
     await tester.tap(find.text('重试音频提取'));
     await tester.pump();
-    expect(engine.audioProcessRequests, isEmpty);
 
-    await tester.tap(find.text('重新选择'));
-    await tester.pump();
+    final flow = Provider.of<HomeFlowState>(
+      tester.element(
+        find.byKey(const ValueKey<String>('m3-audio-extract-card')),
+      ),
+      listen: false,
+    );
+    flow.update(() {
+      flow.generation += 1;
+      flow.validatingDestination = false;
+      flow.selectedUri = 'content://media/video/new-source';
+      flow.sourceInfo = _videoInfo(uri: 'content://media/video/new-source');
+    });
     validation.complete(location);
     await tester.pump();
     await tester.pump();
 
     expect(engine.audioProcessRequests, isEmpty);
-    expect(find.text('导入一个视频'), findsOneWidget);
+    expect(flow.selectedUri, 'content://media/video/new-source');
   });
 
   testWidgets('cancelled audio task is terminal without retry action', (

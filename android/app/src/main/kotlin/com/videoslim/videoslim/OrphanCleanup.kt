@@ -116,10 +116,19 @@ internal object OrphanCleanupPolicy {
         ) {
             return CleanupAction.SKIP_UNSAFE
         }
-        return if (record.stage == RecoveryStage.PUBLISHED) CleanupAction.KEEP else CleanupAction.DELETE
+        // API 26–28 MediaStore rows and filesystem paths expose no immutable allocation token.
+        // URI/name/path equality can still describe a replacement written in place by another
+        // actor, so startup recovery preserves every extant/ambiguous non-published record in
+        // quarantine. Only the in-process publisher that created the object may eagerly roll it
+        // back. PUBLISHED remains preservation-only and may clear its stale journal.
+        return if (record.stage == RecoveryStage.PUBLISHED) {
+            CleanupAction.KEEP
+        } else {
+            CleanupAction.SKIP_UNSAFE
+        }
     }
 
-    fun isOwnedLegacyEntry(
+    fun hasMatchingLegacyLocatorMetadata(
         record: TaskRecoveryRecord,
         canonicalOutputDirectory: String,
         observed: LegacyMediaEntry,
@@ -517,97 +526,27 @@ class OrphanCleanup(
                 return
             }
         val action = OrphanCleanupPolicy.legacyAction(record, outputDirectory.path)
-        if (action == CleanupAction.SKIP_UNSAFE) {
-            quarantineUnsafeRecord(record, report, "legacy output ownership could not be proven")
-            return
-        }
-        val uri = record.mediaStoreUri!!
-        val rowQuery =
-            queryLegacyEntry(uri, record.mediaKind, report) ?: run {
-                quarantineUnsafeRecord(record, report, "legacy output query unavailable")
-                return
+        when (action) {
+            CleanupAction.KEEP -> {
+                report.outputsPreserved += 1
+                report.addDetail("preserved published legacy output task=${record.taskId}")
+                clearRecord(record, report)
             }
-        val observed = rowQuery.entry
-        if (
-            observed != null &&
-            !OrphanCleanupPolicy.isOwnedLegacyEntry(record, outputDirectory.path, observed)
-        ) {
-            quarantineUnsafeRecord(record, report, "legacy MediaStore row ownership mismatch")
-            return
+            CleanupAction.SKIP_UNSAFE ->
+                quarantineUnsafeRecord(
+                    record,
+                    report,
+                    "legacy output has no immutable current-object ownership proof",
+                )
+            CleanupAction.ALREADY_ABSENT,
+            CleanupAction.DELETE,
+            ->
+                quarantineUnsafeRecord(
+                    record,
+                    report,
+                    "legacy cleanup policy returned unsupported eager-cleanup action",
+                )
         }
-        if (action == CleanupAction.KEEP) {
-            report.outputsPreserved += 1
-            report.addDetail("preserved published legacy output task=${record.taskId}")
-            clearRecord(record, report)
-            return
-        }
-
-        val destination = File(record.legacyOutputPath!!)
-        var rowCleanupConfirmed = observed == null
-        var deletedSomething = false
-        if (observed != null) {
-            try {
-                val count = resolver.delete(Uri.parse(uri), null, null)
-                if (count > 0) {
-                    report.mediaRowsDeleted += count
-                    deletedSomething = true
-                    rowCleanupConfirmed = true
-                } else {
-                    val verification = queryLegacyEntry(uri, record.mediaKind, report)
-                    if (verification?.entry == null && verification != null) {
-                        rowCleanupConfirmed = true
-                    } else if (verification != null) {
-                        report.failures += 1
-                        val identityStillMatches =
-                            OrphanCleanupPolicy.isOwnedLegacyEntry(
-                                record,
-                                outputDirectory.path,
-                                verification.entry!!,
-                            )
-                        report.addDetail(
-                            if (identityStillMatches) {
-                                "legacy row still exists after zero-row delete task=${record.taskId}"
-                            } else {
-                                "legacy row identity changed after zero-row delete task=${record.taskId}"
-                            },
-                        )
-                    }
-                }
-            } catch (error: Throwable) {
-                failure(report, "legacy MediaStore row delete failed task=${record.taskId}", error)
-            }
-        }
-        if (!rowCleanupConfirmed) return
-
-        // Once the exact MediaStore row is absent, an existing path can already be a replacement
-        // created by another actor. Startup recovery has no immutable file identity to distinguish
-        // it from the interrupted output, so it must quarantine rather than delete that path.
-        val destinationStillExists =
-            try {
-                destination.exists()
-            } catch (error: Throwable) {
-                failure(report, "legacy output existence check failed task=${record.taskId}", error)
-                return
-            }
-        if (
-            OrphanCleanupPolicy.legacyPathAction(destinationStillExists) ==
-            CleanupAction.SKIP_UNSAFE
-        ) {
-            quarantineUnsafeRecord(
-                record,
-                report,
-                "legacy path remains after row cleanup; file identity cannot be proven",
-            )
-            return
-        }
-        if (deletedSomething) {
-            report.outputsDeleted += 1
-            report.addDetail("deleted exact interrupted legacy MediaStore row task=${record.taskId}")
-        } else {
-            report.alreadyAbsent += 1
-            report.addDetail("legacy output already absent task=${record.taskId}")
-        }
-        clearRecord(record, report)
     }
 
     private fun queryDocumentEntry(
@@ -685,50 +624,6 @@ class OrphanCleanup(
                 )
             } catch (error: Throwable) {
                 failure(report, "scoped MediaStore row could not be read", error)
-                null
-            }
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun queryLegacyEntry(
-        uriString: String,
-        mediaKind: OutputMediaKind,
-        report: CleanupReport,
-    ): EntryQuery<LegacyMediaEntry>? {
-        if (!OrphanCleanupPolicy.isAppMediaUri(mediaKind, uriString)) {
-            unsafe(report, "legacy MediaStore URI does not match the recorded media kind")
-            return null
-        }
-        val cursor =
-            try {
-                resolver.query(
-                    Uri.parse(uriString),
-                    arrayOf(MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATA),
-                    null,
-                    null,
-                    null,
-                )
-            } catch (error: Throwable) {
-                failure(report, "legacy MediaStore query failed", error)
-                return null
-            } ?: run {
-                report.failures += 1
-                report.addDetail("legacy MediaStore query returned null cursor")
-                return null
-            }
-        return cursor.use {
-            if (!it.moveToFirst()) return@use EntryQuery(null)
-            try {
-                EntryQuery(
-                    LegacyMediaEntry(
-                        uri = uriString,
-                        displayName = it.nullableString(MediaStore.MediaColumns.DISPLAY_NAME),
-                        dataPath = it.nullableString(MediaStore.MediaColumns.DATA),
-                    ),
-                )
-            } catch (error: Throwable) {
-                failure(report, "legacy MediaStore row could not be read", error)
                 null
             }
         }
