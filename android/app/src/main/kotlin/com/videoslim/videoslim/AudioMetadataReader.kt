@@ -6,8 +6,10 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
 import java.io.IOException
+import java.nio.ByteBuffer
 
 internal data class AudioMetadata(
     val sourceUri: String,
@@ -130,7 +132,7 @@ internal class AudioMetadataReader(context: Context) {
                     ?: 0L
             val declaredBitrate =
                 audioFormat.intValue(MediaFormat.KEY_BIT_RATE)?.takeIf { it > 0 }
-            val timing = inspectSampleTimes(extractor, firstAudioTrack)
+            val timing = inspectSampleTimes(extractor, firstAudioTrack, audioFormat)
             val estimatedBitrate =
                 if (declaredBitrate == null && timing.sampleBytes > 0L && durationMs > 0L) {
                     ((timing.sampleBytes.toDouble() * BITS_PER_BYTE * MILLIS_PER_SECOND) / durationMs)
@@ -188,8 +190,17 @@ internal class AudioMetadataReader(context: Context) {
     private fun inspectSampleTimes(
         extractor: MediaExtractor,
         trackIndex: Int,
+        format: MediaFormat,
     ): SampleTiming {
         extractor.selectTrack(trackIndex)
+        val legacySampleBuffer =
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+                ByteBuffer.allocate(
+                    boundedAudioSampleBufferSize(format.intValue(MediaFormat.KEY_MAX_INPUT_SIZE)),
+                )
+            } else {
+                null
+            }
         var first: Long? = null
         var previous: Long? = null
         var last: Long? = null
@@ -204,7 +215,14 @@ internal class AudioMetadataReader(context: Context) {
             previous = sampleTime
             last = sampleTime
             count += 1L
-            extractor.sampleSize.takeIf { it > 0L }?.let { size ->
+            val sampleSize =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    extractor.sampleSize
+                } else {
+                    legacySampleBuffer!!.clear()
+                    extractor.readSampleData(legacySampleBuffer, 0).toLong()
+                }
+            sampleSize.takeIf { it > 0L }?.let { size ->
                 sampleBytes =
                     if (sampleBytes > Long.MAX_VALUE - size) Long.MAX_VALUE else sampleBytes + size
             }
