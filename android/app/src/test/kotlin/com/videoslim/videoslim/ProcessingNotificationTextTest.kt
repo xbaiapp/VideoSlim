@@ -125,7 +125,7 @@ class ProcessingNotificationTextTest {
 
         assertTrue(hardware.body.contains("使用兼容模式重试"))
         assertFalse(software.body.contains("使用兼容模式重试"))
-        assertTrue(software.body.contains("兼容读取方式未能完成"))
+        assertTrue(software.body.contains("软件读取方式未能完成"))
     }
 
     @Test

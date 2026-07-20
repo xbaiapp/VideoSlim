@@ -113,13 +113,13 @@ internal data class ProcessingNotificationText(
                     if (snapshot.videoDecoderMode == VideoDecoderMode.HARDWARE.wireName) {
                         "视频读取方式未能完成，可打开 VideoSlim 使用兼容模式重试"
                     } else {
-                        "兼容读取方式未能完成，可打开 VideoSlim 查看详情"
+                        "软件读取方式未能完成，可打开 VideoSlim 查看详情"
                     }
                 EngineErrorCode.VIDEO_FORMAT_UNSUPPORTED.wireName -> "这台手机暂时无法读取这种视频格式"
                 EngineErrorCode.COMPATIBILITY_DECODER_UNAVAILABLE.wireName ->
-                    "这台手机没有可用于此视频的兼容读取方式"
+                    "这台手机没有可用于此视频的软件读取方式"
                 EngineErrorCode.VIDEO_ENCODING_FAILED.wireName -> "当前设置未能完成，可打开 VideoSlim 重试或调整格式和画质"
-                EngineErrorCode.ENCODER_UNAVAILABLE.wireName -> "当前手机没有可用的兼容处理方式"
+                EngineErrorCode.ENCODER_UNAVAILABLE.wireName -> "当前手机没有可用的视频压缩方式"
                 EngineErrorCode.OUTPUT_PERMISSION_LOST.wireName ->
                     "保存文件夹权限已失效，请打开 VideoSlim 重新选择"
                 else -> "处理失败，请打开 VideoSlim 查看详情"

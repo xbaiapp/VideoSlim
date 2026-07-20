@@ -19,7 +19,7 @@ enum class EngineErrorCode(
     val defaultMessage: String,
 ) {
     INSUFFICIENT_STORAGE("INSUFFICIENT_STORAGE", "存储空间不足，请释放空间后重试"),
-    ENCODER_UNAVAILABLE("ENCODER_UNAVAILABLE", "当前手机没有可用的兼容处理方式"),
+    ENCODER_UNAVAILABLE("ENCODER_UNAVAILABLE", "当前手机没有可用的视频压缩方式"),
     SOURCE_CORRUPTED("SOURCE_CORRUPTED", "无法处理源视频，文件可能已损坏或格式不受支持"),
     SOURCE_PERMISSION_LOST("SOURCE_PERMISSION_LOST", "无法继续读取这个视频，请重新选择文件"),
     SOURCE_UNAVAILABLE("SOURCE_UNAVAILABLE", "所选视频已移动、删除或暂时不可用"),
@@ -28,7 +28,7 @@ enum class EngineErrorCode(
     VIDEO_FORMAT_UNSUPPORTED("VIDEO_FORMAT_UNSUPPORTED", "这台手机暂时无法读取这种视频格式"),
     COMPATIBILITY_DECODER_UNAVAILABLE(
         "COMPATIBILITY_DECODER_UNAVAILABLE",
-        "这台手机没有可用于此视频的兼容处理方式，原视频没有被修改",
+        "这台手机没有可用于此视频的软件读取方式，原视频没有被修改",
     ),
     VIDEO_ENCODING_FAILED("VIDEO_ENCODING_FAILED", "手机没能按当前设置完成压缩，可按原设置重试或调整格式和画质"),
     OUTPUT_PERMISSION_LOST("OUTPUT_PERMISSION_LOST", "保存文件夹权限已失效，请重新选择保存位置"),
