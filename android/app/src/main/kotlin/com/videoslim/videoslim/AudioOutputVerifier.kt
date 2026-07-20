@@ -58,6 +58,9 @@ internal object AudioOutputVerifier {
         }
         requireTimelineConsistent(metadata)
         expectedSource?.let { source ->
+            if (!source.sampleTimesMonotonic) {
+                throw IOException("Source audio sample timestamps are not monotonic")
+            }
             requireTimelineConsistent(source)
             requireCoverageConsistent(source, metadata)
         }

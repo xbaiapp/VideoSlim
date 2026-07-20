@@ -161,6 +161,19 @@ class AudioOutputVerifierTest {
     }
 
     @Test
+    fun `expected source with regressing timestamps fails before output coverage comparison`() {
+        val output = validMetadata().copy(sourceUri = "copy.m4a", fileName = "copy.m4a")
+        assertThrows(IOException::class.java) {
+            AudioOutputVerifier.requireValid(
+                output,
+                AudioOutputVerifier.AAC_MIME,
+                AudioOutputVerifier.COPY_AAC_PROFILES,
+                expectedSource = validMetadata().copy(sampleTimesMonotonic = false),
+            )
+        }
+    }
+
+    @Test
     fun `short AAC transcode accepts encoder frame rounding but rejects source-relative truncation`() {
         val source =
             shortValidMetadata().copy(

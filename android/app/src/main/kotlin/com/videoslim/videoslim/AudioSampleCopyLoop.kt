@@ -74,27 +74,22 @@ internal fun copyEncodedAudioSamples(
         }
         val inputTimeUs = source.sampleTimeUs
         if (inputTimeUs < 0L) break
+        if (lastInputTimeUs >= 0L && inputTimeUs <= lastInputTimeUs) {
+            throw IOException("Source audio sample timestamps are not strictly monotonic")
+        }
         buffer.clear()
         val size = source.readSampleData(buffer)
-        if (size < 0) break
         if (size > buffer.capacity()) {
             throw IOException("Audio sample exceeds the bounded copy buffer")
         }
-        if (size == 0) {
-            if (!source.advance()) break
-            continue
+        if (size <= 0) {
+            throw IOException("Source audio sample payload is unreadable")
         }
         if (shouldCancel() || Thread.currentThread().isInterrupted) {
             throw CancellationException("Audio extraction cancelled before sample write")
         }
         val baseTimeUs = firstInputTimeUs ?: inputTimeUs.also { firstInputTimeUs = it }
-        val rebasedTimeUs = (inputTimeUs - baseTimeUs).coerceAtLeast(0L)
-        val outputTimeUs =
-            if (lastOutputTimeUs < 0L) {
-                0L
-            } else {
-                max(rebasedTimeUs, lastOutputTimeUs + 1L)
-            }
+        val outputTimeUs = inputTimeUs - baseTimeUs
         val info =
             EncodedAudioSampleInfo(
                 offset = 0,

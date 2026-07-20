@@ -63,6 +63,7 @@ final class HomeFlowState extends ChangeNotifier {
   Stopwatch? processStopwatch;
 
   bool get interactionLocked =>
+      restoringTask ||
       picking ||
       readingMetadata ||
       selectingOutputLocation ||

@@ -1,5 +1,6 @@
 package com.videoslim.videoslim
 
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.CancellationException
 import org.junit.Assert.assertArrayEquals
@@ -10,7 +11,7 @@ import org.junit.Test
 
 class AudioSampleCopyLoopTest {
     @Test
-    fun `copy loop rebases timestamps and makes regressions strictly monotonic`() {
+    fun `copy loop rejects regressing source timestamps instead of rewriting them`() {
         val source =
             FakeSource(
                 listOf(
@@ -21,7 +22,7 @@ class AudioSampleCopyLoopTest {
             )
         val sink = FakeSink()
 
-        val result =
+        assertThrows(IOException::class.java) {
             copyEncodedAudioSamples(
                 source = source,
                 sink = sink,
@@ -29,11 +30,34 @@ class AudioSampleCopyLoopTest {
                 requestedBufferBytes = 32,
                 shouldCancel = { false },
             )
+        }
 
-        assertEquals(listOf(0L, 21_333L, 21_334L), sink.samples.map { it.presentationTimeUs })
-        assertEquals(3L, result.sampleCount)
-        assertEquals(6L, result.totalBytes)
+        assertEquals(listOf(0L, 21_333L), sink.samples.map { it.presentationTimeUs })
         assertArrayEquals(byteArrayOf(1, 2), sink.payloads.first())
+    }
+
+    @Test
+    fun `copy loop preserves strictly monotonic source timestamp deltas exactly`() {
+        val sink = FakeSink()
+        val result =
+            copyEncodedAudioSamples(
+                source =
+                    FakeSource(
+                        listOf(
+                            Sample(byteArrayOf(1), 1_000_000L, 1),
+                            Sample(byteArrayOf(2), 1_021_333L, 0),
+                            Sample(byteArrayOf(3), 1_042_667L, 0),
+                        ),
+                    ),
+                sink = sink,
+                durationUs = 50_000L,
+                requestedBufferBytes = 8,
+                shouldCancel = { false },
+            )
+
+        assertEquals(listOf(0L, 21_333L, 42_667L), sink.samples.map { it.presentationTimeUs })
+        assertEquals(3L, result.sampleCount)
+        assertEquals(3L, result.totalBytes)
     }
 
     @Test
@@ -82,18 +106,17 @@ class AudioSampleCopyLoopTest {
     }
 
     @Test
-    fun `zero byte samples are ignored and regressing progress remains monotonic`() {
+    fun `zero byte sample fails closed before any timestamp can be rewritten`() {
         val progress = mutableListOf<Double>()
         val sink = FakeSink()
 
-        val result =
+        assertThrows(IOException::class.java) {
             copyEncodedAudioSamples(
                 source =
                     FakeSource(
                         listOf(
                             Sample(byteArrayOf(), 500L, 0),
                             Sample(byteArrayOf(1), 2_000L, 0),
-                            Sample(byteArrayOf(2), 1_000L, 0),
                         ),
                     ),
                 sink = sink,
@@ -102,12 +125,10 @@ class AudioSampleCopyLoopTest {
                 shouldCancel = { false },
                 onProgress = { progress += it },
             )
+        }
 
-        assertEquals(2L, result.sampleCount)
-        assertEquals(2_000L, result.firstInputTimeUs)
-        assertEquals(1_000L, result.lastInputTimeUs)
-        assertEquals(listOf(0L, 1L), sink.samples.map { it.presentationTimeUs })
-        assertEquals(progress.sorted(), progress)
+        assertTrue(sink.samples.isEmpty())
+        assertTrue(progress.isEmpty())
     }
 
     private data class Sample(

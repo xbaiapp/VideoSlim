@@ -383,7 +383,7 @@ internal fun readVerifiedAudioSamplePayload(
         throw IOException("Audio sample payload is unreadable or exceeds the verification cap")
     }
     if (indexedSampleSize != null && bytesRead.toLong() != indexedSampleSize) {
-        throw IOException("Audio sample payload read was shorter than its indexed size")
+        throw IOException("Audio sample payload read did not exactly match its indexed size")
     }
     return bytesRead.toLong()
 }

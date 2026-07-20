@@ -163,13 +163,13 @@
 - 始终使用源文件顺序中的**第一条音频轨**；M3 不提供多音轨或多语言音轨选择。
 - 支持单声道与立体声；遇到超过 2 声道的第一音轨时稳定返回 `AUDIO_CHANNEL_LAYOUT_UNSUPPORTED`，不隐式下混。
 - 视频没有音轨时，入口与引擎均稳定返回 `AUDIO_TRACK_MISSING`，不得启动空任务或产出空文件。
-- 默认发布到 MediaStore `Music/VideoSlim/`；用户可通过 SAF 选择并持久化自定义文件夹。发布、长度回读、取消与异常恢复沿用 M2 的所有权和清理边界。
+- 默认发布到 MediaStore `Music/VideoSlim/`；用户可通过 SAF 选择并持久化自定义文件夹。发布、取消与异常恢复沿用 M2 的所有权和清理边界；SAF 即使报告 `UNKNOWN_LENGTH` 或看似可信的长度元数据，也必须对已关闭输出执行有界全量回读并与源临时文件 bytes 严格相等，无法证明完整性时不得进入 `PUBLISHED`。
 - 输出统一为 `.m4a`（`audio/mp4`）。M3 不做 MP3、多音轨选择、trim、音量/降噪、声道混音、采样率选择或标签/封面编辑。
 
 **模式 A：AAC copy（默认）**
 - 只接受有明确 profile 证据的 AAC-LC、HE-AAC 或 HE-AAC-v2，Android 轨道 MIME 必须为 `audio/mp4a-latm`；其他音频编码稳定返回 `AUDIO_COPY_UNSUPPORTED`，提示用户显式改用 AAC 模式，不得静默降级。
 - 使用 `MediaExtractor` 选中第一音轨，逐 sample 写入 `MediaMuxer` 的 MPEG-4 容器形成 `.m4a`；这是纯 sample copy，**不创建音频 Decoder 或 Encoder**，零转码、零质量损失。
-- 保留 sample 相对时间戳并把第一条有效音频 sample 归零；发布前逐 sample 使用有界 `readSampleData` 证明索引 payload 可完整物理读取，拒绝失败/短读/超界读，并确认 payload bytes 不超过物理文件 bytes。
+- 保留 sample 相对时间戳并把第一条有效音频 sample 归零；源 PTS 必须严格单调，重复或回退立即失败，禁止用 clamp/递增改写掩盖坏源。发布前逐 sample 使用有界 `readSampleData` 证明索引 payload 可完整物理读取；有 `sampleSize` 时物理读数必须严格相等，并拒绝负数、零、短读、超读/超界读，确认 payload bytes 不超过物理文件 bytes。
 
 **模式 B：AAC 强制重编码**
 - 固定提供 AAC-LC `192 / 128 / 96 / 64 kbps` 四档，对应请求值 `192000 / 128000 / 96000 / 64000` bps；默认 128 kbps。
@@ -215,10 +215,11 @@
 - 进度来源：视频/AAC 转码使用 Media3 Transformer 进度，音频 copy 按已复制 sample 时间戳/源音轨 span 计算；统一经 EventChannel 推送至 Flutter，事件必须携带 `taskKind`；
 - **取消**：立即停止当前处理、删除临时文件与半成品输出；
 - **失败处理**：错误分类映射为用户可读文案（存储不足 / 编码器初始化失败 / 源文件损坏 / 未知错误+原始错误码），失败后清理临时文件；
-- **异常退出恢复清理（M2 必做）**：每个任务在应用私有持久化存储中维护最小任务日志，至少记录 `taskId`、阶段、私有临时文件标识、已分配的 MediaStore URI（如有）和开始时间；任务成功完成且临时文件已删除后再清除该记录；
+- **异常退出恢复清理（M2 必做）**：每个任务在应用私有持久化存储中维护最小任务日志，至少记录 `taskId`、阶段、私有临时文件标识、已分配的 MediaStore URI（如有）和开始时间；任何 API 路径（含 Android 8～9 legacy）在公共 URI 分配后必须先同步持久化该 URI，再查询/记录丰富 target 字段、复制 bytes 或执行后续发布工作；任务成功完成且临时文件已删除后再清除该记录；
 - App/处理服务启动时先与实际活动任务对账。若任务日志存在但已无对应活动任务，可删除由私有目录边界证明所有权的临时文件；公共输出只有在**当前对象**所有权可被不可变证据证明时才允许删除。`ALLOCATED` 阶段、相同 SAF URI、相同 legacy MediaStore URI/名称/路径都不单独授予删除权。Android 8～9 无法区分原半成品与同 URI/路径被替换写入的新对象，因此所有未发布 legacy 记录一律进入 durable quarantine、释放 active journal 槽但不删除公共对象；`PUBLISHED` 只保留输出并清理过期日志；
 - 启动对账后扫描**仅限 App 自有**的 `cache/transcode/`：删除未被当前活动任务引用的孤儿文件；清理为 best-effort，失败写入 F19 日志但不得阻塞启动或覆盖业务结果；严禁扫描或删除用户其他目录、无日志归属的公共媒体以及已经成功发布的输出；
 - 同一时间只允许一个媒体处理任务（视频压缩或音频提取，P0 阶段），新任务需等待或取消当前任务。
+- Flutter 的 snapshot/源 metadata 恢复、初始音频/视频目的地预检、音频普通/AAC 重试和视频普通/兼容重试都属于同一全局 interaction lock；每次 `await` 后必须重新证明 generation、EventChannel、源、目的地 revision 与发布状态所有权。EventChannel 在 native task 尚未提交时关闭也必须使预检 generation 失效并释放锁，禁止随后提交捕获的旧请求。
 
 **验收标准**：M2 已按 Pixel 当前私有使用场景接受；进度、正常失败/取消清理、任务恢复和发布所有权边界保持为产品契约。接近 6 小时、接近 50 GB、持续后台至完成、转码/发布强杀、连续 10 次异常中断、多 Provider 与多 SoC 的组合矩阵保留为 non-blocking hardening：未实际执行不得标为 PASS，补证前不得据此扩大生产支持范围，但不阻止 M3。
 

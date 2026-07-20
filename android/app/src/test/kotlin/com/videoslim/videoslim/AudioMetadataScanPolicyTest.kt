@@ -99,6 +99,9 @@ class AudioMetadataScanPolicyTest {
             readVerifiedAudioSamplePayload(buffer, 16L) { 15 }
         }
         assertThrows(IOException::class.java) {
+            readVerifiedAudioSamplePayload(buffer, 16L) { 17 }
+        }
+        assertThrows(IOException::class.java) {
             readVerifiedAudioSamplePayload(
                 buffer,
                 MAX_AUDIO_SAMPLE_BUFFER_BYTES.toLong() + 1L,

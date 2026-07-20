@@ -353,15 +353,22 @@ internal class MediaStoreSaver(
         val outputUri =
             resolver.insert(externalContentUri(mediaKind), values)
                 ?: throw IOException("Legacy MediaStore insert returned null")
-        val target =
-            PublicationTarget(
-                mediaStoreUri = outputUri.toString(),
-                actualDisplayName = destination.name,
-                canonicalLegacyOutputPath = destination.path,
-                mediaKind = mediaKind,
-            )
+        var target: PublicationTarget? = null
         try {
-            publicationObserver.onPublicationTargetAllocated(target)
+            val allocatedTarget =
+                notifyPublicationAllocation(
+                    observer = publicationObserver,
+                    publicationUri = outputUri.toString(),
+                    createTarget = {
+                        PublicationTarget(
+                            mediaStoreUri = outputUri.toString(),
+                            actualDisplayName = destination.name,
+                            canonicalLegacyOutputPath = destination.path,
+                            mediaKind = mediaKind,
+                        )
+                    },
+                    beforeTargetCallback = { target = it },
+                )
             copyIntoUri(tempFile, outputUri, shouldCancel)
             verifyPublishedLength(
                 outputUri,
@@ -369,10 +376,10 @@ internal class MediaStoreSaver(
                 shouldCancel,
                 requireReadback = false,
             )
-            publicationObserver.onPublicationCompleted(target)
+            publicationObserver.onPublicationCompleted(allocatedTarget)
             return outputUri.toString()
         } catch (error: Throwable) {
-            runCatching { publicationObserver.onPublicationDiscarding(target) }
+            target?.let { runCatching { publicationObserver.onPublicationDiscarding(it) } }
             val rowRemoved = deletePublished(outputUri.toString())
             val fileRemoved =
                 if (shouldDeleteLegacyPath(rowRemoved)) {
@@ -412,18 +419,18 @@ internal class MediaStoreSaver(
         shouldCancel: () -> Boolean,
         requireReadback: Boolean,
     ) {
-        if (!requireReadback) {
-            val descriptorLength =
+        val descriptorLength =
+            if (requireReadback) {
+                null
+            } else {
                 runCatching {
                     resolver.openFileDescriptor(outputUri, "r")?.use { descriptor ->
-                        descriptor.statSize.takeIf { it >= 0L }
+                        descriptor.statSize
                     }
                 }.getOrNull()
-            if (descriptorLength != null) {
-                requirePublishedByteCount(expectedBytes, descriptorLength)
-                return
             }
-            val queriedLength =
+        val queriedLength =
+            if (!requireReadback && (descriptorLength == null || descriptorLength < 0L)) {
                 runCatching {
                     resolver.query(
                         outputUri,
@@ -435,23 +442,17 @@ internal class MediaStoreSaver(
                         if (!cursor.moveToFirst() || cursor.isNull(0)) null else cursor.getLong(0)
                     }
                 }.getOrNull()
-            if (queriedLength != null) {
-                requirePublishedByteCount(expectedBytes, queriedLength)
-                return
+            } else {
+                null
             }
-        }
-        val input =
-            resolver.openInputStream(outputUri)
-                ?: throw IOException("Published output cannot be reopened for verification")
-        val observedBytes =
-            input.use {
-                countPublicationBytes(
-                    input = it,
-                    shouldCancel = shouldCancel,
-                    stopAfterBytes = expectedBytes + 1L,
-                )
-            }
-        requirePublishedByteCount(expectedBytes, observedBytes)
+        verifyPublicationCompleteness(
+            expectedBytes = expectedBytes,
+            descriptorLength = descriptorLength,
+            queriedLength = queriedLength,
+            requireReadback = requireReadback,
+            shouldCancel = shouldCancel,
+            openReadback = { resolver.openInputStream(outputUri) },
+        )
     }
 
     private fun uniqueDestination(directory: File, requestedName: String): File {
@@ -505,6 +506,57 @@ internal class MediaStoreSaver(
 }
 
 internal fun shouldDeleteLegacyPath(rowRemovalConfirmed: Boolean): Boolean = rowRemovalConfirmed
+
+/**
+ * The URI callback is the durable crash-recovery boundary and must always run
+ * before target construction, the richer target callback, or subsequent I/O.
+ */
+internal fun notifyPublicationAllocation(
+    observer: PublicationObserver,
+    publicationUri: String,
+    createTarget: () -> PublicationTarget,
+    beforeTargetCallback: (PublicationTarget) -> Unit = {},
+): PublicationTarget {
+    observer.onPublicationUriAllocated(publicationUri)
+    val target = createTarget()
+    beforeTargetCallback(target)
+    observer.onPublicationTargetAllocated(target)
+    return target
+}
+
+internal fun verifyPublicationCompleteness(
+    expectedBytes: Long,
+    descriptorLength: Long?,
+    queriedLength: Long?,
+    requireReadback: Boolean,
+    shouldCancel: () -> Boolean,
+    openReadback: () -> InputStream?,
+) {
+    if (!requireReadback) {
+        descriptorLength?.takeIf { it >= 0L }?.let { observed ->
+            requirePublishedByteCount(expectedBytes, observed)
+            return
+        }
+        queriedLength?.takeIf { it >= 0L }?.let { observed ->
+            requirePublishedByteCount(expectedBytes, observed)
+            return
+        }
+    }
+    val input =
+        openReadback()
+            ?: throw IOException("Published output cannot be reopened for verification")
+    val stopAfterBytes =
+        if (expectedBytes == Long.MAX_VALUE) Long.MAX_VALUE else expectedBytes + 1L
+    val observedBytes =
+        input.use {
+            countPublicationBytes(
+                input = it,
+                shouldCancel = shouldCancel,
+                stopAfterBytes = stopAfterBytes,
+            )
+        }
+    requirePublishedByteCount(expectedBytes, observedBytes)
+}
 
 internal fun copyPublicationBytes(
     input: InputStream,

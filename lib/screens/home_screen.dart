@@ -266,6 +266,28 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  int _reserveDestinationValidation() {
+    final generation = ++_generation;
+    _flow.update(() {
+      _validatingDestination = true;
+      _errorText = null;
+    });
+    return generation;
+  }
+
+  bool _ownsDestinationValidation(int generation) =>
+      mounted &&
+      _isCurrent(generation) &&
+      _validatingDestination &&
+      !_progressStreamClosed;
+
+  void _releaseDestinationValidation(int generation) {
+    if (!mounted || !_isCurrent(generation) || !_validatingDestination) {
+      return;
+    }
+    _flow.update(() => _validatingDestination = false);
+  }
+
   CompressionSettings get _compressionSettings {
     final preset = _selectedPreset;
     if (preset != null) return CompressionSettings.forPreset(preset);
@@ -606,65 +628,65 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final outputLocationRevision = _outputLocationRevision;
-    final generation = ++_generation;
-    _flow.update(() {
-      _validatingDestination = true;
-      _errorText = null;
-    });
-
-    OutputLocation verifiedLocation;
+    final generation = _reserveDestinationValidation();
     try {
-      verifiedLocation = await widget.picker.getOutputLocation();
-      if (!_isCurrent(generation)) return;
+      final verifiedLocation = await widget.picker.getOutputLocation();
+      if (!_ownsDestinationValidation(generation)) return;
       if (_outputLocationRevision != outputLocationRevision) {
         _rejectDestinationValidation(generation, '保存位置已更改，请重新开始音频提取。');
         return;
       }
       _flow.update(() => _applyOutputLocation(verifiedLocation));
+      if (!_ownsDestinationValidation(generation)) return;
+      if (!verifiedLocation.writable) {
+        if (!mounted) return;
+        _releaseDestinationValidation(generation);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('保存文件夹权限已失效，请重新选择。')));
+        return;
+      }
+      final plan = _audioExtractPlan;
+      if (plan == null || !plan.available) {
+        _flow.update(() {
+          _validatingDestination = false;
+          _errorText = switch (plan?.reason) {
+            AudioExtractUnavailableReason.copyRequiresAac =>
+              '原音轨不是 AAC，请改用 AAC 转码。',
+            _ => '这个视频没有可提取的音轨。',
+          };
+        });
+        return;
+      }
+      if (!_ownsDestinationValidation(generation) ||
+          _selectedUri != uri ||
+          !identical(_sourceInfo, info)) {
+        return;
+      }
+      final audioLocation = verifiedLocation.isCustom
+          ? verifiedLocation
+          : _audioOutputLocation;
+      final request = plan.toRequest(
+        uri: uri,
+        outputLocationLabel: audioLocation.label,
+        outputTreeUri: audioLocation.treeUri,
+      );
+      if (!_ownsDestinationValidation(generation) ||
+          !_destinationMatchesRequest(request.outputTreeUri)) {
+        return;
+      }
+      await _submitAudio(request, reservedGeneration: generation);
     } catch (error, stackTrace) {
-      if (_isCurrent(generation)) {
+      if (_ownsDestinationValidation(generation)) {
         _flow.update(() {
           _validatingDestination = false;
           _errorText = _errorTextFor(error, fallback: '无法确认保存文件夹权限，请重新选择保存位置。');
         });
       }
       _logError('音频提取前保存位置检查失败', error, stackTrace);
-      return;
+    } finally {
+      _releaseDestinationValidation(generation);
     }
-    if (!mounted || !_isCurrent(generation)) return;
-    if (!verifiedLocation.writable) {
-      _flow.update(() => _validatingDestination = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('保存文件夹权限已失效，请重新选择。')));
-      return;
-    }
-    final plan = _audioExtractPlan;
-    if (plan == null || !plan.available) {
-      _flow.update(() {
-        _validatingDestination = false;
-        _errorText = switch (plan?.reason) {
-          AudioExtractUnavailableReason.copyRequiresAac =>
-            '原音轨不是 AAC，请改用 AAC 转码。',
-          _ => '这个视频没有可提取的音轨。',
-        };
-      });
-      return;
-    }
-    if (_selectedUri != uri || !identical(_sourceInfo, info)) {
-      _flow.update(() => _validatingDestination = false);
-      return;
-    }
-    final audioLocation = verifiedLocation.isCustom
-        ? verifiedLocation
-        : _audioOutputLocation;
-    final request = plan.toRequest(
-      uri: uri,
-      outputLocationLabel: audioLocation.label,
-      outputTreeUri: audioLocation.treeUri,
-    );
-    if (!_isCurrent(generation)) return;
-    await _submitAudio(request, reservedGeneration: generation);
   }
 
   Future<void> _retryAudio() => _submitAudioRetry(asAac: false);
@@ -680,46 +702,46 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     final outputLocationRevision = _outputLocationRevision;
-    final generation = ++_generation;
-    _flow.update(() {
-      _validatingDestination = true;
-      _errorText = null;
-    });
-    if (!await _canReuseAudioDestination(
-      previous,
-      generation,
-      source,
-      outputLocationRevision,
-      asAac: asAac,
-    )) {
-      return;
+    final generation = _reserveDestinationValidation();
+    try {
+      if (!await _canReuseAudioDestination(
+        previous,
+        generation,
+        source,
+        outputLocationRevision,
+        asAac: asAac,
+      )) {
+        return;
+      }
+      final request = asAac
+          ? AudioExtractRequest(
+              uri: previous.uri,
+              outputFileName: previous.outputFileName,
+              outputLocationLabel: previous.outputLocationLabel,
+              outputTreeUri: previous.outputTreeUri,
+              mode: AudioExtractMode.aac,
+              bitrate: 128000,
+            )
+          : previous;
+      if (!_isAudioRetryContextCurrent(
+        previous,
+        source,
+        generation,
+        outputLocationRevision,
+        asAac: asAac,
+      )) {
+        return;
+      }
+      if (asAac) {
+        _flow.update(() {
+          _audioExtractMode = AudioExtractMode.aac;
+          _audioExtractBitrate = 128000;
+        });
+      }
+      await _submitAudio(request, reservedGeneration: generation);
+    } finally {
+      _releaseDestinationValidation(generation);
     }
-    final request = asAac
-        ? AudioExtractRequest(
-            uri: previous.uri,
-            outputFileName: previous.outputFileName,
-            outputLocationLabel: previous.outputLocationLabel,
-            outputTreeUri: previous.outputTreeUri,
-            mode: AudioExtractMode.aac,
-            bitrate: 128000,
-          )
-        : previous;
-    if (!_isAudioRetryContextCurrent(
-      previous,
-      source,
-      generation,
-      outputLocationRevision,
-      asAac: asAac,
-    )) {
-      return;
-    }
-    if (asAac) {
-      _flow.update(() {
-        _audioExtractMode = AudioExtractMode.aac;
-        _audioExtractBitrate = 128000;
-      });
-    }
-    await _submitAudio(request, reservedGeneration: generation);
   }
 
   bool _canBeginAudioRetry(
@@ -830,6 +852,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }) async {
     final generation = reservedGeneration ?? ++_generation;
     if (!_isCurrent(generation) ||
+        _progressStreamClosed ||
         (reservedGeneration != null && !_validatingDestination)) {
       return;
     }
@@ -922,101 +945,97 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     final outputLocationRevision = _outputLocationRevision;
-    final generation = ++_generation;
-    _flow.update(() {
-      _validatingDestination = true;
-      _errorText = null;
-    });
-
-    if (confirmCompatibility) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('使用兼容模式重试？'),
-          content: const Text(
-            '兼容模式会改用软件方式读取视频，并从头重新压缩。速度可能更慢，也会增加耗电和发热；输出编码设置保持不变。',
+    final generation = _reserveDestinationValidation();
+    try {
+      if (confirmCompatibility) {
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('使用兼容模式重试？'),
+            content: const Text(
+              '兼容模式会改用软件方式读取视频，并从头重新压缩。速度可能更慢，也会增加耗电和发热；输出编码设置保持不变。',
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('返回'),
+              ),
+              FilledButton.tonal(
+                key: const ValueKey<String>('confirm-compatibility-retry'),
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('开始兼容重试'),
+              ),
+            ],
           ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('返回'),
-            ),
-            FilledButton.tonal(
-              key: const ValueKey<String>('confirm-compatibility-retry'),
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('开始兼容重试'),
-            ),
-          ],
-        ),
-      );
-      if (!_isVideoRetryContextCurrent(
-        previous,
-        source,
-        generation,
-        outputLocationRevision,
-        compatibility: true,
-      )) {
-        return;
-      }
-      if (confirmed != true) {
-        _flow.update(() => _validatingDestination = false);
-        return;
-      }
-    }
-
-    if (previous.outputTreeUri != null) {
-      try {
-        final current = await widget.picker.getOutputLocation();
+        );
         if (!_isVideoRetryContextCurrent(
           previous,
           source,
           generation,
           outputLocationRevision,
-          compatibility: confirmCompatibility,
+          compatibility: true,
         )) {
           return;
         }
-        if (!current.writable ||
-            current.treeUri != previous.outputTreeUri ||
-            !_destinationMatchesRequest(previous.outputTreeUri)) {
-          _rejectDestinationValidation(
+        if (confirmed != true) return;
+      }
+
+      if (previous.outputTreeUri != null) {
+        try {
+          final current = await widget.picker.getOutputLocation();
+          if (!_isVideoRetryContextCurrent(
+            previous,
+            source,
             generation,
-            '原任务的保存文件夹已更改或需要重新授权，请重新选择后开始新任务。',
-          );
+            outputLocationRevision,
+            compatibility: confirmCompatibility,
+          )) {
+            return;
+          }
+          if (!current.writable ||
+              current.treeUri != previous.outputTreeUri ||
+              !_destinationMatchesRequest(previous.outputTreeUri)) {
+            _rejectDestinationValidation(
+              generation,
+              '原任务的保存文件夹已更改或需要重新授权，请重新选择后开始新任务。',
+            );
+            return;
+          }
+        } catch (error, stackTrace) {
+          if (_isVideoRetryContextCurrent(
+            previous,
+            source,
+            generation,
+            outputLocationRevision,
+            compatibility: confirmCompatibility,
+          )) {
+            _rejectDestinationValidation(
+              generation,
+              _errorTextFor(error, fallback: '无法确认原任务的保存文件夹权限，请重新选择保存位置。'),
+            );
+          }
+          _logError('重试前保存位置检查失败', error, stackTrace);
           return;
         }
-      } catch (error, stackTrace) {
-        if (_isVideoRetryContextCurrent(
-          previous,
-          source,
-          generation,
-          outputLocationRevision,
-          compatibility: confirmCompatibility,
-        )) {
-          _rejectDestinationValidation(
+      }
+      if (!_isVideoRetryContextCurrent(
+            previous,
+            source,
             generation,
-            _errorTextFor(error, fallback: '无法确认原任务的保存文件夹权限，请重新选择保存位置。'),
-          );
-        }
-        _logError('重试前保存位置检查失败', error, stackTrace);
+            outputLocationRevision,
+            compatibility: confirmCompatibility,
+          ) ||
+          !_destinationMatchesRequest(previous.outputTreeUri)) {
         return;
       }
+      await _submitCompression(
+        previous.withVideoDecoderMode(videoDecoderMode),
+        estimatedOutputBytes: null,
+        reservedGeneration: generation,
+      );
+    } finally {
+      _releaseDestinationValidation(generation);
     }
-    if (!_isVideoRetryContextCurrent(
-          previous,
-          source,
-          generation,
-          outputLocationRevision,
-          compatibility: confirmCompatibility,
-        ) ||
-        !_destinationMatchesRequest(previous.outputTreeUri)) {
-      return;
-    }
-    await _submitCompression(
-      previous.withVideoDecoderMode(videoDecoderMode),
-      estimatedOutputBytes: null,
-      reservedGeneration: generation,
-    );
   }
 
   bool _canBeginVideoRetry(
@@ -1092,64 +1111,62 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final outputLocationRevision = _outputLocationRevision;
-    final generation = ++_generation;
-    _flow.update(() {
-      _validatingDestination = true;
-      _errorText = null;
-    });
-
-    OutputLocation verifiedLocation;
+    final generation = _reserveDestinationValidation();
     try {
-      verifiedLocation = await widget.picker.getOutputLocation();
-      if (!_isCurrent(generation)) return;
+      final verifiedLocation = await widget.picker.getOutputLocation();
+      if (!_ownsDestinationValidation(generation)) return;
       if (_outputLocationRevision != outputLocationRevision) {
         _rejectDestinationValidation(generation, '保存位置已更改，请重新开始压缩。');
         return;
       }
       _flow.update(() => _applyOutputLocation(verifiedLocation));
-    } catch (error, stackTrace) {
-      if (!_isCurrent(generation)) return;
-      _flow.update(() {
-        _validatingDestination = false;
-        _errorText = _errorTextFor(error, fallback: '无法确认保存文件夹权限，请重新选择保存位置。');
-      });
-      _logError('压缩前保存位置检查失败', error, stackTrace);
-      return;
-    }
-    if (!mounted || !_isCurrent(generation)) return;
-    if (!verifiedLocation.writable) {
-      _flow.update(() => _validatingDestination = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('保存文件夹权限已失效，请点“重新选择”。')));
-      return;
-    }
-    if (!await _confirmPlan(plan, hdrSource: info.isHdr) ||
-        !_isCurrent(generation)) {
-      if (_isCurrent(generation)) {
-        _flow.update(() => _validatingDestination = false);
+      final verifiedRevision = _outputLocationRevision;
+      if (!_ownsDestinationValidation(generation)) return;
+      if (!verifiedLocation.writable) {
+        if (!mounted) return;
+        _releaseDestinationValidation(generation);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('保存文件夹权限已失效，请点“重新选择”。')));
+        return;
       }
-      return;
-    }
-    if (_selectedUri != uri || !identical(_sourceInfo, info)) {
-      _flow.update(() => _validatingDestination = false);
-      return;
-    }
+      final confirmed = await _confirmPlan(plan, hdrSource: info.isHdr);
+      if (!_ownsDestinationValidation(generation) ||
+          _outputLocationRevision != verifiedRevision) {
+        return;
+      }
+      if (!confirmed) return;
+      if (_selectedUri != uri || !identical(_sourceInfo, info)) return;
 
-    final startedAt = _now();
-    final request = plan.toProcessRequest(
-      uri: uri,
-      outputFileName: _buildOutputFileName(info.fileName, startedAt),
-      outputLocationLabel: verifiedLocation.label,
-      outputTreeUri: verifiedLocation.treeUri,
-      videoDecoderMode: videoDecoderMode,
-    );
-    await _submitCompression(
-      request,
-      estimatedOutputBytes: plan.estimatedOutputBytes,
-      startedAt: startedAt,
-      reservedGeneration: generation,
-    );
+      final startedAt = _now();
+      final request = plan.toProcessRequest(
+        uri: uri,
+        outputFileName: _buildOutputFileName(info.fileName, startedAt),
+        outputLocationLabel: verifiedLocation.label,
+        outputTreeUri: verifiedLocation.treeUri,
+        videoDecoderMode: videoDecoderMode,
+      );
+      if (!_ownsDestinationValidation(generation) ||
+          !_destinationMatchesRequest(request.outputTreeUri)) {
+        return;
+      }
+      await _submitCompression(
+        request,
+        estimatedOutputBytes: plan.estimatedOutputBytes,
+        startedAt: startedAt,
+        reservedGeneration: generation,
+      );
+    } catch (error, stackTrace) {
+      if (_ownsDestinationValidation(generation)) {
+        _flow.update(() {
+          _validatingDestination = false;
+          _errorText = _errorTextFor(error, fallback: '无法确认保存文件夹权限，请重新选择保存位置。');
+        });
+      }
+      _logError('压缩前保存位置检查失败', error, stackTrace);
+    } finally {
+      _releaseDestinationValidation(generation);
+    }
   }
 
   Future<void> _submitCompression(
@@ -1164,6 +1181,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final generation = reservedGeneration ?? ++_generation;
     if (!_isCurrent(generation) ||
+        _progressStreamClosed ||
         (reservedGeneration != null && !_validatingDestination)) {
       return;
     }
@@ -1566,6 +1584,12 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     _flow.update(() => _progressStreamClosed = true);
+    if (_validatingDestination) {
+      final pendingGeneration = _generation;
+      _failGeneration(pendingGeneration, '处理状态连接已中断，请重启应用后再开始任务。');
+      _logFlow('目的地校验期间进度通道关闭；已取消待提交任务', level: AppLogLevel.error);
+      return;
+    }
     final generation = _activeGeneration;
     if (generation == null ||
         !_isCurrent(generation) ||
@@ -1595,6 +1619,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _processStopwatch?.stop();
     _flow.update(() {
       _validatingDestination = false;
+      _restoringTask = false;
       _preparing = false;
       _processing = false;
       _finishing = false;

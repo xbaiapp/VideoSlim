@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -133,8 +134,9 @@ final class _FakeEngine implements VideoEngine {
   Stream<ProgressEvent> get progressStream => progress.stream;
 
   @override
-  Future<TaskSnapshot?> getTaskSnapshot() async =>
-      snapshotCompleter == null ? snapshot : snapshotCompleter!.future;
+  Future<TaskSnapshot?> getTaskSnapshot() => snapshotCompleter == null
+      ? SynchronousFuture<TaskSnapshot?>(snapshot)
+      : snapshotCompleter!.future;
 
   @override
   Future<VideoInfo> getVideoInfo(String uri) async {
@@ -954,9 +956,7 @@ void main() {
       await tester.pump();
 
       final flow = Provider.of<HomeFlowState>(
-        tester.element(
-          find.byKey(const ValueKey<String>('start-m2-compression')),
-        ),
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
         listen: false,
       );
       expect(flow.validatingDestination, isTrue);
@@ -1033,13 +1033,12 @@ void main() {
       await tester.pump();
       final validation = Completer<OutputLocation>();
       picker.outputLocationCompleter = validation;
+      await tester.ensureVisible(find.text('重试压缩'));
       await tester.tap(find.text('重试压缩'));
       await tester.pump();
 
       final flow = Provider.of<HomeFlowState>(
-        tester.element(
-          find.byKey(const ValueKey<String>('start-m2-compression')),
-        ),
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
         listen: false,
       );
       flow.update(() {
@@ -2525,9 +2524,7 @@ void main() {
     await tester.pump();
 
     final flow = Provider.of<HomeFlowState>(
-      tester.element(
-        find.byKey(const ValueKey<String>('m3-audio-extract-card')),
-      ),
+      tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
       listen: false,
     );
     expect(flow.validatingDestination, isTrue);
@@ -2607,9 +2604,7 @@ void main() {
     await tester.pump();
 
     final flow = Provider.of<HomeFlowState>(
-      tester.element(
-        find.byKey(const ValueKey<String>('m3-audio-extract-card')),
-      ),
+      tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
       listen: false,
     );
     flow.update(() {
@@ -2705,6 +2700,470 @@ void main() {
     expect(
       find.byKey(const ValueKey<String>('result-video-encoding-mode')),
       findsNothing,
+    );
+  });
+
+  testWidgets(
+    'stream closure during initial audio preflight releases ownership and blocks submission',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      final validation = Completer<OutputLocation>();
+      picker.outputLocationCompleter = validation;
+      await tester.ensureVisible(
+        find.byKey(const ValueKey<String>('extract-audio')),
+      );
+      await tester.tap(find.byKey(const ValueKey<String>('extract-audio')));
+      await tester.pump();
+      expect(
+        Provider.of<HomeFlowState>(
+          tester.element(
+            find.byKey(const ValueKey<String>('debug-log-button')),
+          ),
+          listen: false,
+        ).validatingDestination,
+        isTrue,
+      );
+
+      await engine.close();
+      await tester.pump();
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      );
+      expect(flow.validatingDestination, isFalse);
+      expect(flow.interactionLocked, isFalse);
+      expect(flow.progressStreamClosed, isTrue);
+      expect(engine.audioProcessRequests, isEmpty);
+
+      validation.complete(OutputLocation.defaultGallery);
+      await tester.pump();
+      await tester.pump();
+      expect(engine.audioProcessRequests, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'stream closure during initial video preflight releases ownership and blocks submission',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      final validation = Completer<OutputLocation>();
+      picker.outputLocationCompleter = validation;
+      await tester.ensureVisible(
+        find.byKey(const ValueKey<String>('start-m2-compression')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey<String>('start-m2-compression')),
+      );
+      await tester.pump();
+      expect(
+        Provider.of<HomeFlowState>(
+          tester.element(
+            find.byKey(const ValueKey<String>('debug-log-button')),
+          ),
+          listen: false,
+        ).validatingDestination,
+        isTrue,
+      );
+
+      await engine.close();
+      await tester.pump();
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      );
+      expect(flow.validatingDestination, isFalse);
+      expect(flow.interactionLocked, isFalse);
+      expect(flow.progressStreamClosed, isTrue);
+      expect(engine.processRequests, isEmpty);
+
+      validation.complete(OutputLocation.defaultGallery);
+      await tester.pump();
+      await tester.pump();
+      expect(engine.processRequests, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'stream closure during ordinary audio retry validation releases ownership',
+    (WidgetTester tester) async {
+      const treeUri =
+          'content://com.android.externalstorage.documents/tree/primary%3AExports';
+      const location = OutputLocation(
+        kind: OutputLocationKind.customFolder,
+        label: '自定义文件夹 > Exports',
+        writable: true,
+        treeUri: treeUri,
+      );
+      final engine = _FakeEngine();
+      final picker = _FakePicker()..chooseOutputResult = location;
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey<String>('choose-output-location')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey<String>('choose-output-location')),
+      );
+      await tester.pump();
+      await tester.pump();
+      await _tapAudioExtraction(tester);
+      engine.progress.add(
+        const ProgressEvent(
+          taskKind: TaskKind.audioExtraction,
+          taskId: 'task-1',
+          percent: 20,
+          state: TaskState.failed,
+          errorCode: 'AUDIO_OUTPUT_INVALID',
+        ),
+      );
+      await tester.pump();
+      final validation = Completer<OutputLocation>();
+      picker.outputLocationCompleter = validation;
+      await tester.ensureVisible(find.text('重试音频提取'));
+      await tester.tap(find.text('重试音频提取'));
+      await tester.pump();
+      expect(
+        Provider.of<HomeFlowState>(
+          tester.element(
+            find.byKey(const ValueKey<String>('debug-log-button')),
+          ),
+          listen: false,
+        ).validatingDestination,
+        isTrue,
+      );
+
+      await engine.close();
+      await tester.pump();
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      );
+      expect(flow.validatingDestination, isFalse);
+      expect(flow.interactionLocked, isFalse);
+      validation.complete(location);
+      await tester.pump();
+      await tester.pump();
+      expect(engine.audioProcessRequests, hasLength(1));
+    },
+  );
+
+  testWidgets('stream closure during AAC retry validation releases ownership', (
+    WidgetTester tester,
+  ) async {
+    const treeUri =
+        'content://com.android.externalstorage.documents/tree/primary%3AExports';
+    const location = OutputLocation(
+      kind: OutputLocationKind.customFolder,
+      label: '自定义文件夹 > Exports',
+      writable: true,
+      treeUri: treeUri,
+    );
+    final engine = _FakeEngine();
+    final picker = _FakePicker()..chooseOutputResult = location;
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey<String>('choose-output-location')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('choose-output-location')),
+    );
+    await tester.pump();
+    await tester.pump();
+    await _tapAudioExtraction(tester);
+    engine.progress.add(
+      const ProgressEvent(
+        taskKind: TaskKind.audioExtraction,
+        taskId: 'task-1',
+        percent: 20,
+        state: TaskState.failed,
+        errorCode: 'AUDIO_COPY_UNSUPPORTED',
+      ),
+    );
+    await tester.pump();
+    final validation = Completer<OutputLocation>();
+    picker.outputLocationCompleter = validation;
+    await tester.ensureVisible(
+      find.byKey(const ValueKey<String>('audio-aac-retry')),
+    );
+    await tester.tap(find.byKey(const ValueKey<String>('audio-aac-retry')));
+    await tester.pump();
+    expect(
+      Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      ).validatingDestination,
+      isTrue,
+    );
+
+    await engine.close();
+    await tester.pump();
+    final flow = Provider.of<HomeFlowState>(
+      tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+      listen: false,
+    );
+    expect(flow.validatingDestination, isFalse);
+    expect(flow.interactionLocked, isFalse);
+    validation.complete(location);
+    await tester.pump();
+    await tester.pump();
+    expect(engine.audioProcessRequests, hasLength(1));
+  });
+
+  testWidgets(
+    'stream closure during ordinary video retry validation releases ownership',
+    (WidgetTester tester) async {
+      const treeUri =
+          'content://com.android.externalstorage.documents/tree/primary%3AExports';
+      const location = OutputLocation(
+        kind: OutputLocationKind.customFolder,
+        label: '自定义文件夹 > Exports',
+        writable: true,
+        treeUri: treeUri,
+      );
+      final engine = _FakeEngine();
+      final picker = _FakePicker()..chooseOutputResult = location;
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey<String>('choose-output-location')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey<String>('choose-output-location')),
+      );
+      await tester.pump();
+      await tester.pump();
+      await _tapCompression(tester);
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'task-1',
+          percent: 20,
+          state: TaskState.failed,
+          errorCode: 'VIDEO_ENCODING_FAILED',
+        ),
+      );
+      await tester.pump();
+      final validation = Completer<OutputLocation>();
+      picker.outputLocationCompleter = validation;
+      await tester.ensureVisible(find.text('重试压缩'));
+      await tester.tap(find.text('重试压缩'));
+      await tester.pump();
+      expect(
+        Provider.of<HomeFlowState>(
+          tester.element(
+            find.byKey(const ValueKey<String>('debug-log-button')),
+          ),
+          listen: false,
+        ).validatingDestination,
+        isTrue,
+      );
+
+      await engine.close();
+      await tester.pump();
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      );
+      expect(flow.validatingDestination, isFalse);
+      expect(flow.interactionLocked, isFalse);
+      validation.complete(location);
+      await tester.pump();
+      await tester.pump();
+      expect(engine.processRequests, hasLength(1));
+    },
+  );
+
+  testWidgets(
+    'stream closure during compatibility retry validation releases ownership',
+    (WidgetTester tester) async {
+      const treeUri =
+          'content://com.android.externalstorage.documents/tree/primary%3AExports';
+      const location = OutputLocation(
+        kind: OutputLocationKind.customFolder,
+        label: '自定义文件夹 > Exports',
+        writable: true,
+        treeUri: treeUri,
+      );
+      final engine = _FakeEngine();
+      final picker = _FakePicker()..chooseOutputResult = location;
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey<String>('choose-output-location')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey<String>('choose-output-location')),
+      );
+      await tester.pump();
+      await tester.pump();
+      await _tapCompression(tester);
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'task-1',
+          percent: 20,
+          state: TaskState.failed,
+          videoDecoderMode: RequestedVideoDecoderMode.hardware,
+          errorCode: 'VIDEO_DECODING_FAILED',
+        ),
+      );
+      await tester.pump();
+      final validation = Completer<OutputLocation>();
+      picker.outputLocationCompleter = validation;
+      await tester.ensureVisible(
+        find.byKey(const ValueKey<String>('compatibility-retry')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey<String>('compatibility-retry')),
+      );
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const ValueKey<String>('confirm-compatibility-retry')),
+      );
+      await tester.pump();
+      expect(
+        Provider.of<HomeFlowState>(
+          tester.element(
+            find.byKey(const ValueKey<String>('debug-log-button')),
+          ),
+          listen: false,
+        ).validatingDestination,
+        isTrue,
+      );
+
+      await engine.close();
+      await tester.pump();
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      );
+      expect(flow.validatingDestination, isFalse);
+      expect(flow.interactionLocked, isFalse);
+      validation.complete(location);
+      await tester.pump();
+      await tester.pump();
+      expect(engine.processRequests, hasLength(1));
+    },
+  );
+
+  testWidgets(
+    'delayed restore snapshot and metadata keep all interactions locked',
+    (WidgetTester tester) async {
+      final snapshot = Completer<TaskSnapshot?>();
+      final metadata = Completer<VideoInfo>();
+      final engine = _FakeEngine()
+        ..snapshotCompleter = snapshot
+        ..metadataCompleters[_sourceUri] = metadata;
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await tester.pump();
+
+      var flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      );
+      expect(flow.restoringTask, isTrue);
+      expect(flow.interactionLocked, isTrue);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey<String>('pick-gallery')),
+            )
+            .onPressed,
+        isNull,
+      );
+
+      snapshot.complete(
+        TaskSnapshot(
+          taskId: 'restoring-task',
+          state: TaskState.running,
+          percent: 10,
+          sourceUri: _sourceUri,
+          outputFileName: 'restoring.mp4',
+          startedAtEpochMs: DateTime(2026, 7, 20).millisecondsSinceEpoch,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      );
+      expect(flow.restoringTask, isTrue);
+      expect(flow.interactionLocked, isTrue);
+      expect(engine.metadataCalls, contains(_sourceUri));
+
+      metadata.complete(_videoInfo());
+      await tester.pump();
+      await tester.pump();
+      expect(flow.restoringTask, isFalse);
+      expect(flow.processing, isTrue);
+      expect(flow.interactionLocked, isTrue);
+    },
+  );
+
+  testWidgets('restore failure releases the global interaction lock', (
+    WidgetTester tester,
+  ) async {
+    final snapshot = Completer<TaskSnapshot?>();
+    final engine = _FakeEngine()..snapshotCompleter = snapshot;
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await tester.pump();
+    snapshot.completeError(StateError('snapshot unavailable'));
+    await tester.pump();
+    await tester.pump();
+
+    final flow = Provider.of<HomeFlowState>(
+      tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+      listen: false,
+    );
+    expect(flow.restoringTask, isFalse);
+    expect(flow.interactionLocked, isFalse);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey<String>('pick-gallery')),
+          )
+          .onPressed,
+      isNotNull,
     );
   });
 
