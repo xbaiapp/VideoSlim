@@ -76,7 +76,7 @@ class M2CompressionCard extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              '目标平均码率（VBR）控制体积；所有处理均在本机完成。',
+              '应用会按目标码率控制体积；所有处理均在本机完成。',
               style: Theme.of(
                 context,
               ).textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
@@ -403,7 +403,7 @@ class _PlanSummary extends StatelessWidget {
               ),
               Text('建议至少保留 ${formatFileSize(requiredBytes)} 可用空间'),
               const SizedBox(height: 4),
-              const Text('硬件 VBR 的实际码率可能明显偏离目标值，因此这里显示保守区间。'),
+              const Text('实际输出可能有小幅波动，因此这里显示保守区间。'),
             ],
           ),
         ),

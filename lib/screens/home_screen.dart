@@ -1292,6 +1292,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           !_outputPublished &&
                           _lastFailureCode !=
                               'COMPATIBILITY_DECODER_UNAVAILABLE' &&
+                          _lastFailureCode != 'TARGET_BITRATE_NOT_HONORED' &&
                           !_progressStreamClosed,
                       onRetry: _interactionLocked ? null : _retryLastMode,
                       canCompatibilityRetry:
@@ -2210,6 +2211,7 @@ String _messageForCode(String code, String? _, {required String fallback}) {
     'VIDEO_FORMAT_UNSUPPORTED' => '这台手机暂时无法读取这种视频格式。',
     'COMPATIBILITY_DECODER_UNAVAILABLE' => '这台手机没有可用于此视频的软件读取方式。原视频没有被修改。',
     'VIDEO_ENCODING_FAILED' => '手机没能按当前设置完成压缩。可按原设置重试，或返回调整格式或画质。',
+    'TARGET_BITRATE_NOT_HONORED' => '手机没有按目标体积完成压缩，异常体积的视频没有保存。请返回调整格式或画质后重试。',
     'OUTPUT_PERMISSION_LOST' => '保存文件夹权限已失效，请重新选择保存位置。',
     'CANCELLED' => '压缩任务已取消。',
     'PICKER_BUSY' => '已有视频选择请求正在进行，请稍后再试。',

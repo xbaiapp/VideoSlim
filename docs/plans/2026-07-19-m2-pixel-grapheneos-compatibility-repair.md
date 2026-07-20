@@ -115,7 +115,7 @@
 3. Decoder 使用 `DefaultDecoderFactory.Builder.setMediaCodecSelector(...)`，视频 MIME 只返回硬件 decoder；音频保持默认 selector。
 4. 通过 `DefaultAssetLoaderFactory` 注入 decoder factory；在支持范围内启用硬件候选间 fallback，不回退到软件视频 Codec。
 5. 使用 decoder listener 和 encoder factory wrapper 记录实际 codec 名称。
-6. 预检目标尺寸、帧率、码率、VBR/Surface 支持；不支持时快速失败。
+6. 预检目标尺寸、帧率、码率、CBR/Surface 支持；不支持时快速失败。
 7. 运行 JVM、Debug/Release Kotlin 编译。
 8. 提交：`fix: require compatible hardware video codecs`。
 

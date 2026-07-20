@@ -31,6 +31,10 @@ enum class EngineErrorCode(
         "这台手机没有可用于此视频的软件读取方式，原视频没有被修改",
     ),
     VIDEO_ENCODING_FAILED("VIDEO_ENCODING_FAILED", "手机没能按当前设置完成压缩，可按原设置重试或调整格式和画质"),
+    TARGET_BITRATE_NOT_HONORED(
+        "TARGET_BITRATE_NOT_HONORED",
+        "手机没有按目标体积完成压缩，异常体积的视频没有保存。请调整格式或画质后重试",
+    ),
     OUTPUT_PERMISSION_LOST("OUTPUT_PERMISSION_LOST", "保存文件夹权限已失效，请重新选择保存位置"),
     CANCELLED("CANCELLED", "任务已取消"),
     UNKNOWN("UNKNOWN", "处理失败，请稍后重试"),

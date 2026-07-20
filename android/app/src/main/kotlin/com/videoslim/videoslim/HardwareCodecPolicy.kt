@@ -112,7 +112,9 @@ internal class HardwareCodecCatalog(
     private val descriptors: List<CodecCandidate> = codecInfos.map(::describe)
 
     fun hasHardwareEncoder(mimeType: String): Boolean =
-        selectedCodecInfos(mimeType, encoder = true).isNotEmpty()
+        selectedCodecInfos(mimeType, encoder = true).any { info ->
+            supportsBitrateMode(info, mimeType, VideoRateControlPolicy.bitrateMode)
+        }
 
     fun selectedCodecInfos(
         mimeType: String,
@@ -184,6 +186,7 @@ internal class HardwareCodecCatalog(
         height: Int,
         frameRate: Double,
         bitrate: Int,
+        bitrateMode: Int,
     ): List<MediaCodecInfo> =
         selectedCodecInfos(mimeType, encoder = true).filter { info ->
             runCatching {
@@ -195,16 +198,24 @@ internal class HardwareCodecCatalog(
                         MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface,
                     )
                 val supportsBitrate = bitrate <= 0 || video.bitrateRange.contains(bitrate)
-                val supportsVbr =
-                    encoder.isBitrateModeSupported(
-                        MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR,
-                    )
+                val supportsRequestedBitrateMode = encoder.isBitrateModeSupported(bitrateMode)
                 supportsSurface &&
                     supportsBitrate &&
-                    supportsVbr &&
+                    supportsRequestedBitrateMode &&
                     supportsSizeAndRate(video, width, height, frameRate)
             }.getOrDefault(false)
         }
+
+    private fun supportsBitrateMode(
+        info: MediaCodecInfo,
+        mimeType: String,
+        bitrateMode: Int,
+    ): Boolean =
+        runCatching {
+            info.getCapabilitiesForType(mimeType)
+                .encoderCapabilities
+                ?.isBitrateModeSupported(bitrateMode) == true
+        }.getOrDefault(false)
 
     fun videoEncoderMode(codecName: String): VideoEncoderMode {
         val descriptor =

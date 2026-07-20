@@ -821,6 +821,39 @@ void main() {
     expect(find.text('重试压缩'), findsNothing);
   });
 
+  testWidgets('target bitrate failure is readable and has no pointless retry', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapCompression(tester);
+    engine.progress.add(
+      const ProgressEvent(
+        taskId: 'task-1',
+        percent: 99,
+        state: TaskState.failed,
+        errorCode: 'TARGET_BITRATE_NOT_HONORED',
+        errorMessage: 'MediaCodec output was 2100000 bps',
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.text('手机没有按目标体积完成压缩，异常体积的视频没有保存。请返回调整格式或画质后重试。'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('MediaCodec'), findsNothing);
+    expect(find.text('使用兼容模式重试'), findsNothing);
+    expect(find.text('重试压缩'), findsNothing);
+  });
+
   testWidgets('stream error invalidates a pending process future', (
     WidgetTester tester,
   ) async {

@@ -29,7 +29,7 @@ void main() {
       expect(balanced.audioBitrateIsEstimated, isFalse);
       expect(balanced.estimatedOutputBytes, 1194426000);
       expect(balanced.estimatedOutputMinBytes, 969426000);
-      expect(balanced.estimatedOutputMaxBytes, 2325186000);
+      expect(balanced.estimatedOutputMaxBytes, 1481436000);
     });
 
     test('scales preset bitrate by output pixels from 1920x1080', () {
@@ -223,7 +223,7 @@ void main() {
     });
 
     test(
-      'covers the observed long-video VBR overshoot with its upper bound',
+      'keeps the observed long-video overshoot outside the CBR upper bound',
       () {
         final plan = planner.plan(
           source: source(
@@ -244,14 +244,8 @@ void main() {
         );
 
         expect(plan.estimatedOutputMinBytes, 732053953);
-        expect(plan.estimatedOutputMaxBytes, 1718151336);
-        expect(
-          1400000000,
-          inInclusiveRange(
-            plan.estimatedOutputMinBytes,
-            plan.estimatedOutputMaxBytes,
-          ),
-        );
+        expect(plan.estimatedOutputMaxBytes, 1106246189);
+        expect(1400000000, greaterThan(plan.estimatedOutputMaxBytes));
       },
     );
   });
