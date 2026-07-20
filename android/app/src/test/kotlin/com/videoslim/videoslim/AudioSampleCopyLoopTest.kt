@@ -55,7 +55,7 @@ class AudioSampleCopyLoopTest {
     }
 
     @Test
-    fun `copy loop has a hard buffer cap and cancels before another write`() {
+    fun `copy loop has a hard buffer cap and cancels before a write`() {
         assertThrows(IllegalArgumentException::class.java) {
             boundedAudioSampleBufferSize(MAX_AUDIO_SAMPLE_BUFFER_BYTES + 1)
         }
@@ -78,7 +78,36 @@ class AudioSampleCopyLoopTest {
                 shouldCancel = { ++checks > 1 },
             )
         }
-        assertEquals(1, sink.samples.size)
+        assertEquals(0, sink.samples.size)
+    }
+
+    @Test
+    fun `zero byte samples are ignored and regressing progress remains monotonic`() {
+        val progress = mutableListOf<Double>()
+        val sink = FakeSink()
+
+        val result =
+            copyEncodedAudioSamples(
+                source =
+                    FakeSource(
+                        listOf(
+                            Sample(byteArrayOf(), 500L, 0),
+                            Sample(byteArrayOf(1), 2_000L, 0),
+                            Sample(byteArrayOf(2), 1_000L, 0),
+                        ),
+                    ),
+                sink = sink,
+                durationUs = 4_000L,
+                requestedBufferBytes = 8,
+                shouldCancel = { false },
+                onProgress = { progress += it },
+            )
+
+        assertEquals(2L, result.sampleCount)
+        assertEquals(2_000L, result.firstInputTimeUs)
+        assertEquals(1_000L, result.lastInputTimeUs)
+        assertEquals(listOf(0L, 1L), sink.samples.map { it.presentationTimeUs })
+        assertEquals(progress.sorted(), progress)
     }
 
     private data class Sample(

@@ -8,17 +8,23 @@ import '../engine/video_engine.dart';
 import '../engine/media_actions.dart';
 import '../engine/video_picker.dart';
 import '../logging/app_logger.dart';
+import '../logic/audio_extract_planner.dart';
 import '../logic/compression_planner.dart';
 import '../logic/eta_estimator.dart';
+import '../models/audio_extract_settings.dart';
+import '../models/audio_info.dart';
 import '../models/compression_settings.dart';
 import '../models/device_capabilities.dart';
 import '../models/output_location.dart';
 import '../models/process_request.dart';
 import '../models/progress_event.dart';
 import '../models/task_snapshot.dart';
+import '../models/task_kind.dart';
 import '../models/video_info.dart';
 import '../state/home_flow_state.dart';
 import '../widgets/m2_compression_card.dart';
+import '../widgets/audio_extract_card.dart';
+import '../widgets/audio_result_card.dart';
 import '../widgets/video_info_card.dart';
 import 'debug_log_screen.dart';
 
@@ -60,6 +66,7 @@ class _HomeScreenState extends State<HomeScreen> {
   RequestedVideoDecoderMode _lastVideoDecoderMode =
       RequestedVideoDecoderMode.hardware;
   ProcessRequest? _lastProcessRequest;
+  AudioExtractRequest? _lastAudioExtractRequest;
 
   int get _generation => _flow.generation;
   set _generation(int value) => _flow.generation = value;
@@ -123,6 +130,13 @@ class _HomeScreenState extends State<HomeScreen> {
       _flow.customAudioMode = value;
   int get _customAudioBitrate => _flow.customAudioBitrate;
   set _customAudioBitrate(int value) => _flow.customAudioBitrate = value;
+  TaskKind get _activeTaskKind => _flow.activeTaskKind;
+  set _activeTaskKind(TaskKind value) => _flow.activeTaskKind = value;
+  AudioExtractMode get _audioExtractMode => _flow.audioExtractMode;
+  set _audioExtractMode(AudioExtractMode value) =>
+      _flow.audioExtractMode = value;
+  int get _audioExtractBitrate => _flow.audioExtractBitrate;
+  set _audioExtractBitrate(int value) => _flow.audioExtractBitrate = value;
 
   String? get _selectedUri => _flow.selectedUri;
   set _selectedUri(String? value) => _flow.selectedUri = value;
@@ -139,6 +153,8 @@ class _HomeScreenState extends State<HomeScreen> {
   set _sourceInfo(VideoInfo? value) => _flow.sourceInfo = value;
   VideoInfo? get _outputInfo => _flow.outputInfo;
   set _outputInfo(VideoInfo? value) => _flow.outputInfo = value;
+  AudioInfo? get _outputAudioInfo => _flow.outputAudioInfo;
+  set _outputAudioInfo(AudioInfo? value) => _flow.outputAudioInfo = value;
   Stopwatch? get _processStopwatch => _flow.processStopwatch;
   set _processStopwatch(Stopwatch? value) => _flow.processStopwatch = value;
 
@@ -252,6 +268,40 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  OutputLocation get _audioOutputLocation => _outputLocation.isCustom
+      ? _outputLocation
+      : const OutputLocation(
+          kind: OutputLocationKind.defaultGallery,
+          label: '系统音频 > Music > VideoSlim',
+          writable: true,
+        );
+
+  AudioExtractSource? get _audioExtractSource {
+    final source = _sourceInfo;
+    if (source == null) return null;
+    return AudioExtractSource(
+      hasAudioTrack: source.audioCodec != null,
+      audioMimeType: _audioMimeTypeForCodec(source.audioCodec),
+      durationMs: source.durationMs,
+      audioBitrate: source.audioBitrate,
+      sourceFileName: source.fileName,
+    );
+  }
+
+  AudioExtractPlan? get _audioExtractPlan {
+    final source = _audioExtractSource;
+    if (source == null) return null;
+    return AudioExtractPlanner(now: _now).plan(
+      source: source,
+      settings: AudioExtractSettings(
+        mode: _audioExtractMode,
+        bitrate: _audioExtractMode == AudioExtractMode.aac
+            ? _audioExtractBitrate
+            : null,
+      ),
+    );
+  }
+
   void _changeSettings(VoidCallback mutation) {
     if (_interactionLocked) return;
     _flow.update(mutation);
@@ -296,6 +346,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _flow.update(() {
         _restoringTask = false;
         _selectedUri = snapshot.sourceUri;
+        _activeTaskKind = snapshot.taskKind;
         _sourceInfo = sourceInfo;
         _taskId = snapshot.taskId;
         _publishedOutputUri = snapshot.outputUri;
@@ -305,6 +356,12 @@ class _HomeScreenState extends State<HomeScreen> {
         _taskOutputLocationLabel = snapshot.outputLocationLabel;
         _lastVideoDecoderMode = snapshot.videoDecoderMode;
         _lastProcessRequest = snapshot.retryRequest;
+        _lastAudioExtractRequest = snapshot.audioRetryRequest;
+        final audioRetry = snapshot.audioRetryRequest;
+        if (audioRetry != null) {
+          _audioExtractMode = audioRetry.mode;
+          _audioExtractBitrate = audioRetry.bitrate ?? 128000;
+        }
         _actualVideoEncodingMode = snapshot.actualVideoEncodingMode;
         _preparing = false;
         _processing = true;
@@ -314,11 +371,13 @@ class _HomeScreenState extends State<HomeScreen> {
         _errorText = null;
       });
       _startTiming(snapshot.startedAt);
-      if (sourceInfo != null) {
+      if (sourceInfo != null &&
+          snapshot.taskKind == TaskKind.videoCompression) {
         unawaited(_loadCapabilities(generation));
       }
       _consumeProgress(
         ProgressEvent(
+          taskKind: snapshot.taskKind,
           taskId: snapshot.taskId,
           percent: snapshot.percent,
           state: snapshot.state,
@@ -444,6 +503,8 @@ class _HomeScreenState extends State<HomeScreen> {
         _selectedUri = uri;
         _sourceInfo = null;
         _outputInfo = null;
+        _outputAudioInfo = null;
+        _activeTaskKind = TaskKind.videoCompression;
         _errorText = null;
         _outputPublished = false;
         _publishedOutputUri = null;
@@ -464,8 +525,18 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!_isCurrent(generation)) {
         return;
       }
+      final selectedAudio = AudioExtractSource(
+        hasAudioTrack: info.audioCodec != null,
+        audioMimeType: _audioMimeTypeForCodec(info.audioCodec),
+        durationMs: info.durationMs,
+        audioBitrate: info.audioBitrate,
+        sourceFileName: info.fileName,
+      );
       _flow.update(() {
         _sourceInfo = info;
+        _audioExtractMode = selectedAudio.supportsCopy
+            ? AudioExtractMode.copy
+            : AudioExtractMode.aac;
         _readingMetadata = false;
         _errorText = null;
       });
@@ -497,6 +568,177 @@ class _HomeScreenState extends State<HomeScreen> {
         stackTrace,
         details: <String, Object?>{'source': source.name},
       );
+    }
+  }
+
+  Future<void> _extractAudio() async {
+    final info = _sourceInfo;
+    final uri = _selectedUri;
+    if (_interactionLocked || info == null || uri == null || _outputPublished) {
+      return;
+    }
+    if (_progressStreamClosed) {
+      _flow.update(() => _errorText = '处理状态连接已中断，请重启应用后再试。');
+      return;
+    }
+    OutputLocation verifiedLocation;
+    try {
+      verifiedLocation = await widget.picker.getOutputLocation();
+      if (!mounted) return;
+      _flow.update(() => _outputLocation = verifiedLocation);
+    } catch (error, stackTrace) {
+      if (mounted) {
+        _flow.update(() {
+          _errorText = _errorTextFor(error, fallback: '无法确认保存文件夹权限，请重新选择保存位置。');
+        });
+      }
+      _logError('音频提取前保存位置检查失败', error, stackTrace);
+      return;
+    }
+    if (!verifiedLocation.writable) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('保存文件夹权限已失效，请重新选择。')));
+      }
+      return;
+    }
+    final plan = _audioExtractPlan;
+    if (plan == null || !plan.available) {
+      _flow.update(() {
+        _errorText = switch (plan?.reason) {
+          AudioExtractUnavailableReason.copyRequiresAac =>
+            '原音轨不是 AAC，请改用 AAC 转码。',
+          _ => '这个视频没有可提取的音轨。',
+        };
+      });
+      return;
+    }
+    final audioLocation = verifiedLocation.isCustom
+        ? verifiedLocation
+        : _audioOutputLocation;
+    final request = plan.toRequest(
+      uri: uri,
+      outputLocationLabel: audioLocation.label,
+      outputTreeUri: audioLocation.treeUri,
+    );
+    await _submitAudio(request);
+  }
+
+  Future<void> _retryAudio() async {
+    final previous = _lastAudioExtractRequest;
+    if (previous == null || _interactionLocked || _outputPublished) return;
+    if (!await _canReuseAudioDestination(previous)) return;
+    await _submitAudio(previous);
+  }
+
+  Future<void> _retryAudioAsAac() async {
+    final previous = _lastAudioExtractRequest;
+    if (previous == null || _interactionLocked || _outputPublished) return;
+    if (!await _canReuseAudioDestination(previous)) return;
+    final request = AudioExtractRequest(
+      uri: previous.uri,
+      outputFileName: previous.outputFileName,
+      outputLocationLabel: previous.outputLocationLabel,
+      outputTreeUri: previous.outputTreeUri,
+      mode: AudioExtractMode.aac,
+      bitrate: 128000,
+    );
+    _flow.update(() {
+      _audioExtractMode = AudioExtractMode.aac;
+      _audioExtractBitrate = 128000;
+    });
+    await _submitAudio(request);
+  }
+
+  Future<bool> _canReuseAudioDestination(AudioExtractRequest request) async {
+    if (_progressStreamClosed) {
+      _flow.update(() {
+        _errorText = '处理状态连接已中断，请重启应用后再提取音频。';
+      });
+      return false;
+    }
+    if (request.outputTreeUri == null) return true;
+    try {
+      final current = await widget.picker.getOutputLocation();
+      if (!mounted) return false;
+      if (!current.writable || current.treeUri != request.outputTreeUri) {
+        _flow.update(() {
+          _errorText = '原任务的保存文件夹已更改或需要重新授权，请重新选择后开始新任务。';
+        });
+        return false;
+      }
+      return true;
+    } catch (error, stackTrace) {
+      if (mounted) {
+        _flow.update(() {
+          _errorText = _errorTextFor(
+            error,
+            fallback: '无法确认原任务的保存文件夹权限，请重新选择保存位置。',
+          );
+        });
+      }
+      _logError('音频重试前保存位置检查失败', error, stackTrace);
+      return false;
+    }
+  }
+
+  Future<void> _submitAudio(AudioExtractRequest request) async {
+    final generation = ++_generation;
+    _activeGeneration = generation;
+    _terminalEventHandled = false;
+    _bufferedProgress.clear();
+    _processStopwatch = Stopwatch()..start();
+    _flow.update(() {
+      _activeTaskKind = TaskKind.audioExtraction;
+      _preparing = true;
+      _processing = false;
+      _finishing = false;
+      _cancelling = false;
+      _percent = 0;
+      _taskPhase = TaskPhase.preparing;
+      _etaStalled = false;
+      _errorText = null;
+      _lastFailureCode = null;
+      _lastProcessRequest = null;
+      _lastAudioExtractRequest = request;
+      _outputInfo = null;
+      _outputAudioInfo = null;
+      _outputPublished = false;
+      _publishedOutputUri = null;
+      _publishedOutputFileName = request.outputFileName;
+      _taskId = null;
+      _taskOutputLocationLabel = request.outputLocationLabel;
+      _actualVideoEncodingMode = ActualVideoEncodingMode.unknown;
+    });
+    _startTiming(_now());
+    try {
+      _awaitingTaskId = true;
+      final taskId = await widget.engine.extractAudio(request);
+      if (!_isCurrent(generation)) return;
+      _awaitingTaskId = false;
+      _taskId = taskId;
+      final buffered = List<ProgressEvent>.of(_bufferedProgress);
+      _bufferedProgress.clear();
+      _flow.update(() {
+        _preparing = false;
+        _processing = true;
+      });
+      for (final event in buffered) {
+        if (event.taskId == taskId &&
+            event.taskKind == TaskKind.audioExtraction) {
+          _consumeProgress(event, generation);
+        }
+      }
+    } catch (error, stackTrace) {
+      if (!_isCurrent(generation)) return;
+      _awaitingTaskId = false;
+      _bufferedProgress.clear();
+      _failGeneration(
+        generation,
+        _errorTextFor(error, fallback: '音频提取任务无法启动，请稍后重试。'),
+      );
+      _logError('M3 音频提取任务启动失败', error, stackTrace);
     }
   }
 
@@ -651,6 +893,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _bufferedProgress.clear();
     _processStopwatch = Stopwatch()..start();
     _flow.update(() {
+      _activeTaskKind = TaskKind.videoCompression;
       _preparing = true;
       _processing = false;
       _finishing = false;
@@ -697,7 +940,8 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
       for (final event in buffered) {
-        if (event.taskId == taskId) {
+        if (event.taskId == taskId &&
+            event.taskKind == TaskKind.videoCompression) {
           _consumeProgress(event, generation);
         } else {
           _logFlow(
@@ -773,6 +1017,16 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       return;
     }
+    if (event.taskKind != _activeTaskKind) {
+      _logFlow(
+        '忽略其他任务类型的进度',
+        details: <String, Object?>{
+          'expectedTaskKind': _activeTaskKind.wireName,
+          'receivedTaskKind': event.taskKind.wireName,
+        },
+      );
+      return;
+    }
     if (_awaitingTaskId) {
       _bufferedProgress.add(event);
       _logFlow(
@@ -798,9 +1052,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _consumeProgress(ProgressEvent event, int generation) {
-    if (!_isCurrent(generation) || _terminalEventHandled) {
+    if (!_isCurrent(generation) ||
+        _terminalEventHandled ||
+        event.taskKind != _activeTaskKind) {
       return;
     }
+    final isAudio = _activeTaskKind == TaskKind.audioExtraction;
     _flow.update(() {
       _lastVideoDecoderMode = event.videoDecoderMode;
       _actualVideoEncodingMode = event.actualVideoEncodingMode;
@@ -833,9 +1090,12 @@ class _HomeScreenState extends State<HomeScreen> {
         _outputPublished = true;
         final outputUri = event.outputUri?.trim();
         if (outputUri == null || outputUri.isEmpty) {
-          _failGeneration(generation, '视频已经压缩，但暂时无法确认保存位置。');
+          _failGeneration(
+            generation,
+            isAudio ? '音频已经提取，但暂时无法确认保存位置。' : '视频已经压缩，但暂时无法确认保存位置。',
+          );
           _logFlow(
-            '压缩成功事件缺少输出 URI',
+            isAudio ? '音频提取成功事件缺少输出 URI' : '压缩成功事件缺少输出 URI',
             level: AppLogLevel.error,
             details: event.toMap(),
           );
@@ -851,8 +1111,15 @@ class _HomeScreenState extends State<HomeScreen> {
             _publishedOutputFileName = actualName;
           }
         });
-        _logFlow('收到压缩成功事件，读取输出信息', details: event.toMap());
-        unawaited(_loadOutputInfo(outputUri, generation));
+        _logFlow(
+          isAudio ? '收到音频提取成功事件，读取输出信息' : '收到压缩成功事件，读取输出信息',
+          details: event.toMap(),
+        );
+        unawaited(
+          isAudio
+              ? _loadAudioOutputInfo(outputUri, generation)
+              : _loadOutputInfo(outputUri, generation),
+        );
       case TaskState.failed:
         _terminalEventHandled = true;
         final code = _stableCode(event.errorCode);
@@ -860,21 +1127,26 @@ class _HomeScreenState extends State<HomeScreen> {
         final message = _messageForCode(
           code,
           event.errorMessage,
-          fallback: '视频压缩失败，请稍后重试。',
+          fallback: isAudio ? '音频提取失败，请稍后重试。' : '视频压缩失败，请稍后重试。',
         );
         _failGeneration(generation, message);
-        _logFlow('M2 压缩任务失败', level: AppLogLevel.error, details: event.toMap());
+        _logFlow(
+          isAudio ? 'M3 音频提取任务失败' : 'M2 压缩任务失败',
+          level: AppLogLevel.error,
+          details: event.toMap(),
+        );
       case TaskState.cancelled:
         _terminalEventHandled = true;
         final code = _stableCode(event.errorCode, fallback: 'CANCELLED');
         final message = _messageForCode(
           code,
           event.errorMessage,
-          fallback: '压缩任务已取消。',
+          fallback: isAudio ? '音频提取任务已取消。' : '压缩任务已取消。',
+          taskKind: _activeTaskKind,
         );
         _failGeneration(generation, message);
         _logFlow(
-          'M2 压缩任务被引擎取消',
+          isAudio ? 'M3 音频提取任务被引擎取消' : 'M2 压缩任务被引擎取消',
           level: AppLogLevel.warning,
           details: event.toMap(),
         );
@@ -922,6 +1194,47 @@ class _HomeScreenState extends State<HomeScreen> {
       _activeGeneration = null;
       _logError(
         '读取压缩输出信息失败',
+        error,
+        stackTrace,
+        details: <String, Object?>{'outputUri': outputUri, 'taskId': _taskId},
+      );
+    }
+  }
+
+  Future<void> _loadAudioOutputInfo(String outputUri, int generation) async {
+    try {
+      final outputInfo = await widget.engine.getAudioInfo(outputUri);
+      if (!_isCurrent(generation)) return;
+      _processStopwatch?.stop();
+      _flow.update(() {
+        _finishing = false;
+        _processing = false;
+        _outputAudioInfo = outputInfo;
+        _publishedOutputUri = outputInfo.uri;
+        _publishedOutputFileName = outputInfo.fileName;
+        _errorText = null;
+      });
+      _activeGeneration = null;
+      _logFlow(
+        'M3 音频提取任务完成',
+        details: <String, Object?>{
+          'taskId': _taskId,
+          'outputUri': outputUri,
+          'outputBytes': outputInfo.fileSizeBytes,
+          'elapsedMs': _processStopwatch?.elapsedMilliseconds,
+        },
+      );
+    } catch (error, stackTrace) {
+      if (!_isCurrent(generation)) return;
+      _processStopwatch?.stop();
+      _flow.update(() {
+        _finishing = false;
+        _processing = false;
+        _errorText = '音频文件已经保存到 $_taskOutputLocationLabel，但暂时无法显示文件信息。';
+      });
+      _activeGeneration = null;
+      _logError(
+        '读取音频输出信息失败',
         error,
         stackTrace,
         details: <String, Object?>{'outputUri': outputUri, 'taskId': _taskId},
@@ -1007,12 +1320,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('取消压缩？'),
+        title: Text(
+          _activeTaskKind == TaskKind.audioExtraction ? '取消音频提取？' : '取消压缩？',
+        ),
         content: const Text('将停止当前任务，并清理临时文件和未完成输出。'),
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('继续压缩'),
+            child: Text(
+              _activeTaskKind == TaskKind.audioExtraction ? '继续提取' : '继续压缩',
+            ),
           ),
           FilledButton.tonal(
             key: const ValueKey<String>('confirm-cancel-task'),
@@ -1080,8 +1397,13 @@ class _HomeScreenState extends State<HomeScreen> {
       _lastFailureCode = null;
       _lastVideoDecoderMode = RequestedVideoDecoderMode.hardware;
       _lastProcessRequest = null;
+      _lastAudioExtractRequest = null;
+      _activeTaskKind = TaskKind.videoCompression;
+      _audioExtractMode = AudioExtractMode.copy;
+      _audioExtractBitrate = 128000;
       _sourceInfo = null;
       _outputInfo = null;
+      _outputAudioInfo = null;
       _outputPublished = false;
       _publishedOutputUri = null;
       _publishedOutputFileName = null;
@@ -1098,13 +1420,15 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openOutput() async {
-    final uri = _publishedOutputUri ?? _outputInfo?.uri;
+    final uri =
+        _publishedOutputUri ?? _outputInfo?.uri ?? _outputAudioInfo?.uri;
     if (uri == null || _mediaActionBusy) return;
     await _runMediaAction(() => widget.mediaActions.openMedia(uri));
   }
 
   Future<void> _shareOutput() async {
-    final uri = _publishedOutputUri ?? _outputInfo?.uri;
+    final uri =
+        _publishedOutputUri ?? _outputInfo?.uri ?? _outputAudioInfo?.uri;
     if (uri == null || _mediaActionBusy) return;
     await _runMediaAction(() => widget.mediaActions.shareMedia(uri));
   }
@@ -1230,8 +1554,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildHome(BuildContext context) {
     final sourceInfo = _sourceInfo;
     final outputInfo = _outputInfo;
+    final outputAudioInfo = _outputAudioInfo;
     final showImport =
-        outputInfo == null && !_processing && !_finishing && !_preparing;
+        outputInfo == null &&
+        outputAudioInfo == null &&
+        !_processing &&
+        !_finishing &&
+        !_preparing;
 
     return Scaffold(
       appBar: AppBar(
@@ -1279,21 +1608,45 @@ class _HomeScreenState extends State<HomeScreen> {
                           : () => _pick(_ImportSource.files),
                     ),
                   ],
-                  if (sourceInfo == null && outputInfo == null) ...<Widget>[
+                  if (sourceInfo == null &&
+                      outputInfo == null &&
+                      outputAudioInfo == null) ...<Widget>[
                     const SizedBox(height: 12),
-                    const _FutureFeatureCards(),
+                    _FeatureCards(
+                      onExtractAudio: _interactionLocked
+                          ? null
+                          : () => _pick(_ImportSource.gallery),
+                    ),
                   ],
                   if (_errorText != null) ...<Widget>[
                     const SizedBox(height: 16),
                     _ErrorCard(
                       message: _errorText!,
                       canRetry:
-                          _lastProcessRequest != null &&
                           !_outputPublished &&
-                          _lastFailureCode !=
-                              'COMPATIBILITY_DECODER_UNAVAILABLE' &&
+                          !_progressStreamClosed &&
+                          ((_activeTaskKind == TaskKind.audioExtraction &&
+                                  _lastAudioExtractRequest != null) ||
+                              (_activeTaskKind == TaskKind.videoCompression &&
+                                  _lastProcessRequest != null &&
+                                  _lastFailureCode !=
+                                      'COMPATIBILITY_DECODER_UNAVAILABLE')),
+                      retryLabel: _activeTaskKind == TaskKind.audioExtraction
+                          ? '重试音频提取'
+                          : '重试压缩',
+                      onRetry: _interactionLocked
+                          ? null
+                          : _activeTaskKind == TaskKind.audioExtraction
+                          ? _retryAudio
+                          : _retryLastMode,
+                      canAacRetry:
+                          _activeTaskKind == TaskKind.audioExtraction &&
+                          _lastAudioExtractRequest?.mode ==
+                              AudioExtractMode.copy &&
+                          _lastFailureCode == 'AUDIO_COPY_UNSUPPORTED' &&
+                          !_outputPublished &&
                           !_progressStreamClosed,
-                      onRetry: _interactionLocked ? null : _retryLastMode,
+                      onAacRetry: _interactionLocked ? null : _retryAudioAsAac,
                       canCompatibilityRetry:
                           _lastProcessRequest != null &&
                           _lastFailureCode == 'VIDEO_DECODING_FAILED' &&
@@ -1311,6 +1664,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                   if (sourceInfo != null &&
                       outputInfo == null &&
+                      outputAudioInfo == null &&
+                      !_outputPublished &&
                       _errorText == null &&
                       !_processing &&
                       !_finishing &&
@@ -1367,6 +1722,33 @@ class _HomeScreenState extends State<HomeScreen> {
                           ? _compress
                           : null,
                     ),
+                    const SizedBox(height: 16),
+                    AudioExtractCard(
+                      source: sourceInfo,
+                      plan: _audioExtractPlan,
+                      mode: _audioExtractMode,
+                      bitrate: _audioExtractBitrate,
+                      outputLocation: _audioOutputLocation,
+                      outputLocationBusy:
+                          _outputLocationLoading || _selectingOutputLocation,
+                      onModeChanged: (value) =>
+                          _changeSettings(() => _audioExtractMode = value),
+                      onBitrateChanged: (value) =>
+                          _changeSettings(() => _audioExtractBitrate = value),
+                      onChooseOutputLocation: _interactionLocked
+                          ? null
+                          : _chooseOutputFolder,
+                      onUseDefaultOutputLocation: _interactionLocked
+                          ? null
+                          : _useDefaultOutputLocation,
+                      onExtract:
+                          !_progressStreamClosed &&
+                              !_outputLocationLoading &&
+                              _audioOutputLocation.writable &&
+                              _audioExtractPlan?.available == true
+                          ? _extractAudio
+                          : null,
+                    ),
                   ],
                   if (_preparing || _processing || _finishing) ...<Widget>[
                     const SizedBox(height: 16),
@@ -1381,15 +1763,31 @@ class _HomeScreenState extends State<HomeScreen> {
                           ? TaskPhase.cancelling
                           : _taskPhase,
                       cancelling: _cancelling,
+                      taskKind: _activeTaskKind,
                       outputLocationLabel: _taskOutputLocationLabel,
                       actualVideoEncodingMode: _actualVideoEncodingMode,
                       onCancel: _processing && _taskId != null && !_cancelling
                           ? _cancelTask
                           : null,
                       message: _finishing
-                          ? '正在确认保存结果…'
+                          ? _activeTaskKind == TaskKind.audioExtraction
+                                ? '正在读取音频文件信息…'
+                                : '正在确认保存结果…'
                           : _cancelling
                           ? '正在取消并清理未完成文件…'
+                          : _activeTaskKind == TaskKind.audioExtraction
+                          ? switch (_taskPhase) {
+                              TaskPhase.preparing => '正在检查音轨和可用空间…',
+                              TaskPhase.encoding =>
+                                _lastAudioExtractRequest?.mode ==
+                                        AudioExtractMode.aac
+                                    ? '正在转换音频，可以切换应用或熄屏'
+                                    : '正在提取音频，可以切换应用或熄屏',
+                              TaskPhase.publishing =>
+                                '正在保存到 $_taskOutputLocationLabel…',
+                              TaskPhase.cancelling => '正在取消并清理未完成文件…',
+                              TaskPhase.finished => '正在读取音频文件信息…',
+                            }
                           : switch (_taskPhase) {
                               TaskPhase.preparing => '正在准备视频…',
                               TaskPhase.encoding => '正在压缩视频，可以切换应用或熄屏',
@@ -1402,11 +1800,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                   if (_outputPublished &&
                       outputInfo == null &&
+                      outputAudioInfo == null &&
                       !_finishing &&
                       _publishedOutputUri != null &&
                       _publishedOutputFileName != null) ...<Widget>[
                     const SizedBox(height: 16),
                     _PublishedResultFallbackCard(
+                      taskKind: _activeTaskKind,
                       outputFileName: _publishedOutputFileName!,
                       outputLocationLabel: _taskOutputLocationLabel,
                       actualVideoEncodingMode: _actualVideoEncodingMode,
@@ -1430,6 +1830,17 @@ class _HomeScreenState extends State<HomeScreen> {
                       onOpen: _openOutput,
                       onShare: _shareOutput,
                       onDeleteOriginal: _deleteOriginal,
+                      onAgain: _reset,
+                    ),
+                  ],
+                  if (outputAudioInfo != null) ...<Widget>[
+                    const SizedBox(height: 16),
+                    AudioResultCard(
+                      info: outputAudioInfo,
+                      outputLocationLabel: _taskOutputLocationLabel,
+                      busy: _mediaActionBusy,
+                      onOpen: _openOutput,
+                      onShare: _shareOutput,
                       onAgain: _reset,
                     ),
                   ],
@@ -1586,18 +1997,21 @@ class _ImportCard extends StatelessWidget {
   }
 }
 
-class _FutureFeatureCards extends StatelessWidget {
-  const _FutureFeatureCards();
+class _FeatureCards extends StatelessWidget {
+  const _FeatureCards({required this.onExtractAudio});
+
+  final VoidCallback? onExtractAudio;
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        const audio = _DisabledFeatureCard(
-          key: ValueKey<String>('future-audio-card'),
+        final audio = _ActiveFeatureCard(
+          key: const ValueKey<String>('audio-extract-entry'),
           icon: Icons.audio_file_outlined,
           title: '提取音频',
-          milestone: '后续里程碑开放',
+          subtitle: '从视频保存 M4A 音频',
+          onTap: onExtractAudio,
         );
         const crop = _DisabledFeatureCard(
           key: ValueKey<String>('future-crop-card'),
@@ -1606,18 +2020,83 @@ class _FutureFeatureCards extends StatelessWidget {
           milestone: '后续里程碑开放',
         );
         if (constraints.maxWidth < 390) {
-          return const Column(
-            children: <Widget>[audio, SizedBox(height: 10), crop],
+          return Column(
+            children: <Widget>[audio, const SizedBox(height: 10), crop],
           );
         }
-        return const Row(
+        return Row(
           children: <Widget>[
             Expanded(child: audio),
-            SizedBox(width: 10),
-            Expanded(child: crop),
+            const SizedBox(width: 10),
+            const Expanded(child: crop),
           ],
         );
       },
+    );
+  }
+}
+
+class _ActiveFeatureCard extends StatelessWidget {
+  const _ActiveFeatureCard({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Card(
+      color: colors.primaryContainer,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: colors.primary.withValues(alpha: 0.35)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: <Widget>[
+              Icon(icon, color: colors.onPrimaryContainer),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: colors.onPrimaryContainer,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: colors.onPrimaryContainer,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: colors.onPrimaryContainer,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1692,6 +2171,7 @@ class _ProgressCard extends StatelessWidget {
     required this.etaStalled,
     required this.phase,
     required this.cancelling,
+    required this.taskKind,
     required this.outputLocationLabel,
     required this.actualVideoEncodingMode,
     required this.onCancel,
@@ -1704,6 +2184,7 @@ class _ProgressCard extends StatelessWidget {
   final bool etaStalled;
   final TaskPhase phase;
   final bool cancelling;
+  final TaskKind taskKind;
   final String outputLocationLabel;
   final ActualVideoEncodingMode actualVideoEncodingMode;
   final VoidCallback? onCancel;
@@ -1721,13 +2202,21 @@ class _ProgressCard extends StatelessWidget {
       TaskPhase.encoding when remaining == null => '正在估算剩余时间',
       TaskPhase.encoding => '预计剩余 ${_formatEtaRange(remaining!)}',
     };
-    final title = switch (phase) {
-      TaskPhase.preparing => '正在准备',
-      TaskPhase.encoding => '正在压缩',
-      TaskPhase.publishing => '正在保存',
-      TaskPhase.cancelling => '正在取消',
-      TaskPhase.finished => '正在确认',
-    };
+    final title = taskKind == TaskKind.audioExtraction
+        ? switch (phase) {
+            TaskPhase.preparing => '正在准备音频提取',
+            TaskPhase.encoding => '正在处理音频',
+            TaskPhase.publishing => '正在保存音频',
+            TaskPhase.cancelling => '正在取消音频提取',
+            TaskPhase.finished => '正在读取音频信息',
+          }
+        : switch (phase) {
+            TaskPhase.preparing => '正在准备',
+            TaskPhase.encoding => '正在压缩',
+            TaskPhase.publishing => '正在保存',
+            TaskPhase.cancelling => '正在取消',
+            TaskPhase.finished => '正在确认',
+          };
     return Card(
       color: colors.surface,
       shape: RoundedRectangleBorder(
@@ -1777,11 +2266,13 @@ class _ProgressCard extends StatelessWidget {
               '保存到：$outputLocationLabel',
               key: const ValueKey<String>('processing-output-location'),
             ),
-            const SizedBox(height: 4),
-            Text(
-              actualVideoEncodingMode.label,
-              key: const ValueKey<String>('actual-video-encoding-mode'),
-            ),
+            if (taskKind == TaskKind.videoCompression) ...<Widget>[
+              const SizedBox(height: 4),
+              Text(
+                actualVideoEncodingMode.label,
+                key: const ValueKey<String>('actual-video-encoding-mode'),
+              ),
+            ],
             const SizedBox(height: 4),
             Row(
               children: <Widget>[
@@ -1837,7 +2328,10 @@ class _ErrorCard extends StatelessWidget {
   const _ErrorCard({
     required this.message,
     required this.canRetry,
+    required this.retryLabel,
     required this.onRetry,
+    required this.canAacRetry,
+    required this.onAacRetry,
     required this.canCompatibilityRetry,
     required this.onCompatibilityRetry,
     required this.onReset,
@@ -1845,7 +2339,10 @@ class _ErrorCard extends StatelessWidget {
 
   final String message;
   final bool canRetry;
+  final String retryLabel;
   final VoidCallback? onRetry;
+  final bool canAacRetry;
+  final VoidCallback? onAacRetry;
   final bool canCompatibilityRetry;
   final VoidCallback? onCompatibilityRetry;
   final VoidCallback? onReset;
@@ -1891,10 +2388,16 @@ class _ErrorCard extends StatelessWidget {
                     onPressed: onCompatibilityRetry,
                     child: const Text('使用兼容模式重试'),
                   ),
+                if (canAacRetry)
+                  FilledButton(
+                    key: const ValueKey<String>('audio-aac-retry'),
+                    onPressed: onAacRetry,
+                    child: const Text('改用 AAC 转码'),
+                  ),
                 if (canRetry)
                   FilledButton.tonal(
                     onPressed: onRetry,
-                    child: const Text('重试压缩'),
+                    child: Text(retryLabel),
                   ),
               ],
             ),
@@ -1907,6 +2410,7 @@ class _ErrorCard extends StatelessWidget {
 
 class _PublishedResultFallbackCard extends StatelessWidget {
   const _PublishedResultFallbackCard({
+    required this.taskKind,
     required this.outputFileName,
     required this.outputLocationLabel,
     required this.actualVideoEncodingMode,
@@ -1916,6 +2420,7 @@ class _PublishedResultFallbackCard extends StatelessWidget {
     required this.onAgain,
   });
 
+  final TaskKind taskKind;
   final String outputFileName;
   final String outputLocationLabel;
   final ActualVideoEncodingMode actualVideoEncodingMode;
@@ -1937,7 +2442,7 @@ class _PublishedResultFallbackCard extends StatelessWidget {
             Icon(Icons.check_circle_rounded, color: colors.primary, size: 48),
             const SizedBox(height: 10),
             Text(
-              '压缩文件已保存',
+              taskKind == TaskKind.audioExtraction ? '音频文件已保存' : '压缩文件已保存',
               textAlign: TextAlign.center,
               style: Theme.of(
                 context,
@@ -1953,15 +2458,19 @@ class _PublishedResultFallbackCard extends StatelessWidget {
                 fontWeight: FontWeight.w700,
               ),
             ),
-            const SizedBox(height: 6),
-            Text(
-              actualVideoEncodingMode.label,
-              key: const ValueKey<String>('result-video-encoding-mode'),
-              textAlign: TextAlign.center,
-            ),
+            if (taskKind == TaskKind.videoCompression) ...<Widget>[
+              const SizedBox(height: 6),
+              Text(
+                actualVideoEncodingMode.label,
+                key: const ValueKey<String>('result-video-encoding-mode'),
+                textAlign: TextAlign.center,
+              ),
+            ],
             const SizedBox(height: 8),
             Text(
-              '暂时无法显示文件信息，但视频已经保存；不会重新压缩。',
+              taskKind == TaskKind.audioExtraction
+                  ? '暂时无法显示文件信息，但音频已经保存；不会重新提取。'
+                  : '暂时无法显示文件信息，但视频已经保存；不会重新压缩。',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -1982,7 +2491,9 @@ class _PublishedResultFallbackCard extends StatelessWidget {
             const SizedBox(height: 8),
             TextButton(
               onPressed: busy ? null : onAgain,
-              child: const Text('压缩另一个视频'),
+              child: Text(
+                taskKind == TaskKind.audioExtraction ? '提取另一个音频' : '压缩另一个视频',
+              ),
             ),
           ],
         ),
@@ -2198,7 +2709,12 @@ String _stableCode(String? value, {String fallback = 'UNKNOWN'}) {
   return normalized.replaceAll(RegExp(r'[^A-Z0-9_\-]'), '_');
 }
 
-String _messageForCode(String code, String? _, {required String fallback}) {
+String _messageForCode(
+  String code,
+  String? _, {
+  required String fallback,
+  TaskKind taskKind = TaskKind.videoCompression,
+}) {
   return switch (code) {
     'INSUFFICIENT_STORAGE' => '存储空间不足，请释放空间后重试。',
     'ENCODER_UNAVAILABLE' => '当前手机没有可用的视频压缩方式。',
@@ -2210,8 +2726,17 @@ String _messageForCode(String code, String? _, {required String fallback}) {
     'VIDEO_FORMAT_UNSUPPORTED' => '这台手机暂时无法读取这种视频格式。',
     'COMPATIBILITY_DECODER_UNAVAILABLE' => '这台手机没有可用于此视频的软件读取方式。原视频没有被修改。',
     'VIDEO_ENCODING_FAILED' => '手机没能按当前设置完成压缩。可按原设置重试，或返回调整格式或画质。',
+    'AUDIO_TRACK_MISSING' => '这个视频没有可提取的音轨。',
+    'AUDIO_COPY_UNSUPPORTED' => '原音轨不是 AAC，无法无损提取。请改用 AAC 转码。',
+    'AUDIO_CHANNEL_LAYOUT_UNSUPPORTED' => '目前只支持单声道或双声道音轨。原视频没有被修改。',
+    'AUDIO_TIMESTAMPS_INVALID' => '音轨时间信息异常，无法安全提取。原视频没有被修改。',
+    'AUDIO_DURATION_INVALID' => '无法确认音轨时长，未保存不完整文件。',
+    'AUDIO_DECODING_FAILED' => '手机无法读取这个音轨。原视频没有被修改。',
+    'AUDIO_ENCODING_FAILED' => '手机没能完成 AAC 转码，请稍后重试。',
+    'AUDIO_OUTPUT_INVALID' => '无法确认提取结果完整，未保存不完整文件。',
     'OUTPUT_PERMISSION_LOST' => '保存文件夹权限已失效，请重新选择保存位置。',
-    'CANCELLED' => '压缩任务已取消。',
+    'CANCELLED' =>
+      taskKind == TaskKind.audioExtraction ? '音频提取任务已取消。' : '压缩任务已取消。',
     'PICKER_BUSY' => '已有视频选择请求正在进行，请稍后再试。',
     _ => fallback,
   };
@@ -2252,4 +2777,20 @@ String _buildOutputFileName(String sourceName, DateTime now) {
   }
   final safeStem = stemBuffer.isEmpty ? 'video' : stemBuffer.toString();
   return '$safeStem$suffix';
+}
+
+String? _audioMimeTypeForCodec(String? codec) {
+  final normalized = codec?.trim().toLowerCase();
+  if (normalized == null || normalized.isEmpty) return null;
+  if (normalized == 'aac' || normalized.contains('mp4a')) {
+    return 'audio/mp4a-latm';
+  }
+  if (normalized.startsWith('audio/')) return normalized;
+  return switch (normalized) {
+    'opus' => 'audio/opus',
+    'vorbis' => 'audio/vorbis',
+    'flac' => 'audio/flac',
+    'mp3' => 'audio/mpeg',
+    _ => normalized,
+  };
 }

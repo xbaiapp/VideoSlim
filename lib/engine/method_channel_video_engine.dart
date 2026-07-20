@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 
 import '../logging/app_logger.dart';
+import '../models/audio_info.dart';
 import '../models/device_capabilities.dart';
 import '../models/output_location.dart';
 import '../models/process_request.dart';
@@ -36,6 +37,16 @@ final class MethodChannelVideoEngine implements VideoEngine {
       'getVideoInfo',
       arguments: arguments,
       parse: (Object? response) => VideoInfo.fromMap(_requireMap(response)),
+    );
+  }
+
+  @override
+  Future<AudioInfo> getAudioInfo(String uri) {
+    final arguments = <String, Object?>{'uri': uri};
+    return _invoker.invoke<AudioInfo>(
+      'getAudioInfo',
+      arguments: arguments,
+      parse: (Object? response) => AudioInfo.fromMap(_requireMap(response)),
     );
   }
 

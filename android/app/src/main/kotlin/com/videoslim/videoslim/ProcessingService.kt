@@ -9,10 +9,21 @@ import android.os.IBinder
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicLong
 
+internal fun validatedStartTaskKind(
+    snapshot: TaskRuntimeSnapshot,
+    wireName: Any?,
+): TaskKind {
+    val taskKind = TaskKind.fromWireName(wireName)
+        ?: throw IllegalArgumentException("processing start requires an explicit task kind")
+    require(taskKind == snapshot.taskKind) { "processing start task kind does not match reservation" }
+    return taskKind
+}
+
 internal class ProcessingService : Service() {
     private lateinit var notificationFactory: ProcessingNotificationFactory
     private lateinit var wakeLockGuard: WakeLockGuard
     private lateinit var transcodeEngine: TranscodeEngine
+    private lateinit var audioExtractionEngine: AudioExtractionEngine
     private lateinit var recoveryStore: TaskRecoveryStore
     private lateinit var logStore: AppLogStore
     private val logSequence = AtomicLong()
@@ -54,6 +65,7 @@ internal class ProcessingService : Service() {
                         engineTaskId
                             ?: throw IllegalStateException("Publication allocated without an engine task")
                     recoveryStore.recordPublicationAllocation(internalTaskId, publicationUri)
+                    log("task=$internalTaskId publication allocated uri=$publicationUri")
                 }
 
                 override fun onPublicationTargetAllocated(target: PublicationTarget) {
@@ -66,6 +78,10 @@ internal class ProcessingService : Service() {
                         mediaStoreUri = target.mediaStoreUri,
                         canonicalLegacyOutputPath = target.canonicalLegacyOutputPath,
                         mediaKind = target.mediaKind,
+                    )
+                    log(
+                        "task=$internalTaskId publication target kind=${target.mediaKind.name} " +
+                            "actualName=${target.actualDisplayName} uri=${target.mediaStoreUri}",
                     )
                     activeTaskId?.let { publicTaskId ->
                         ProcessingRuntime.registry.updateOutputFileName(
@@ -80,6 +96,7 @@ internal class ProcessingService : Service() {
                         engineTaskId
                             ?: throw IllegalStateException("Publication completed without an engine task")
                     recoveryStore.markPublished(internalTaskId)
+                    log("task=$internalTaskId publication completed uri=${target.mediaStoreUri}")
                 }
 
                 override fun onPublicationDiscarding(target: PublicationTarget) {
@@ -87,12 +104,21 @@ internal class ProcessingService : Service() {
                         engineTaskId
                             ?: throw IllegalStateException("Publication discarded without an engine task")
                     recoveryStore.markDiscarding(internalTaskId)
+                    log("task=$internalTaskId publication discarding uri=${target.mediaStoreUri}")
                 }
             }
+        val mediaStoreSaver = MediaStoreSaver(this, publicationObserver)
         transcodeEngine =
             TranscodeEngine(
                 context = this,
-                mediaStoreSaver = MediaStoreSaver(this, publicationObserver),
+                mediaStoreSaver = mediaStoreSaver,
+                recoveryStore = recoveryStore,
+                logger = ::log,
+            )
+        audioExtractionEngine =
+            AudioExtractionEngine(
+                context = this,
+                mediaStoreSaver = mediaStoreSaver,
                 recoveryStore = recoveryStore,
                 logger = ::log,
             )
@@ -130,7 +156,7 @@ internal class ProcessingService : Service() {
             failActiveTask("系统已结束超时的媒体处理任务")
             return
         }
-        runCatching { transcodeEngine.cancel(internalTaskId) }
+        runCatching { cancelEngineTask(internalTaskId) }
             .onFailure { log("timeout cancellation failed: ${it.stackTraceToString()}") }
         runCatching {
             val recovery = recoveryStore.load()
@@ -168,6 +194,8 @@ internal class ProcessingService : Service() {
         }
         runCatching { transcodeEngine.dispose() }
             .onFailure { log("engine disposal failed: ${it.stackTraceToString()}") }
+        runCatching { audioExtractionEngine.dispose() }
+            .onFailure { log("audio engine disposal failed: ${it.stackTraceToString()}") }
         wakeLockGuard.releaseAll()
         log("processing service destroyed")
         super.onDestroy()
@@ -186,6 +214,20 @@ internal class ProcessingService : Service() {
             stopSelfResult(lastStartId)
             return
         }
+        val startTaskKind =
+            runCatching { validatedStartTaskKind(snapshot, intent.getStringExtra(EXTRA_TASK_KIND)) }
+                .getOrElse { error ->
+                    log("processing start rejected because task kind is invalid: ${error.message}")
+                    ProcessingRuntime.registry.apply(
+                        taskId = taskId,
+                        percent = snapshot.percent,
+                        state = TaskRuntimeSnapshot.STATE_FAILED,
+                        errorCode = EngineErrorCode.UNKNOWN.wireName,
+                        errorMessage = "媒体处理任务类型无效，请重试",
+                    )
+                    stopSelfResult(lastStartId)
+                    return
+                }
         if (activeTaskId != null) {
             if (activeTaskId != taskId) {
                 ProcessingRuntime.registry.apply(
@@ -193,7 +235,7 @@ internal class ProcessingService : Service() {
                     percent = snapshot.percent,
                     state = TaskRuntimeSnapshot.STATE_FAILED,
                     errorCode = EngineErrorCode.UNKNOWN.wireName,
-                    errorMessage = "已有视频处理任务正在进行中",
+                    errorMessage = "已有媒体处理任务正在进行中",
                 )
             }
             return
@@ -203,12 +245,23 @@ internal class ProcessingService : Service() {
         try {
             startForegroundCompat(snapshot, cancelPendingIntent(taskId))
             wakeLockGuard.acquire(taskId, MAX_WAKE_LOCK_MS)
-            val request = ProcessRequest.parse(readArguments(intent))
             val createdEngineTaskId =
-                transcodeEngine.start(request) { event -> onEngineEvent(taskId, event) }
+                when (startTaskKind) {
+                    TaskKind.VIDEO_COMPRESSION -> {
+                        val request = ProcessRequest.parse(readArguments(intent))
+                        transcodeEngine.start(request) { event -> onEngineEvent(taskId, event) }
+                    }
+                    TaskKind.AUDIO_EXTRACTION -> {
+                        val request = AudioExtractRequest.parse(readArguments(intent))
+                        audioExtractionEngine.start(request) { event -> onEngineEvent(taskId, event) }
+                    }
+                }
             engineTaskId = createdEngineTaskId
-            log("task=$taskId engineTask=$createdEngineTaskId service processing started")
-            if (cancelRequested) transcodeEngine.cancel(createdEngineTaskId)
+            log(
+                "task=$taskId taskKind=${startTaskKind.wireName} " +
+                    "engineTask=$createdEngineTaskId service processing started",
+            )
+            if (cancelRequested) cancelEngineTask(createdEngineTaskId)
         } catch (error: ProcessRequestException) {
             failActiveTask(error.error.message, error.error.code.wireName)
         } catch (error: EngineOperationException) {
@@ -229,7 +282,7 @@ internal class ProcessingService : Service() {
         }
         cancelRequested = true
         val internalTaskId = engineTaskId ?: return
-        runCatching { transcodeEngine.cancel(internalTaskId) }
+        runCatching { cancelEngineTask(internalTaskId) }
             .onFailure { error ->
                 if (error is EngineOperationException && error.failure.code == EngineErrorCode.CANCELLED) {
                     log("task=$taskId cancellation already terminal")
@@ -237,6 +290,13 @@ internal class ProcessingService : Service() {
                     log("task=$taskId cancellation failed: ${error.stackTraceToString()}")
                 }
             }
+    }
+
+    private fun cancelEngineTask(internalTaskId: String) {
+        when (ProcessingRuntime.registry.snapshot()?.taskKind) {
+            TaskKind.AUDIO_EXTRACTION -> audioExtractionEngine.cancel(internalTaskId)
+            else -> transcodeEngine.cancel(internalTaskId)
+        }
     }
 
     private fun onEngineEvent(
@@ -357,6 +417,7 @@ internal class ProcessingService : Service() {
         const val ACTION_START = "com.videoslim.videoslim.action.PROCESS_START"
         const val ACTION_CANCEL = "com.videoslim.videoslim.action.PROCESS_CANCEL"
         const val EXTRA_TASK_ID = "taskId"
+        const val EXTRA_TASK_KIND = "taskKind"
         const val EXTRA_ARGUMENTS = "arguments"
         private const val CANCEL_REQUEST_CODE = 2_004
         private const val MAX_WAKE_LOCK_MS = 21_900_000L

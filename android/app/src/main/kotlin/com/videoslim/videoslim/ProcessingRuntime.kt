@@ -56,6 +56,7 @@ internal object ProcessingRuntime {
         val copiedArguments = SerializableArguments.copy(arguments)
         val taskId = UUID.randomUUID().toString()
         registry.reserve(
+            taskKind = TaskKind.VIDEO_COMPRESSION,
             taskId = taskId,
             sourceUri = request.sourceUri,
             outputFileName = request.outputFileName,
@@ -68,6 +69,38 @@ internal object ProcessingRuntime {
             Intent(context, ProcessingService::class.java)
                 .setAction(ProcessingService.ACTION_START)
                 .putExtra(ProcessingService.EXTRA_TASK_ID, taskId)
+                .putExtra(ProcessingService.EXTRA_TASK_KIND, TaskKind.VIDEO_COMPRESSION.wireName)
+                .putExtra(ProcessingService.EXTRA_ARGUMENTS, copiedArguments as Serializable)
+        try {
+            context.startForegroundService(intent)
+        } catch (error: Throwable) {
+            registry.releaseLaunchFailure(taskId)
+            throw error
+        }
+        return taskId
+    }
+
+    fun launchAudio(
+        context: Context,
+        arguments: Any?,
+        request: AudioExtractRequest,
+    ): String {
+        val copiedArguments = SerializableArguments.copy(arguments)
+        val taskId = UUID.randomUUID().toString()
+        registry.reserve(
+            taskKind = TaskKind.AUDIO_EXTRACTION,
+            taskId = taskId,
+            sourceUri = request.sourceUri,
+            outputFileName = request.outputFileName,
+            outputLocationLabel = request.outputLocationLabel,
+            retryRequest = request.toChannelMap(),
+            startedAtEpochMs = System.currentTimeMillis(),
+        )
+        val intent =
+            Intent(context, ProcessingService::class.java)
+                .setAction(ProcessingService.ACTION_START)
+                .putExtra(ProcessingService.EXTRA_TASK_ID, taskId)
+                .putExtra(ProcessingService.EXTRA_TASK_KIND, TaskKind.AUDIO_EXTRACTION.wireName)
                 .putExtra(ProcessingService.EXTRA_ARGUMENTS, copiedArguments as Serializable)
         try {
             context.startForegroundService(intent)

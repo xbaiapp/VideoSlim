@@ -166,7 +166,8 @@ void main() {
         const extractRequest = AudioExtractRequest(
           uri: 'content://videos/42',
           outputFileName: '旅行.m4a',
-          lossless: false,
+          outputLocationLabel: '系统音频 > Music > VideoSlim',
+          mode: AudioExtractMode.aac,
           bitrate: 192000,
         );
 
@@ -222,8 +223,11 @@ void main() {
         expect(calls[3].arguments, <String, Object?>{
           'uri': 'content://videos/42',
           'outputFileName': '旅行.m4a',
-          'lossless': false,
-          'bitrate': 192000,
+          'destination': <String, Object?>{
+            'treeUri': null,
+            'label': '系统音频 > Music > VideoSlim',
+          },
+          'audio': <String, Object?>{'mode': 'aac', 'bitrate': 192000},
         });
         expect(calls[4].arguments, <String, Object?>{'taskId': 'process-42'});
 
@@ -471,6 +475,7 @@ void main() {
         );
         await listened.future;
         eventSink.success(<String, Object?>{
+          'taskKind': 'video_compression',
           'taskId': 'task-7',
           'percent': 37,
           'state': 'running',
@@ -495,6 +500,7 @@ void main() {
         final logged = _detailsOf(logger.entries.single);
         expect(logged['channel'], 'videoslim/progress');
         expect(logged['response'], <String, Object?>{
+          'taskKind': 'video_compression',
           'taskId': 'task-7',
           'percent': 37,
           'state': 'running',

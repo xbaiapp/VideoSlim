@@ -25,6 +25,8 @@ internal data class AudioMetadata(
     val lastSampleTimeUs: Long?,
     val sampleCount: Long,
     val sampleTimesMonotonic: Boolean,
+    val audioTrackIndex: Int = 0,
+    val audioProfile: Int? = null,
 ) {
     fun toChannelMap(): Map<String, Any?> =
         linkedMapOf(
@@ -48,6 +50,7 @@ internal class AudioMetadataException(
     companion object {
         const val NO_AUDIO_TRACK = "NO_AUDIO_TRACK"
         const val SOURCE_CORRUPTED = "SOURCE_CORRUPTED"
+        const val SOURCE_PERMISSION_LOST = "SOURCE_PERMISSION_LOST"
         const val UNKNOWN = "UNKNOWN"
     }
 }
@@ -56,15 +59,35 @@ internal class AudioMetadataReader(context: Context) {
     private val appContext = context.applicationContext
     private val contentResolver: ContentResolver = appContext.contentResolver
 
-    fun read(uriString: String): AudioMetadata = read(Uri.parse(uriString))
+    fun read(uriString: String): AudioMetadata =
+        if (uriString.startsWith("content://")) read(Uri.parse(uriString)) else read(java.io.File(uriString))
 
     fun read(uri: Uri): AudioMetadata {
         val openable = readOpenableMetadata(uri)
+        return readConfigured(uri.toString(), openable) { extractor, retriever ->
+            extractor.setDataSource(appContext, uri, null)
+            retriever.setDataSource(appContext, uri)
+        }
+    }
+
+    fun read(file: java.io.File): AudioMetadata =
+        readConfigured(
+            sourceUri = file.absolutePath,
+            openable = OpenableMetadata(file.name, file.length()),
+        ) { extractor, retriever ->
+            extractor.setDataSource(file.absolutePath)
+            retriever.setDataSource(file.absolutePath)
+        }
+
+    private fun readConfigured(
+        sourceUri: String,
+        openable: OpenableMetadata,
+        configure: (MediaExtractor, MediaMetadataRetriever) -> Unit,
+    ): AudioMetadata {
         val extractor = MediaExtractor()
         val retriever = MediaMetadataRetriever()
         try {
-            extractor.setDataSource(appContext, uri, null)
-            retriever.setDataSource(appContext, uri)
+            configure(extractor, retriever)
             var firstAudioTrack = -1
             var firstAudioFormat: MediaFormat? = null
             var audioTrackCount = 0
@@ -107,25 +130,25 @@ internal class AudioMetadataReader(context: Context) {
                     ?: 0L
             val declaredBitrate =
                 audioFormat.intValue(MediaFormat.KEY_BIT_RATE)?.takeIf { it > 0 }
+            val timing = inspectSampleTimes(extractor, firstAudioTrack)
             val estimatedBitrate =
-                if (declaredBitrate == null && openable.fileSizeBytes > 0L && durationMs > 0L) {
-                    ((openable.fileSizeBytes.toDouble() * BITS_PER_BYTE * MILLIS_PER_SECOND) / durationMs)
+                if (declaredBitrate == null && timing.sampleBytes > 0L && durationMs > 0L) {
+                    ((timing.sampleBytes.toDouble() * BITS_PER_BYTE * MILLIS_PER_SECOND) / durationMs)
                         .toLong()
                         .coerceAtMost(Int.MAX_VALUE.toLong())
                         .toInt()
                 } else {
                     null
                 }
-
-            val timing = inspectSampleTimes(extractor, firstAudioTrack)
             return AudioMetadata(
-                sourceUri = uri.toString(),
+                sourceUri = sourceUri,
                 fileName = openable.fileName,
                 fileSizeBytes = openable.fileSizeBytes,
                 durationMs = durationMs,
                 container =
                     retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
-                        ?: contentResolver.getType(uri)
+                        ?: sourceUri.takeIf { it.startsWith("content://") }
+                            ?.let { contentResolver.getType(Uri.parse(it)) }
                         ?: "",
                 audioMime = audioMime,
                 audioChannels = channels,
@@ -137,11 +160,17 @@ internal class AudioMetadataReader(context: Context) {
                 lastSampleTimeUs = timing.lastSampleTimeUs,
                 sampleCount = timing.sampleCount,
                 sampleTimesMonotonic = timing.monotonic,
+                audioTrackIndex = firstAudioTrack,
+                audioProfile = audioFormat.intValue(MediaFormat.KEY_AAC_PROFILE),
             )
         } catch (error: AudioMetadataException) {
             throw error
         } catch (error: SecurityException) {
-            throw AudioMetadataException(AudioMetadataException.UNKNOWN, "无法访问音频文件", error)
+            throw AudioMetadataException(
+                AudioMetadataException.SOURCE_PERMISSION_LOST,
+                "无法访问音频文件",
+                error,
+            )
         } catch (error: IOException) {
             throw AudioMetadataException(AudioMetadataException.UNKNOWN, "无法读取音频文件", error)
         } catch (error: RuntimeException) {
@@ -165,19 +194,24 @@ internal class AudioMetadataReader(context: Context) {
         var previous: Long? = null
         var last: Long? = null
         var count = 0L
+        var sampleBytes = 0L
         var monotonic = true
         while (true) {
             val sampleTime = extractor.sampleTime
             if (sampleTime < 0L) break
             if (first == null) first = sampleTime
-            if (previous != null && sampleTime < previous) monotonic = false
+            if (previous != null && sampleTime <= previous) monotonic = false
             previous = sampleTime
             last = sampleTime
             count += 1L
+            extractor.sampleSize.takeIf { it > 0L }?.let { size ->
+                sampleBytes =
+                    if (sampleBytes > Long.MAX_VALUE - size) Long.MAX_VALUE else sampleBytes + size
+            }
             if (!extractor.advance()) break
         }
         extractor.unselectTrack(trackIndex)
-        return SampleTiming(first, last, count, monotonic)
+        return SampleTiming(first, last, count, sampleBytes, monotonic)
     }
 
     private fun readOpenableMetadata(uri: Uri): OpenableMetadata {
@@ -227,6 +261,7 @@ internal class AudioMetadataReader(context: Context) {
         val firstSampleTimeUs: Long?,
         val lastSampleTimeUs: Long?,
         val sampleCount: Long,
+        val sampleBytes: Long,
         val monotonic: Boolean,
     )
 

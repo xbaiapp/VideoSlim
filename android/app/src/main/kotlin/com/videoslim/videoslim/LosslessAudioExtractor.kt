@@ -48,14 +48,16 @@ internal class LosslessAudioExtractor(context: Context) {
             if (mime != AudioOutputVerifier.AAC_MIME) {
                 throw EngineOperationException(
                     EngineFailure(
-                        EngineErrorCode.AUDIO_FORMAT_UNSUPPORTED,
+                        EngineErrorCode.AUDIO_COPY_UNSUPPORTED,
                         "无损直提仅支持 AAC 音轨，请改用 AAC 压缩模式",
                     ),
                 )
             }
             val channels = format.integer(MediaFormat.KEY_CHANNEL_COUNT) ?: 0
             if (channels !in 1..2) {
-                throw EngineOperationException(EngineFailure(EngineErrorCode.AUDIO_CHANNELS_UNSUPPORTED))
+                throw EngineOperationException(
+                    EngineFailure(EngineErrorCode.AUDIO_CHANNEL_LAYOUT_UNSUPPORTED),
+                )
             }
             val sampleRate = format.integer(MediaFormat.KEY_SAMPLE_RATE) ?: 0
             if (sampleRate <= 0) {
@@ -105,7 +107,7 @@ internal class LosslessAudioExtractor(context: Context) {
                 return AudioTrack(index, format)
             }
         }
-        throw EngineOperationException(EngineFailure(EngineErrorCode.NO_AUDIO_TRACK))
+        throw EngineOperationException(EngineFailure(EngineErrorCode.AUDIO_TRACK_MISSING))
     }
 
     private data class AudioTrack(

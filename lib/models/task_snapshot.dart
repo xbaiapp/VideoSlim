@@ -1,10 +1,12 @@
 import 'progress_event.dart';
 import 'process_request.dart';
+import 'task_kind.dart';
 
 /// Reconnectable snapshot of an active or terminal processing task.
 final class TaskSnapshot {
   /// Creates an immutable task snapshot.
   const TaskSnapshot({
+    this.taskKind = TaskKind.videoCompression,
     required this.taskId,
     required this.state,
     this.phase = TaskPhase.encoding,
@@ -12,6 +14,7 @@ final class TaskSnapshot {
     required this.sourceUri,
     required this.outputFileName,
     this.retryRequest,
+    this.audioRetryRequest,
     this.outputLocationLabel = '系统相册 > Movies > VideoSlim',
     this.videoDecoderMode = RequestedVideoDecoderMode.hardware,
     this.actualVideoEncodingMode = ActualVideoEncodingMode.unknown,
@@ -24,6 +27,10 @@ final class TaskSnapshot {
        assert(percent >= 0 && percent <= 100),
        assert(sourceUri != ''),
        assert(outputFileName != ''),
+       assert(
+         (taskKind == TaskKind.videoCompression && audioRetryRequest == null) ||
+             (taskKind == TaskKind.audioExtraction && retryRequest == null),
+       ),
        assert(startedAtEpochMs >= 0);
 
   /// Strictly parses the platform-channel snapshot map.
@@ -45,23 +52,31 @@ final class TaskSnapshot {
       );
     }
 
+    final taskKind = map['taskKind'] == null
+        ? TaskKind.videoCompression
+        : taskKindFromWireName(map['taskKind']);
     final retryRequestValue = map['retryRequest'];
+    final retryRequestMap = retryRequestValue == null
+        ? null
+        : retryRequestValue is Map<Object?, Object?>
+        ? retryRequestValue
+        : throw const FormatException('Expected nullable Map for retryRequest');
     return TaskSnapshot(
+      taskKind: taskKind,
       taskId: _requiredNonEmptyString(map, 'taskId'),
       state: state,
       phase: taskPhaseFromWireName(map['phase']),
       percent: percent,
       sourceUri: _requiredNonEmptyString(map, 'sourceUri'),
       outputFileName: _requiredNonEmptyString(map, 'outputFileName'),
-      retryRequest: retryRequestValue == null
-          ? null
-          : ProcessRequest.fromChannelMap(
-              retryRequestValue is Map<Object?, Object?>
-                  ? retryRequestValue
-                  : throw const FormatException(
-                      'Expected nullable Map for retryRequest',
-                    ),
-            ),
+      retryRequest:
+          taskKind == TaskKind.videoCompression && retryRequestMap != null
+          ? ProcessRequest.fromChannelMap(retryRequestMap)
+          : null,
+      audioRetryRequest:
+          taskKind == TaskKind.audioExtraction && retryRequestMap != null
+          ? AudioExtractRequest.fromChannelMap(retryRequestMap)
+          : null,
       outputLocationLabel:
           _optionalString(map, 'outputLocationLabel') ??
           '系统相册 > Movies > VideoSlim',
@@ -77,6 +92,9 @@ final class TaskSnapshot {
       errorMessage: _optionalString(map, 'errorMessage'),
     );
   }
+
+  /// Media operation represented by this snapshot.
+  final TaskKind taskKind;
 
   /// Engine task identifier.
   final String taskId;
@@ -98,6 +116,9 @@ final class TaskSnapshot {
 
   /// Immutable original request used only for explicit user-invoked retries.
   final ProcessRequest? retryRequest;
+
+  /// Immutable audio request used only for an explicit user-invoked retry.
+  final AudioExtractRequest? audioRetryRequest;
 
   /// User-facing output destination label.
   final String outputLocationLabel;
@@ -126,13 +147,17 @@ final class TaskSnapshot {
 
   /// Converts this snapshot to the exact platform-channel map.
   Map<String, Object?> toMap() => <String, Object?>{
+    'taskKind': taskKind.wireName,
     'taskId': taskId,
     'state': state.wireName,
     'phase': phase.wireName,
     'percent': percent,
     'sourceUri': sourceUri,
     'outputFileName': outputFileName,
-    'retryRequest': retryRequest?.toChannelMap(),
+    'retryRequest': switch (taskKind) {
+      TaskKind.videoCompression => retryRequest?.toChannelMap(),
+      TaskKind.audioExtraction => audioRetryRequest?.toChannelMap(),
+    },
     'outputLocationLabel': outputLocationLabel,
     'videoDecoderMode': videoDecoderMode.wireName,
     'actualVideoEncodingMode': actualVideoEncodingMode.wireName,

@@ -20,13 +20,20 @@ internal data class ProcessingNotificationText(
     companion object {
         fun from(snapshot: TaskRuntimeSnapshot): ProcessingNotificationText {
             val progress = snapshot.percent.roundToInt().coerceIn(0, 100)
+            val isAudio = snapshot.taskKind == TaskKind.AUDIO_EXTRACTION
             return when (snapshot.state) {
-                TaskRuntimeSnapshot.STATE_RUNNING -> running(snapshot, progress)
+                TaskRuntimeSnapshot.STATE_RUNNING ->
+                    if (isAudio) audioRunning(snapshot, progress) else running(snapshot, progress)
 
                 TaskRuntimeSnapshot.STATE_SUCCESS ->
                     ProcessingNotificationText(
-                        title = "视频已压缩并保存",
-                        body = "已保存到 ${snapshot.outputLocationLabel} · ${encodingModeText(snapshot)}",
+                        title = if (isAudio) "音频已提取并保存" else "视频已压缩并保存",
+                        body =
+                            if (isAudio) {
+                                "已保存到 ${snapshot.outputLocationLabel}"
+                            } else {
+                                "已保存到 ${snapshot.outputLocationLabel} · ${encodingModeText(snapshot)}"
+                            },
                         progress = 100,
                         ongoing = false,
                         showCancel = false,
@@ -34,8 +41,13 @@ internal data class ProcessingNotificationText(
 
                 TaskRuntimeSnapshot.STATE_FAILED ->
                     ProcessingNotificationText(
-                        title = "没能完成压缩",
-                        body = "${failureBody(snapshot)} · ${encodingModeText(snapshot)}",
+                        title = if (isAudio) "没能完成音频提取" else "没能完成压缩",
+                        body =
+                            if (isAudio) {
+                                audioFailureBody(snapshot.errorCode)
+                            } else {
+                                "${failureBody(snapshot)} · ${encodingModeText(snapshot)}"
+                            },
                         progress = progress,
                         ongoing = false,
                         showCancel = false,
@@ -43,8 +55,13 @@ internal data class ProcessingNotificationText(
 
                 TaskRuntimeSnapshot.STATE_CANCELLED ->
                     ProcessingNotificationText(
-                        title = "压缩已取消",
-                        body = "原视频没有被修改",
+                        title = if (isAudio) "音频提取已取消" else "压缩已取消",
+                        body =
+                            if (isAudio) {
+                                "原视频和已保存文件没有被修改"
+                            } else {
+                                "原视频没有被修改"
+                            },
                         progress = progress,
                         ongoing = false,
                         showCancel = false,
@@ -52,6 +69,34 @@ internal data class ProcessingNotificationText(
 
                 else -> throw IllegalArgumentException("Unknown task state: ${snapshot.state}")
             }
+        }
+
+        private fun audioRunning(
+            snapshot: TaskRuntimeSnapshot,
+            progress: Int,
+        ): ProcessingNotificationText {
+            val converting = audioMode(snapshot) == AudioExtractMode.AAC.wireName
+            val title =
+                when (snapshot.phase) {
+                    TaskRuntimeSnapshot.PHASE_PREPARING -> "正在准备音频提取"
+                    TaskRuntimeSnapshot.PHASE_PUBLISHING -> "正在保存音频"
+                    TaskRuntimeSnapshot.PHASE_CANCELLING -> "正在取消音频提取"
+                    else -> if (converting) "正在转换音频" else "正在提取音频"
+                }
+            val body =
+                when (snapshot.phase) {
+                    TaskRuntimeSnapshot.PHASE_PREPARING -> "正在检查音轨和可用空间"
+                    TaskRuntimeSnapshot.PHASE_PUBLISHING -> "正在保存到 ${snapshot.outputLocationLabel}"
+                    TaskRuntimeSnapshot.PHASE_CANCELLING -> "正在停止任务并清理未完成文件"
+                    else -> "已完成 $progress%"
+                }
+            return ProcessingNotificationText(
+                title = title,
+                body = body,
+                progress = progress,
+                ongoing = true,
+                showCancel = snapshot.phase != TaskRuntimeSnapshot.PHASE_CANCELLING,
+            )
         }
 
         private fun running(
@@ -102,6 +147,26 @@ internal data class ProcessingNotificationText(
                 else -> throw IllegalArgumentException("Unknown task phase: ${snapshot.phase}")
             }
 
+        private fun audioMode(snapshot: TaskRuntimeSnapshot): String? =
+            ((snapshot.retryRequest?.get("audio") as? Map<*, *>)?.get("mode") as? String)
+
+        private fun audioFailureBody(errorCode: String?): String =
+            when (errorCode) {
+                EngineErrorCode.INSUFFICIENT_STORAGE.wireName -> "存储空间不足，请释放空间后重试"
+                EngineErrorCode.SOURCE_PERMISSION_LOST.wireName -> "无法继续读取视频，请重新选择文件"
+                EngineErrorCode.SOURCE_UNAVAILABLE.wireName -> "所选视频已移动、删除或暂时不可用"
+                EngineErrorCode.SOURCE_PROVIDER_FAILED.wireName -> "手机无法持续读取音轨，请重新选择或稍后重试"
+                EngineErrorCode.SOURCE_CORRUPTED.wireName -> "无法读取这个视频，文件可能损坏或格式不受支持"
+                EngineErrorCode.AUDIO_TRACK_MISSING.wireName -> "这个视频没有可提取的音轨"
+                EngineErrorCode.AUDIO_COPY_UNSUPPORTED.wireName -> "源音轨不是 AAC，请打开 VideoSlim 改用 AAC 转码"
+                EngineErrorCode.AUDIO_CHANNEL_LAYOUT_UNSUPPORTED.wireName -> "暂不支持超过双声道的音频"
+                EngineErrorCode.AUDIO_DECODING_FAILED.wireName -> "手机无法读取源音频，原视频没有被修改"
+                EngineErrorCode.AUDIO_ENCODING_FAILED.wireName -> "手机没能完成 AAC 音频编码，原视频没有被修改"
+                EngineErrorCode.AUDIO_OUTPUT_INVALID.wireName -> "提取结果不完整，没有保存公共输出"
+                EngineErrorCode.OUTPUT_PERMISSION_LOST.wireName -> "保存文件夹权限已失效，请重新选择"
+                else -> "音频提取失败，请打开 VideoSlim 查看详情"
+            }
+
         private fun failureBody(snapshot: TaskRuntimeSnapshot): String =
             when (snapshot.errorCode) {
                 EngineErrorCode.INSUFFICIENT_STORAGE.wireName -> "存储空间不足，请释放空间后重试"
@@ -145,10 +210,10 @@ internal class ProcessingNotificationFactory(context: Context) {
             notificationManager.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_ID,
-                    "视频压缩任务",
+                    "媒体处理任务",
                     NotificationManager.IMPORTANCE_LOW,
                 ).apply {
-                    description = "显示本机视频压缩进度"
+                    description = "显示本机视频压缩或音频提取进度"
                     setShowBadge(false)
                 },
             )

@@ -37,6 +37,21 @@ internal object MediaActionPolicy {
     }
 }
 
+internal enum class MediaActionMediaKind(
+    val mimeType: String,
+    val chooserTitle: String,
+) {
+    VIDEO("video/mp4", "分享压缩视频"),
+    AUDIO("audio/mp4", "分享提取的音频"),
+    ;
+
+    companion object {
+        fun fromResolvedMimeType(value: String?): MediaActionMediaKind =
+            entries.firstOrNull { it.mimeType == value }
+                ?: throw IllegalArgumentException("仅支持 VideoSlim 生成的 MP4 视频或 M4A 音频")
+    }
+}
+
 internal class MediaActionsChannel(
     private val activity: Activity,
     private val channel: MethodChannel,
@@ -95,28 +110,33 @@ internal class MediaActionsChannel(
     }
 
     private fun openMedia(uri: Uri) {
+        val mediaKind = mediaKind(uri)
         val intent =
             Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "video/*")
+                setDataAndType(uri, mediaKind.mimeType)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 clipData = ClipData.newUri(resolver, "VideoSlim 输出", uri)
             }
-        require(intent.resolveActivity(activity.packageManager) != null) { "没有可用的视频播放器" }
+        require(intent.resolveActivity(activity.packageManager) != null) { "没有可用的媒体播放器" }
         activity.startActivity(intent)
     }
 
     private fun shareMedia(uri: Uri) {
+        val mediaKind = mediaKind(uri)
         val sendIntent =
             Intent(Intent.ACTION_SEND).apply {
-                type = "video/mp4"
+                type = mediaKind.mimeType
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 clipData = ClipData.newUri(resolver, "VideoSlim 输出", uri)
             }
-        val chooser = Intent.createChooser(sendIntent, "分享压缩后的视频")
+        val chooser = Intent.createChooser(sendIntent, mediaKind.chooserTitle)
         require(chooser.resolveActivity(activity.packageManager) != null) { "没有可用的分享应用" }
         activity.startActivity(chooser)
     }
+
+    private fun mediaKind(uri: Uri): MediaActionMediaKind =
+        MediaActionMediaKind.fromResolvedMimeType(resolver.getType(uri))
 
     private fun deleteSource(
         originalUri: Uri,
@@ -213,7 +233,7 @@ internal class MediaActionsChannel(
     ) {
         val message =
             when (error) {
-                is SecurityException -> "系统未授予此视频的操作权限"
+                is SecurityException -> "系统未授予此媒体文件的操作权限"
                 is IllegalArgumentException -> error.message ?: "系统不支持此媒体操作"
                 else -> error.message?.takeIf { it.isNotBlank() } ?: "系统媒体操作失败"
             }

@@ -1,6 +1,7 @@
 package com.videoslim.videoslim
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.fail
 import org.junit.Test
 
@@ -36,6 +37,25 @@ class MediaActionPolicyTest {
 
         assertRejected("oversized URI") {
             MediaActionPolicy.validatedContentUri(oversized)
+        }
+    }
+
+    @Test
+    fun acceptsOnlyExactVideoSlimOutputMimeTypes() {
+        assertEquals(
+            MediaActionMediaKind.VIDEO,
+            MediaActionMediaKind.fromResolvedMimeType("video/mp4"),
+        )
+        assertEquals(
+            MediaActionMediaKind.AUDIO,
+            MediaActionMediaKind.fromResolvedMimeType("audio/mp4"),
+        )
+        assertEquals("分享压缩视频", MediaActionMediaKind.VIDEO.chooserTitle)
+        assertEquals("分享提取的音频", MediaActionMediaKind.AUDIO.chooserTitle)
+        listOf(null, "audio/m4a", "audio/aac", "video/webm", "application/octet-stream").forEach {
+            assertThrows(IllegalArgumentException::class.java) {
+                MediaActionMediaKind.fromResolvedMimeType(it)
+            }
         }
     }
 

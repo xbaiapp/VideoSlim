@@ -1,3 +1,4 @@
+import '../models/audio_info.dart';
 import '../models/device_capabilities.dart';
 import '../models/process_request.dart';
 import '../models/progress_event.dart';
@@ -8,6 +9,10 @@ import '../models/video_info.dart';
 abstract class VideoEngine {
   /// Reads complete technical metadata for [uri].
   Future<VideoInfo> getVideoInfo(String uri);
+
+  /// Reads audio-specific metadata without invoking the video metadata path.
+  Future<AudioInfo> getAudioInfo(String uri) =>
+      throw UnimplementedError('getAudioInfo is not implemented');
 
   /// Starts one combined process operation and returns its task identifier.
   Future<String> process(ProcessRequest request);

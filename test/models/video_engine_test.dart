@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:videoslim/engine/video_engine.dart';
 import 'package:videoslim/models/device_capabilities.dart';
+import 'package:videoslim/models/audio_info.dart';
 import 'package:videoslim/models/process_request.dart';
 import 'package:videoslim/models/progress_event.dart';
 import 'package:videoslim/models/task_snapshot.dart';
@@ -23,7 +24,8 @@ void main() {
       const extractRequest = AudioExtractRequest(
         uri: 'content://video',
         outputFileName: 'out.m4a',
-        lossless: true,
+        outputLocationLabel: '系统音频 > Music > VideoSlim',
+        mode: AudioExtractMode.copy,
       );
 
       expect(
@@ -66,6 +68,18 @@ class _FakeVideoEngine implements VideoEngine {
   @override
   Future<String> extractAudio(AudioExtractRequest request) async =>
       'extract-task';
+
+  @override
+  Future<AudioInfo> getAudioInfo(String uri) async => AudioInfo(
+    uri: uri,
+    fileName: 'audio.m4a',
+    fileSizeBytes: 1,
+    durationMs: 1,
+    container: 'audio/mp4',
+    audioCodec: 'audio/mp4a-latm',
+    audioChannels: 2,
+    audioSampleRate: 48000,
+  );
 
   @override
   Future<DeviceCapabilities> getCapabilities() async =>

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:videoslim/models/progress_event.dart';
+import 'package:videoslim/models/task_kind.dart';
 
 void main() {
   group('TaskState', () {
@@ -17,6 +18,7 @@ void main() {
   group('ProgressEvent', () {
     test('parses Number-compatible percent and nullable result fields', () {
       final event = ProgressEvent.fromMap(<Object?, Object?>{
+        'taskKind': 'video_compression',
         'taskId': 'task-1',
         'percent': 40,
         'state': 'running',
@@ -49,6 +51,7 @@ void main() {
       final map = event.toMap();
 
       expect(map, <String, Object?>{
+        'taskKind': 'video_compression',
         'taskId': 'task-2',
         'percent': 100.0,
         'state': 'success',
@@ -62,6 +65,20 @@ void main() {
         'errorMessage': null,
       });
       expect(ProgressEvent.fromMap(map).toMap(), map);
+    });
+
+    test('audio progress requires and preserves explicit task kind', () {
+      final event = ProgressEvent.fromMap(<Object?, Object?>{
+        'taskKind': 'audio_extraction',
+        'taskId': 'audio-task',
+        'percent': 81,
+        'state': 'running',
+        'phase': 'publishing',
+      });
+
+      expect(event.taskKind, TaskKind.audioExtraction);
+      expect(event.phase, TaskPhase.publishing);
+      expect(event.toMap()['taskKind'], 'audio_extraction');
     });
 
     test('rejects idle because it is not a progress-event wire state', () {

@@ -145,6 +145,74 @@ class ProcessingNotificationTextTest {
         assertEquals("原视频没有被修改", cancelled.body)
     }
 
+    @Test
+    fun `audio notifications use extraction and conversion language without video encoding claims`() {
+        val copy =
+            ProcessingNotificationText.from(
+                snapshot(
+                    state = "running",
+                    percent = 25.0,
+                    taskKind = TaskKind.AUDIO_EXTRACTION,
+                    audioMode = "copy",
+                ),
+            )
+        val aac =
+            ProcessingNotificationText.from(
+                snapshot(
+                    state = "running",
+                    percent = 50.0,
+                    taskKind = TaskKind.AUDIO_EXTRACTION,
+                    audioMode = "aac",
+                ),
+            )
+        val success =
+            ProcessingNotificationText.from(
+                snapshot(
+                    state = "success",
+                    percent = 100.0,
+                    phase = TaskRuntimeSnapshot.PHASE_FINISHED,
+                    outputUri = "content://media/audio/1",
+                    taskKind = TaskKind.AUDIO_EXTRACTION,
+                    audioMode = "aac",
+                ),
+            )
+
+        assertEquals("正在提取音频", copy.title)
+        assertEquals("正在转换音频", aac.title)
+        assertEquals("音频已提取并保存", success.title)
+        listOf(copy.body, aac.body, success.body).forEach { body ->
+            assertFalse(body.contains("视频压缩"))
+            assertFalse(body.contains("编码方式"))
+        }
+    }
+
+    @Test
+    fun `audio copy failure guides AAC retry and audio cancellation is task correct`() {
+        val failed =
+            ProcessingNotificationText.from(
+                snapshot(
+                    state = "failed",
+                    percent = 10.0,
+                    taskKind = TaskKind.AUDIO_EXTRACTION,
+                    audioMode = "copy",
+                    errorCode = EngineErrorCode.AUDIO_COPY_UNSUPPORTED.wireName,
+                ),
+            )
+        val cancelled =
+            ProcessingNotificationText.from(
+                snapshot(
+                    state = "cancelled",
+                    percent = 10.0,
+                    taskKind = TaskKind.AUDIO_EXTRACTION,
+                    audioMode = "copy",
+                ),
+            )
+
+        assertEquals("没能完成音频提取", failed.title)
+        assertTrue(failed.body.contains("改用 AAC 转码"))
+        assertEquals("音频提取已取消", cancelled.title)
+    }
+
     private fun snapshot(
         state: String,
         percent: Double,
@@ -153,6 +221,8 @@ class ProcessingNotificationTextTest {
         errorCode: String? = null,
         errorMessage: String? = null,
         videoDecoderMode: String = VideoDecoderMode.HARDWARE.wireName,
+        taskKind: TaskKind = TaskKind.VIDEO_COMPRESSION,
+        audioMode: String? = null,
     ) =
         TaskRuntimeSnapshot(
             taskId = "task-1",
@@ -166,5 +236,10 @@ class ProcessingNotificationTextTest {
             errorCode = errorCode,
             errorMessage = errorMessage,
             videoDecoderMode = videoDecoderMode,
+            taskKind = taskKind,
+            retryRequest =
+                audioMode?.let { mode ->
+                    mapOf("audio" to mapOf("mode" to mode, "bitrate" to null))
+                },
         )
 }

@@ -54,12 +54,7 @@ internal class EngineChannel(
             "getCapabilities" -> getCapabilities(call.arguments, result)
             "getTaskSnapshot" -> getTaskSnapshot(call.arguments, result)
             "process" -> process(call.arguments, result)
-            "extractAudio" ->
-                replyError(
-                    result,
-                    EngineFailure(EngineErrorCode.UNKNOWN, "M1 暂不支持音频提取"),
-                    null,
-                )
+            "extractAudio" -> extractAudio(call.arguments, result)
             "cancel" -> cancel(call.arguments, result)
             else -> result.notImplemented()
         }
@@ -245,6 +240,82 @@ internal class EngineChannel(
         }
     }
 
+    private fun extractAudio(arguments: Any?, result: MethodChannel.Result) {
+        val request =
+            try {
+                AudioExtractRequest.parse(arguments)
+            } catch (error: ProcessRequestException) {
+                replyError(result, error.error, error)
+                return
+            } catch (error: Throwable) {
+                replyError(result, EngineFailure(EngineErrorCode.UNKNOWN, "音频提取参数无效"), error)
+                return
+            }
+        try {
+            transcodeEngine.validateOutputDestination(request.outputTreeUri)
+        } catch (error: EngineOperationException) {
+            replyError(result, error.failure, error)
+            return
+        }
+        if (waitingForLegacyPermission || waitingForNotificationPermission) {
+            replyError(
+                result,
+                EngineFailure(EngineErrorCode.UNKNOWN, "正在等待系统权限，请勿重复提交"),
+                null,
+            )
+            return
+        }
+        val requestNotificationAndLaunch: () -> Unit = {
+            waitingForNotificationPermission = true
+            requestNotificationPermission notificationPermission@{ notificationGranted ->
+                if (disposed) return@notificationPermission
+                waitingForNotificationPermission = false
+                if (!notificationGranted) {
+                    replyError(
+                        result,
+                        EngineFailure(
+                            EngineErrorCode.UNKNOWN,
+                            "后台提取音频需要通知权限，请在系统设置中允许通知",
+                        ),
+                        null,
+                    )
+                    return@notificationPermission
+                }
+                try {
+                    val taskId = ProcessingRuntime.launchAudio(context, arguments, request)
+                    val response = mapOf("taskId" to taskId)
+                    log("method=extractAudio response=$response")
+                    result.success(response)
+                } catch (error: EngineOperationException) {
+                    replyError(result, error.failure, error)
+                } catch (error: Throwable) {
+                    replyError(result, EngineErrorMapper.fromThrowable(error), error)
+                }
+            }
+        }
+        if (request.outputTreeUri != null) {
+            requestNotificationAndLaunch()
+            return
+        }
+        waitingForLegacyPermission = true
+        requestLegacyWritePermission legacyPermission@{ granted ->
+            if (disposed) return@legacyPermission
+            waitingForLegacyPermission = false
+            if (!granted) {
+                replyError(
+                    result,
+                    EngineFailure(
+                        EngineErrorCode.UNKNOWN,
+                        "Android 8–9 保存音频需要存储写入权限",
+                    ),
+                    null,
+                )
+                return@legacyPermission
+            }
+            requestNotificationAndLaunch()
+        }
+    }
+
     private fun cancel(arguments: Any?, result: MethodChannel.Result) {
         val taskId =
             try {
@@ -305,7 +376,7 @@ internal class EngineChannel(
                     AudioMetadataException.SOURCE_CORRUPTED ->
                         EngineFailure(EngineErrorCode.SOURCE_CORRUPTED, error.message)
                     AudioMetadataException.NO_AUDIO_TRACK ->
-                        EngineFailure(EngineErrorCode.NO_AUDIO_TRACK, error.message)
+                        EngineFailure(EngineErrorCode.AUDIO_TRACK_MISSING, error.message)
                     else -> EngineFailure(EngineErrorCode.UNKNOWN, error.message)
                 }
             else -> EngineErrorMapper.fromThrowable(error)

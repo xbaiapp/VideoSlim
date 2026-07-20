@@ -35,6 +35,7 @@ internal data class EncodedAudioCopyResult(
     val sampleCount: Long,
     val totalBytes: Long,
     val firstInputTimeUs: Long,
+    val lastInputTimeUs: Long,
     val lastOutputTimeUs: Long,
 )
 
@@ -65,6 +66,8 @@ internal fun copyEncodedAudioSamples(
     var lastOutputTimeUs = -1L
     var sampleCount = 0L
     var totalBytes = 0L
+    var lastInputTimeUs = -1L
+    var lastProgress = 0.0
     while (true) {
         if (shouldCancel() || Thread.currentThread().isInterrupted) {
             throw CancellationException("Audio extraction cancelled")
@@ -76,6 +79,13 @@ internal fun copyEncodedAudioSamples(
         if (size < 0) break
         if (size > buffer.capacity()) {
             throw IOException("Audio sample exceeds the bounded copy buffer")
+        }
+        if (size == 0) {
+            if (!source.advance()) break
+            continue
+        }
+        if (shouldCancel() || Thread.currentThread().isInterrupted) {
+            throw CancellationException("Audio extraction cancelled before sample write")
         }
         val baseTimeUs = firstInputTimeUs ?: inputTimeUs.also { firstInputTimeUs = it }
         val rebasedTimeUs = (inputTimeUs - baseTimeUs).coerceAtLeast(0L)
@@ -97,6 +107,7 @@ internal fun copyEncodedAudioSamples(
         sink.writeSampleData(buffer, info)
         sampleCount += 1L
         totalBytes += size.toLong()
+        lastInputTimeUs = inputTimeUs
         lastOutputTimeUs = outputTimeUs
         val progress =
             if (durationUs > 0L) {
@@ -104,8 +115,12 @@ internal fun copyEncodedAudioSamples(
             } else {
                 0.0
             }
-        onProgress(progress)
+        lastProgress = max(lastProgress, progress)
+        onProgress(lastProgress)
         if (!source.advance()) break
+    }
+    if (shouldCancel() || Thread.currentThread().isInterrupted) {
+        throw CancellationException("Audio extraction cancelled after sample copy")
     }
     if (sampleCount <= 0L || firstInputTimeUs == null) {
         throw IOException("Audio track contains no readable samples")
@@ -115,6 +130,7 @@ internal fun copyEncodedAudioSamples(
         sampleCount = sampleCount,
         totalBytes = totalBytes,
         firstInputTimeUs = firstInputTimeUs,
+        lastInputTimeUs = lastInputTimeUs,
         lastOutputTimeUs = lastOutputTimeUs,
     )
 }

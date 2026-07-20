@@ -22,6 +22,7 @@ class ProcessingRegistryTest {
         assertEquals("task-1", snapshot.taskId)
         assertEquals(
             mapOf(
+                "taskKind" to "video_compression",
                 "taskId" to "task-1",
                 "percent" to 0.0,
                 "state" to "running",
@@ -65,6 +66,32 @@ class ProcessingRegistryTest {
                 videoDecoderMode = "automatic",
             )
         }
+    }
+
+    @Test
+    fun `audio reservation keeps explicit kind and retry request in events and snapshots`() {
+        val retryRequest =
+            mapOf<String, Any?>(
+                "uri" to "content://media/source/audio",
+                "outputFileName" to "source_slim.m4a",
+                "destination" to mapOf("treeUri" to null, "label" to "系统音频 > Music > VideoSlim"),
+                "audio" to mapOf("mode" to "aac", "bitrate" to 128_000),
+            )
+        val snapshot =
+            ProcessingRegistry().reserve(
+                taskKind = TaskKind.AUDIO_EXTRACTION,
+                taskId = "audio-task",
+                sourceUri = "content://media/source/audio",
+                outputFileName = "source_slim.m4a",
+                outputLocationLabel = "系统音频 > Music > VideoSlim",
+                retryRequest = retryRequest,
+                startedAtEpochMs = 42L,
+            )
+
+        assertEquals("audio_extraction", snapshot.toProgressMap()["taskKind"])
+        assertEquals("audio_extraction", snapshot.toSnapshotMap()["taskKind"])
+        assertEquals(retryRequest, snapshot.toSnapshotMap()["retryRequest"])
+        assertEquals("系统音频 > Music > VideoSlim", snapshot.toProgressMap()["outputLocationLabel"])
     }
 
     @Test

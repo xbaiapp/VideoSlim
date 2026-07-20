@@ -1,3 +1,5 @@
+import 'task_kind.dart';
+
 /// Lifecycle state for a processing task.
 enum TaskState { idle, running, success, failed, cancelled }
 
@@ -89,6 +91,7 @@ TaskState taskStateFromWireName(Object? value) => switch (value) {
 class ProgressEvent {
   /// Creates an immutable progress event.
   const ProgressEvent({
+    this.taskKind = TaskKind.videoCompression,
     required this.taskId,
     required this.percent,
     required this.state,
@@ -112,6 +115,7 @@ class ProgressEvent {
       );
     }
     return ProgressEvent(
+      taskKind: taskKindFromWireName(map['taskKind']),
       taskId: map['taskId'] as String,
       percent: (map['percent'] as num).toDouble(),
       state: state,
@@ -130,6 +134,9 @@ class ProgressEvent {
       errorMessage: map['errorMessage'] as String?,
     );
   }
+
+  /// Media operation represented by this event.
+  final TaskKind taskKind;
 
   /// Identifier returned by the operation that started this task.
   final String taskId;
@@ -166,6 +173,7 @@ class ProgressEvent {
 
   /// Converts this event to the exact platform-channel map.
   Map<String, Object?> toMap() => <String, Object?>{
+    'taskKind': taskKind.wireName,
     'taskId': taskId,
     'percent': percent,
     'state': state.wireName,

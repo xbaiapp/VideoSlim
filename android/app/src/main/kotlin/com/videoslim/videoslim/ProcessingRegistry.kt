@@ -8,6 +8,7 @@ internal data class TaskRuntimeSnapshot(
     val sourceUri: String,
     val outputFileName: String,
     val startedAtEpochMs: Long,
+    val taskKind: TaskKind = TaskKind.VIDEO_COMPRESSION,
     val retryRequest: Map<String, Any?>? = null,
     val outputLocationLabel: String = DEFAULT_OUTPUT_LOCATION_LABEL,
     val videoDecoderMode: String = VideoDecoderMode.HARDWARE.wireName,
@@ -18,6 +19,7 @@ internal data class TaskRuntimeSnapshot(
 ) {
     fun toProgressMap(): Map<String, Any?> =
         linkedMapOf(
+            "taskKind" to taskKind.wireName,
             "taskId" to taskId,
             "percent" to percent,
             "state" to state,
@@ -72,6 +74,7 @@ internal class ProcessingRegistry {
         sourceUri: String,
         outputFileName: String,
         startedAtEpochMs: Long,
+        taskKind: TaskKind = TaskKind.VIDEO_COMPRESSION,
         outputLocationLabel: String = TaskRuntimeSnapshot.DEFAULT_OUTPUT_LOCATION_LABEL,
         videoDecoderMode: String = VideoDecoderMode.HARDWARE.wireName,
         retryRequest: Map<String, Any?>? = null,
@@ -90,6 +93,7 @@ internal class ProcessingRegistry {
             check(current?.isTerminal != false) { "A processing task is already running" }
             snapshot =
                 TaskRuntimeSnapshot(
+                    taskKind = taskKind,
                     taskId = taskId,
                     percent = 0.0,
                     state = TaskRuntimeSnapshot.STATE_RUNNING,

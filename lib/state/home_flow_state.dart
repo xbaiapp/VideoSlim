@@ -1,8 +1,11 @@
 import 'package:flutter/foundation.dart';
 
+import '../models/audio_extract_request.dart';
+import '../models/audio_info.dart';
 import '../models/compression_settings.dart';
 import '../models/device_capabilities.dart';
 import '../models/progress_event.dart';
+import '../models/task_kind.dart';
 import '../models/video_info.dart';
 
 /// Provider-backed user-visible snapshot for the complete M2 workflow.
@@ -31,6 +34,7 @@ final class HomeFlowState extends ChangeNotifier {
   bool mediaActionBusy = false;
   bool capabilitiesLoading = false;
   bool etaStalled = false;
+  TaskKind activeTaskKind = TaskKind.videoCompression;
   TaskPhase taskPhase = TaskPhase.preparing;
   double percent = 0;
   Duration elapsed = Duration.zero;
@@ -43,6 +47,7 @@ final class HomeFlowState extends ChangeNotifier {
   String? publishedOutputFileName;
   VideoInfo? sourceInfo;
   VideoInfo? outputInfo;
+  AudioInfo? outputAudioInfo;
   DeviceCapabilities? capabilities;
   CompressionPreset? selectedPreset = CompressionPreset.balanced;
   CompressionResolution customResolution = CompressionResolution.original;
@@ -50,6 +55,9 @@ final class HomeFlowState extends ChangeNotifier {
   int customVideoBitrate = 2500000;
   CompressionAudioMode customAudioMode = CompressionAudioMode.copy;
   int customAudioBitrate = 128000;
+  AudioExtractMode audioExtractMode = AudioExtractMode.copy;
+  int audioExtractBitrate = 128000;
+  AudioExtractRequest? lastAudioExtractRequest;
   Stopwatch? processStopwatch;
 
   bool get interactionLocked =>

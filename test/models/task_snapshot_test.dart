@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:videoslim/models/progress_event.dart';
+import 'package:videoslim/models/process_request.dart';
 import 'package:videoslim/models/task_snapshot.dart';
+import 'package:videoslim/models/task_kind.dart';
 
 void main() {
   group('TaskSnapshot', () {
@@ -19,6 +21,7 @@ void main() {
       });
 
       expect(snapshot.taskId, 'task-42');
+      expect(snapshot.taskKind, TaskKind.videoCompression);
       expect(snapshot.state, TaskState.failed);
       expect(snapshot.phase, TaskPhase.finished);
       expect(snapshot.percent, 72.0);
@@ -45,6 +48,7 @@ void main() {
       );
 
       expect(snapshot.toMap(), <String, Object?>{
+        'taskKind': 'video_compression',
         'taskId': 'task-running',
         'state': 'running',
         'phase': 'encoding',
@@ -62,6 +66,40 @@ void main() {
       });
       expect(TaskSnapshot.fromMap(snapshot.toMap()).toMap(), snapshot.toMap());
     });
+
+    test(
+      'audio snapshot round trips its exact retry request and destination',
+      () {
+        const retry = AudioExtractRequest(
+          uri: 'content://media/video/audio-source',
+          outputFileName: 'audio_slim_20260720_120000.m4a',
+          outputLocationLabel: '系统音频 > Music > VideoSlim',
+          mode: AudioExtractMode.aac,
+          bitrate: 96000,
+        );
+        const snapshot = TaskSnapshot(
+          taskKind: TaskKind.audioExtraction,
+          taskId: 'audio-task',
+          state: TaskState.failed,
+          phase: TaskPhase.finished,
+          percent: 52,
+          sourceUri: 'content://media/video/audio-source',
+          outputFileName: 'audio_slim_20260720_120000.m4a',
+          audioRetryRequest: retry,
+          outputLocationLabel: '系统音频 > Music > VideoSlim',
+          startedAtEpochMs: 1784548800000,
+          errorCode: 'AUDIO_ENCODING_FAILED',
+        );
+
+        final decoded = TaskSnapshot.fromMap(snapshot.toMap());
+
+        expect(decoded.taskKind, TaskKind.audioExtraction);
+        expect(decoded.retryRequest, isNull);
+        expect(decoded.audioRetryRequest?.toChannelMap(), retry.toChannelMap());
+        expect(decoded.outputLocationLabel, '系统音频 > Music > VideoSlim');
+        expect(decoded.toMap(), snapshot.toMap());
+      },
+    );
 
     test('rejects idle, malformed required values, and fractional epochs', () {
       Map<Object?, Object?> valid() => <Object?, Object?>{

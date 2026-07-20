@@ -11,8 +11,10 @@ import 'package:videoslim/logging/app_logger.dart';
 import 'package:videoslim/models/compression_settings.dart';
 import 'package:videoslim/models/device_capabilities.dart';
 import 'package:videoslim/models/output_location.dart';
+import 'package:videoslim/models/audio_info.dart';
 import 'package:videoslim/models/process_request.dart';
 import 'package:videoslim/models/progress_event.dart';
+import 'package:videoslim/models/task_kind.dart';
 import 'package:videoslim/models/task_snapshot.dart';
 import 'package:videoslim/models/video_info.dart';
 import 'package:videoslim/state/home_flow_state.dart';
@@ -91,6 +93,8 @@ final class _FakeEngine implements VideoEngine {
   final Map<String, Completer<VideoInfo>> metadataCompleters =
       <String, Completer<VideoInfo>>{};
   final Map<String, Object> metadataErrors = <String, Object>{};
+  final Map<String, AudioInfo> audioInfoByUri = <String, AudioInfo>{};
+  final Map<String, Object> audioMetadataErrors = <String, Object>{};
   DeviceCapabilities capabilities = const DeviceCapabilities(
     hevcEncoder: true,
     h264Encoder: true,
@@ -99,14 +103,20 @@ final class _FakeEngine implements VideoEngine {
   Completer<DeviceCapabilities>? capabilitiesCompleter;
   Object? processError;
   Completer<String>? processCompleter;
+  Object? audioProcessError;
+  Completer<String>? audioProcessCompleter;
   Object? cancelError;
   Completer<void>? cancelCompleter;
   String taskId = 'task-1';
   TaskSnapshot? snapshot;
   Completer<TaskSnapshot?>? snapshotCompleter;
   ProcessRequest? lastRequest;
+  AudioExtractRequest? lastAudioRequest;
   final List<ProcessRequest> processRequests = <ProcessRequest>[];
+  final List<AudioExtractRequest> audioProcessRequests =
+      <AudioExtractRequest>[];
   final List<String> metadataCalls = <String>[];
+  final List<String> audioMetadataCalls = <String>[];
   final List<String> cancelCalls = <String>[];
 
   @override
@@ -132,6 +142,21 @@ final class _FakeEngine implements VideoEngine {
       throw const VideoEngineException(
         code: 'SOURCE_CORRUPTED',
         message: '测试素材不存在',
+      );
+    }
+    return info;
+  }
+
+  @override
+  Future<AudioInfo> getAudioInfo(String uri) async {
+    audioMetadataCalls.add(uri);
+    final error = audioMetadataErrors[uri];
+    if (error != null) throw error;
+    final info = audioInfoByUri[uri];
+    if (info == null) {
+      throw const VideoEngineException(
+        code: 'AUDIO_OUTPUT_INVALID',
+        message: '测试音频素材不存在',
       );
     }
     return info;
@@ -176,7 +201,13 @@ final class _FakeEngine implements VideoEngine {
 
   @override
   Future<String> extractAudio(AudioExtractRequest request) {
-    throw UnimplementedError();
+    lastAudioRequest = request;
+    audioProcessRequests.add(request);
+    final completer = audioProcessCompleter;
+    if (completer != null) return completer.future;
+    final error = audioProcessError;
+    if (error != null) throw error;
+    return Future<String>.value(taskId);
   }
 
   Future<void> close() =>
@@ -185,6 +216,19 @@ final class _FakeEngine implements VideoEngine {
 
 const _sourceUri = 'content://media/video/source';
 const _outputUri = 'content://media/video/output';
+const _audioOutputUri = 'content://media/audio/output';
+
+const _audioInfo = AudioInfo(
+  uri: _audioOutputUri,
+  fileName: '旅行 视频_slim_20260719_010203.m4a',
+  fileSizeBytes: 1600000,
+  durationMs: 65000,
+  container: 'audio/mp4',
+  audioCodec: 'audio/mp4a-latm',
+  audioChannels: 2,
+  audioSampleRate: 48000,
+  audioBitrate: 192000,
+);
 
 VideoInfo _videoInfo({
   String uri = _sourceUri,
@@ -253,6 +297,14 @@ Future<void> _tapCompression(WidgetTester tester) async {
   await tester.pump();
 }
 
+Future<void> _tapAudioExtraction(WidgetTester tester) async {
+  final finder = find.byKey(const ValueKey<String>('extract-audio'));
+  await tester.ensureVisible(finder);
+  await tester.tap(finder);
+  await tester.pump();
+  await tester.pump();
+}
+
 void main() {
   testWidgets('initial screen exposes both import paths and F19 logs', (
     WidgetTester tester,
@@ -276,7 +328,7 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.byKey(const ValueKey<String>('future-audio-card')),
+      find.byKey(const ValueKey<String>('audio-extract-entry')),
       findsOneWidget,
     );
     expect(find.text('提取音频'), findsOneWidget);
@@ -285,7 +337,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('裁剪画面'), findsOneWidget);
-    expect(find.text('后续里程碑开放'), findsNWidgets(2));
+    expect(find.text('后续里程碑开放'), findsOneWidget);
     final providerContext = tester.element(find.text('视频瘦身，本机完成'));
     expect(
       Provider.of<HomeFlowState>(providerContext, listen: false),
@@ -1448,6 +1500,218 @@ void main() {
     expect(
       find.text('系统相册 > Movies > VideoSlim > 旅行_视频_slim.mp4'),
       findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'AAC copy extraction uses audio task copy and getAudioInfo result',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine()
+        ..audioInfoByUri[_audioOutputUri] = _audioInfo;
+      final picker = _FakePicker();
+      final mediaActions = _FakeMediaActions();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(
+          engine: engine,
+          picker: picker,
+          mediaActions: mediaActions,
+          logger: _logger(backend),
+        ),
+      );
+      await _selectGallery(tester, engine, picker);
+
+      expect(
+        find.byKey(const ValueKey<String>('m3-audio-extract-card')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('预计范围：'), findsOneWidget);
+      await _tapAudioExtraction(tester);
+
+      expect(engine.lastAudioRequest?.mode, AudioExtractMode.copy);
+      expect(engine.lastAudioRequest?.bitrate, isNull);
+      expect(
+        engine.lastAudioRequest?.outputLocationLabel,
+        '系统音频 > Music > VideoSlim',
+      );
+      expect(engine.lastRequest, isNull);
+
+      engine.progress.add(
+        const ProgressEvent(
+          taskKind: TaskKind.audioExtraction,
+          taskId: 'task-1',
+          percent: 35,
+          state: TaskState.running,
+          phase: TaskPhase.encoding,
+          outputLocationLabel: '系统音频 > Music > VideoSlim',
+        ),
+      );
+      await tester.pump();
+      expect(find.text('正在处理音频'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey<String>('actual-video-encoding-mode')),
+        findsNothing,
+      );
+
+      engine.progress.add(
+        const ProgressEvent(
+          taskKind: TaskKind.audioExtraction,
+          taskId: 'task-1',
+          percent: 100,
+          state: TaskState.success,
+          phase: TaskPhase.finished,
+          outputUri: _audioOutputUri,
+          outputFileName: '旅行 视频_slim_20260719_010203.m4a',
+          outputLocationLabel: '系统音频 > Music > VideoSlim',
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(engine.audioMetadataCalls, <String>[_audioOutputUri]);
+      expect(
+        engine.metadataCalls.where((value) => value == _audioOutputUri),
+        isEmpty,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('audio-result-card')),
+        findsOneWidget,
+      );
+      expect(find.text('音频提取完成'), findsOneWidget);
+
+      final open = find.byKey(const ValueKey<String>('open-audio-output'));
+      await tester.ensureVisible(open);
+      await tester.tap(open);
+      await tester.pump();
+      final share = find.byKey(const ValueKey<String>('share-audio-output'));
+      await tester.ensureVisible(share);
+      await tester.tap(share);
+      await tester.pump();
+      expect(mediaActions.opened, <String>[_audioOutputUri]);
+      expect(mediaActions.shared, <String>[_audioOutputUri]);
+    },
+  );
+
+  testWidgets(
+    'audio AAC mode exposes exactly four bitrates and preserves choice',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey<String>('audio-mode-aac')),
+      );
+      await tester.tap(find.byKey(const ValueKey<String>('audio-mode-aac')));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey<String>('audio-bitrate')));
+      await tester.pumpAndSettle();
+      for (final bitrate in <int>[192, 128, 96, 64]) {
+        expect(find.text('$bitrate kbps'), findsWidgets);
+      }
+      await tester.tap(find.text('96 kbps').last);
+      await tester.pumpAndSettle();
+      await _tapAudioExtraction(tester);
+
+      expect(engine.lastAudioRequest?.mode, AudioExtractMode.aac);
+      expect(engine.lastAudioRequest?.bitrate, 96000);
+    },
+  );
+
+  testWidgets('non-AAC copy failure offers one-click AAC retry', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapAudioExtraction(tester);
+    engine.progress.add(
+      const ProgressEvent(
+        taskKind: TaskKind.audioExtraction,
+        taskId: 'task-1',
+        percent: 0,
+        state: TaskState.failed,
+        phase: TaskPhase.preparing,
+        errorCode: 'AUDIO_COPY_UNSUPPORTED',
+        errorMessage: 'raw native detail must not be shown',
+      ),
+    );
+    await tester.pump();
+
+    expect(find.textContaining('原音轨不是 AAC'), findsOneWidget);
+    expect(find.textContaining('raw native detail'), findsNothing);
+    final retry = find.byKey(const ValueKey<String>('audio-aac-retry'));
+    await tester.ensureVisible(retry);
+    await tester.tap(retry);
+    await tester.pump();
+    await tester.pump();
+
+    expect(engine.audioProcessRequests, hasLength(2));
+    expect(engine.audioProcessRequests.last.mode, AudioExtractMode.aac);
+    expect(engine.audioProcessRequests.last.bitrate, 128000);
+  });
+
+  testWidgets('audio metadata failure keeps published actions without retry', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine()
+      ..audioMetadataErrors[_audioOutputUri] = const VideoEngineException(
+        code: 'AUDIO_OUTPUT_INVALID',
+        message: 'readback failed',
+      );
+    final picker = _FakePicker();
+    final mediaActions = _FakeMediaActions();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(
+        engine: engine,
+        picker: picker,
+        mediaActions: mediaActions,
+        logger: _logger(backend),
+      ),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapAudioExtraction(tester);
+    engine.progress.add(
+      const ProgressEvent(
+        taskKind: TaskKind.audioExtraction,
+        taskId: 'task-1',
+        percent: 100,
+        state: TaskState.success,
+        phase: TaskPhase.finished,
+        outputUri: _audioOutputUri,
+        outputFileName: 'actual-audio-name.m4a',
+        outputLocationLabel: '系统音频 > Music > VideoSlim',
+      ),
+    );
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('音频文件已经保存到 系统音频'), findsOneWidget);
+    expect(find.text('音频文件已保存'), findsOneWidget);
+    expect(find.text('重试音频提取'), findsNothing);
+    expect(
+      find.byKey(const ValueKey<String>('open-output-fallback')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('result-video-encoding-mode')),
+      findsNothing,
     );
   });
 

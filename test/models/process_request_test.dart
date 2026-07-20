@@ -162,26 +162,34 @@ void main() {
       const request = AudioExtractRequest(
         uri: 'content://media/video/9',
         outputFileName: 'sound.m4a',
-        lossless: false,
+        outputLocationLabel: '系统音频 > Music > VideoSlim',
+        mode: AudioExtractMode.aac,
         bitrate: 192000,
       );
 
       expect(request.toChannelMap(), <String, Object?>{
         'uri': 'content://media/video/9',
         'outputFileName': 'sound.m4a',
-        'lossless': false,
-        'bitrate': 192000,
+        'destination': <String, Object?>{
+          'treeUri': null,
+          'label': '系统音频 > Music > VideoSlim',
+        },
+        'audio': <String, Object?>{'mode': 'aac', 'bitrate': 192000},
       });
     });
 
-    test('preserves a null bitrate for lossless extraction', () {
+    test('preserves a null bitrate for copy extraction', () {
       const request = AudioExtractRequest(
         uri: 'content://media/video/9',
         outputFileName: 'sound.m4a',
-        lossless: true,
+        outputLocationLabel: '系统音频 > Music > VideoSlim',
+        mode: AudioExtractMode.copy,
       );
 
-      expect(request.toChannelMap()['bitrate'], isNull);
+      expect(
+        (request.toChannelMap()['audio']! as Map<String, Object?>)['bitrate'],
+        isNull,
+      );
     });
   });
 }

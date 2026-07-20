@@ -59,6 +59,32 @@ class TaskRecoveryCodecTest {
     }
 
     @Test
+    fun `V2 round trips audio ownership and V1 remains legacy video`() {
+        val audio =
+            completeRecord().copy(
+                tempFileName = "123e4567-e89b-12d3-a456-426614174000.m4a",
+                expectedOutputDisplayName = "lecture.m4a",
+                actualOutputDisplayName = "lecture (1).m4a",
+                mediaStoreUri = "content://media/external/audio/media/42",
+                legacyOutputPath = "/storage/emulated/0/Music/VideoSlim/lecture (1).m4a",
+                mediaKind = OutputMediaKind.AUDIO_M4A,
+            )
+        assertEquals(
+            TaskRecoveryDecodeResult.Success(audio),
+            TaskRecoveryCodec.decode(TaskRecoveryCodec.encode(audio)),
+        )
+
+        val legacy =
+            TaskRecoveryCodec.encode(completeRecord())
+                .replace("version=2", "version=1")
+                .lineSequence()
+                .filterNot { it.startsWith("mediaKind=") }
+                .joinToString("\n")
+        val decoded = TaskRecoveryCodec.decode(legacy) as TaskRecoveryDecodeResult.Success
+        assertEquals(OutputMediaKind.VIDEO_MP4, decoded.record.mediaKind)
+    }
+
+    @Test
     fun `round trips nullable publication fields before allocation`() {
         val record =
             completeRecord().copy(
@@ -166,8 +192,9 @@ class TaskRecoveryCodecTest {
     }
 
     @Test
-    fun `temp file policy accepts only a simple uuid mp4 child`() {
+    fun `temp file policy accepts only a simple uuid with a supported media extension`() {
         assertTrue(isValidRecoveryTempFileName("123e4567-e89b-12d3-a456-426614174000.mp4"))
+        assertTrue(isValidRecoveryTempFileName("123e4567-e89b-12d3-a456-426614174000.m4a"))
         listOf(
             "123e4567-e89b-12d3-a456-426614174000.MP4",
             "123e4567e89b12d3a456426614174000.mp4",
