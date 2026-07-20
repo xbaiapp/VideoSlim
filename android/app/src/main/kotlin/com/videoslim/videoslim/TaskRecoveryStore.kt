@@ -169,6 +169,11 @@ internal fun isAllowedRecoveryTransition(
             RecoveryStage.DISCARDING -> false
         }
 
+internal fun requiresPublicationTransactionBoundary(stage: RecoveryStage): Boolean =
+    stage == RecoveryStage.ALLOCATED ||
+        stage == RecoveryStage.PUBLISHING ||
+        stage == RecoveryStage.PUBLISHED
+
 private fun validateRecoveryRecord(record: TaskRecoveryRecord): String? {
     if (!isSafeJournalText(record.taskId, MAX_TASK_ID_LENGTH)) return "invalid task id"
     if (!isValidRecoveryTempFileName(record.tempFileName)) return "invalid temp filename"
@@ -300,11 +305,7 @@ class TaskRecoveryStore(
             throw IllegalStateException("Invalid recovery stage transition ${current.stage} -> $stage")
         }
         if (current.stage == stage) return@synchronized current
-        if (
-            stage == RecoveryStage.ALLOCATED ||
-            stage == RecoveryStage.PUBLISHING ||
-            stage == RecoveryStage.PUBLISHED
-        ) {
+        if (requiresPublicationTransactionBoundary(stage)) {
             throw IllegalStateException("Publication stages require their transaction-specific boundary")
         }
         current.copy(stage = stage).also { persist(it, "stage") }

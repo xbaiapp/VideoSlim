@@ -101,6 +101,34 @@ void main() {
       },
     );
 
+    test(
+      'rejects explicit null and malformed task kinds but defaults an absent legacy key',
+      () {
+        Map<Object?, Object?> valid() => <Object?, Object?>{
+          'taskId': 'task-legacy',
+          'state': 'running',
+          'phase': 'preparing',
+          'percent': 0,
+          'sourceUri': 'content://source',
+          'outputFileName': 'output.mp4',
+          'startedAtEpochMs': 1000,
+        };
+
+        expect(
+          TaskSnapshot.fromMap(valid()).taskKind,
+          TaskKind.videoCompression,
+        );
+        for (final value in <Object?>[null, 7, '', 'unknown']) {
+          final map = valid()..['taskKind'] = value;
+          expect(
+            () => TaskSnapshot.fromMap(map),
+            throwsA(isA<FormatException>()),
+            reason: 'explicit taskKind=$value must not use the legacy fallback',
+          );
+        }
+      },
+    );
+
     test('rejects idle, malformed required values, and fractional epochs', () {
       Map<Object?, Object?> valid() => <Object?, Object?>{
         'taskId': 'task-1',

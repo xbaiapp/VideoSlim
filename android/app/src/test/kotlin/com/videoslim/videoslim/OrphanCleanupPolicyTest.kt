@@ -255,6 +255,50 @@ class OrphanCleanupPolicyTest {
     }
 
     @Test
+    fun `legacy audio policy accepts only exact owned Music output`() {
+        val root = "/storage/emulated/0/Music/VideoSlim"
+        val uri = "content://media/external/audio/media/84"
+        val record =
+            scopedRecord().copy(
+                tempFileName = "323e4567-e89b-12d3-a456-426614174000.m4a",
+                expectedOutputDisplayName = "lecture.m4a",
+                actualOutputDisplayName = "lecture.m4a",
+                mediaStoreUri = uri,
+                legacyOutputPath = "$root/lecture.m4a",
+                mediaKind = OutputMediaKind.AUDIO_M4A,
+            )
+
+        assertTrue(OrphanCleanupPolicy.isAppMediaUri(OutputMediaKind.AUDIO_M4A, uri))
+        assertFalse(OrphanCleanupPolicy.isAppMediaVideoUri(uri))
+        assertEquals(CleanupAction.DELETE, OrphanCleanupPolicy.legacyAction(record, root))
+        assertTrue(
+            OrphanCleanupPolicy.isOwnedLegacyEntry(
+                record,
+                root,
+                LegacyMediaEntry(uri, "lecture.m4a", "$root/lecture.m4a"),
+            ),
+        )
+        assertFalse(
+            OrphanCleanupPolicy.isOwnedLegacyEntry(
+                record,
+                root,
+                LegacyMediaEntry(
+                    uri,
+                    "lecture.m4a",
+                    "/storage/emulated/0/Movies/VideoSlim/lecture.m4a",
+                ),
+            ),
+        )
+        assertEquals(
+            CleanupAction.SKIP_UNSAFE,
+            OrphanCleanupPolicy.legacyAction(
+                record.copy(mediaStoreUri = "content://media/external/video/media/84"),
+                root,
+            ),
+        )
+    }
+
+    @Test
     fun `ten repeated cleanup decisions do not grow deletions`() {
         val record = scopedRecord()
         var observed: ScopedMediaEntry? = scopedEntry(isPending = 1)

@@ -132,7 +132,10 @@ internal class AudioExtractionEngine(
             sourceAccess.toEngineFailure()?.let { failure ->
                 throw EngineOperationException(failure)
             }
-            val sourceMetadata = metadataReader.read(task.request.sourceUri)
+            val sourceMetadata =
+                metadataReader.read(task.request.sourceUri) {
+                    task.cancelRequested || disposed || Thread.currentThread().isInterrupted
+                }
             if (
                 sourceAccess.statSize != null &&
                 sourceMetadata.fileSizeBytes > 0L &&
@@ -228,6 +231,7 @@ internal class AudioExtractionEngine(
                 )
                 verifyAndPublish(task)
             } catch (error: Throwable) {
+                retainUnconfirmedPublicationRecovery(task, error)
                 val failure =
                     if (error is CancellationException || task.cancelRequested || disposed) {
                         EngineFailure(EngineErrorCode.CANCELLED)
@@ -305,6 +309,7 @@ internal class AudioExtractionEngine(
                                         try {
                                             verifyAndPublish(task)
                                         } catch (error: Throwable) {
+                                            retainUnconfirmedPublicationRecovery(task, error)
                                             postToMain {
                                                 task.ioOperationRunning = false
                                                 fail(task, mapAudioFailure(error, encoding = true), error)
@@ -352,7 +357,10 @@ internal class AudioExtractionEngine(
         sourceAccessAtCompletion.toFailureAtExport(task.sourceAccessAtStart)?.let { failure ->
             throw EngineOperationException(failure)
         }
-        val outputMetadata = metadataReader.read(task.tempFile)
+        val outputMetadata =
+            metadataReader.read(task.tempFile) {
+                task.cancelRequested || disposed || Thread.currentThread().isInterrupted
+            }
         AudioOutputVerifier.requireValid(outputMetadata, AudioOutputVerifier.AAC_MIME)
         val sourceSpanMs = task.sourceMetadata?.sampleSpanMs() ?: 0L
         if (sourceSpanMs > 0L && kotlin.math.abs(outputMetadata.durationMs - sourceSpanMs) > 1_000L) {
@@ -362,8 +370,6 @@ internal class AudioExtractionEngine(
             "taskKind=audio_extraction task=${task.id} verifiedOutput=$outputMetadata " +
                 "sourceSpanMs=$sourceSpanMs",
         )
-        checkCancellation(task)
-        recoveryStore.updateStage(task.id, RecoveryStage.PUBLISHING)
         checkCancellation(task)
         postToMain {
             if (isCurrent(task) && !task.cancelRequested) {
@@ -598,6 +604,16 @@ internal class AudioExtractionEngine(
         }
     }
 
+    private fun retainUnconfirmedPublicationRecovery(task: AudioTask, error: Throwable) {
+        if (shouldRetainAudioRecovery(error)) {
+            task.retainRecovery = true
+            log(
+                "taskKind=audio_extraction task=${task.id} " +
+                    "publication cleanup unconfirmed; recovery retained",
+            )
+        }
+    }
+
     private fun discardPublished(task: AudioTask, outputUri: String) {
         val boundaryRecorded = runCatching { recoveryStore.markDiscarding(task.id) }.isSuccess
         val deleted = mediaStoreSaver.deletePublished(outputUri)
@@ -654,7 +670,7 @@ internal class AudioExtractionEngine(
         var lastEmittedPhase: String? = null
         var lastRunningEventAtMs = -1L
         var recoveryStarted = false
-        var retainRecovery = false
+        @Volatile var retainRecovery = false
         var failureProbeStarted = false
         val startedAtElapsedMs = SystemClock.elapsedRealtime()
         val progressPoller = Runnable { scheduleProgress(this) }
@@ -692,3 +708,6 @@ internal fun mapAudioPipelineFailure(
         },
     )
 }
+
+internal fun shouldRetainAudioRecovery(error: Throwable): Boolean =
+    error is PublicationCleanupException && !error.cleanupConfirmed

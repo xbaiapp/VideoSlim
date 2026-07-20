@@ -3,9 +3,32 @@ package com.videoslim.videoslim
 import java.io.IOException
 import java.util.concurrent.CancellationException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AudioExtractionPolicyTest {
+    @Test
+    fun `unconfirmed publication cleanup retains audio recovery evidence`() {
+        assertTrue(
+            shouldRetainAudioRecovery(
+                PublicationCleanupException(
+                    cleanupConfirmed = false,
+                    cause = IOException("delete could not be confirmed"),
+                ),
+            ),
+        )
+        assertFalse(
+            shouldRetainAudioRecovery(
+                PublicationCleanupException(
+                    cleanupConfirmed = true,
+                    cause = IOException("publication failed but rollback completed"),
+                ),
+            ),
+        )
+        assertFalse(shouldRetainAudioRecovery(IOException("not a publication transaction")))
+    }
+
     @Test
     fun `pipeline failure mapping preserves stable publication and cancellation errors`() {
         assertEquals(

@@ -52,7 +52,7 @@ final class TaskSnapshot {
       );
     }
 
-    final taskKind = map['taskKind'] == null
+    final taskKind = !map.containsKey('taskKind')
         ? TaskKind.videoCompression
         : taskKindFromWireName(map['taskKind']);
     final retryRequestValue = map['retryRequest'];

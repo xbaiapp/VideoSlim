@@ -10,6 +10,7 @@ import android.os.Build
 import android.provider.OpenableColumns
 import java.io.IOException
 import java.nio.ByteBuffer
+import java.util.concurrent.CancellationException
 
 internal data class AudioMetadata(
     val sourceUri: String,
@@ -61,21 +62,36 @@ internal class AudioMetadataReader(context: Context) {
     private val appContext = context.applicationContext
     private val contentResolver: ContentResolver = appContext.contentResolver
 
-    fun read(uriString: String): AudioMetadata =
-        if (uriString.startsWith("content://")) read(Uri.parse(uriString)) else read(java.io.File(uriString))
+    fun read(
+        uriString: String,
+        shouldCancel: () -> Boolean = { false },
+    ): AudioMetadata =
+        if (uriString.startsWith("content://")) {
+            read(Uri.parse(uriString), shouldCancel)
+        } else {
+            read(java.io.File(uriString), shouldCancel)
+        }
 
-    fun read(uri: Uri): AudioMetadata {
+    fun read(
+        uri: Uri,
+        shouldCancel: () -> Boolean = { false },
+    ): AudioMetadata {
+        checkAudioMetadataCancellation(shouldCancel)
         val openable = readOpenableMetadata(uri)
-        return readConfigured(uri.toString(), openable) { extractor, retriever ->
+        return readConfigured(uri.toString(), openable, shouldCancel) { extractor, retriever ->
             extractor.setDataSource(appContext, uri, null)
             retriever.setDataSource(appContext, uri)
         }
     }
 
-    fun read(file: java.io.File): AudioMetadata =
+    fun read(
+        file: java.io.File,
+        shouldCancel: () -> Boolean = { false },
+    ): AudioMetadata =
         readConfigured(
             sourceUri = file.absolutePath,
             openable = OpenableMetadata(file.name, file.length()),
+            shouldCancel = shouldCancel,
         ) { extractor, retriever ->
             extractor.setDataSource(file.absolutePath)
             retriever.setDataSource(file.absolutePath)
@@ -84,11 +100,13 @@ internal class AudioMetadataReader(context: Context) {
     private fun readConfigured(
         sourceUri: String,
         openable: OpenableMetadata,
+        shouldCancel: () -> Boolean,
         configure: (MediaExtractor, MediaMetadataRetriever) -> Unit,
     ): AudioMetadata {
         val extractor = MediaExtractor()
         val retriever = MediaMetadataRetriever()
         try {
+            checkAudioMetadataCancellation(shouldCancel)
             configure(extractor, retriever)
             var firstAudioTrack = -1
             var firstAudioFormat: MediaFormat? = null
@@ -132,7 +150,12 @@ internal class AudioMetadataReader(context: Context) {
                     ?: 0L
             val declaredBitrate =
                 audioFormat.intValue(MediaFormat.KEY_BIT_RATE)?.takeIf { it > 0 }
-            val timing = inspectSampleTimes(extractor, firstAudioTrack, audioFormat)
+            val timing = inspectSampleTimes(
+                extractor,
+                firstAudioTrack,
+                audioFormat,
+                shouldCancel,
+            )
             val estimatedBitrate =
                 if (declaredBitrate == null && timing.sampleBytes > 0L && durationMs > 0L) {
                     ((timing.sampleBytes.toDouble() * BITS_PER_BYTE * MILLIS_PER_SECOND) / durationMs)
@@ -165,6 +188,8 @@ internal class AudioMetadataReader(context: Context) {
                 audioTrackIndex = firstAudioTrack,
                 audioProfile = audioFormat.intValue(MediaFormat.KEY_AAC_PROFILE),
             )
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: AudioMetadataException) {
             throw error
         } catch (error: SecurityException) {
@@ -191,7 +216,8 @@ internal class AudioMetadataReader(context: Context) {
         extractor: MediaExtractor,
         trackIndex: Int,
         format: MediaFormat,
-    ): SampleTiming {
+        shouldCancel: () -> Boolean,
+    ): AudioSampleTiming {
         extractor.selectTrack(trackIndex)
         val legacySampleBuffer =
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
@@ -201,35 +227,23 @@ internal class AudioMetadataReader(context: Context) {
             } else {
                 null
             }
-        var first: Long? = null
-        var previous: Long? = null
-        var last: Long? = null
-        var count = 0L
-        var sampleBytes = 0L
-        var monotonic = true
-        while (true) {
-            val sampleTime = extractor.sampleTime
-            if (sampleTime < 0L) break
-            if (first == null) first = sampleTime
-            if (previous != null && sampleTime <= previous) monotonic = false
-            previous = sampleTime
-            last = sampleTime
-            count += 1L
-            val sampleSize =
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    extractor.sampleSize
-                } else {
-                    legacySampleBuffer!!.clear()
-                    extractor.readSampleData(legacySampleBuffer, 0).toLong()
-                }
-            sampleSize.takeIf { it > 0L }?.let { size ->
-                sampleBytes =
-                    if (sampleBytes > Long.MAX_VALUE - size) Long.MAX_VALUE else sampleBytes + size
-            }
-            if (!extractor.advance()) break
+        return try {
+            scanAudioSampleMetadata(
+                sampleTimeUs = { extractor.sampleTime },
+                sampleSizeBytes = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        extractor.sampleSize
+                    } else {
+                        legacySampleBuffer!!.clear()
+                        extractor.readSampleData(legacySampleBuffer, 0).toLong()
+                    }
+                },
+                advance = { extractor.advance() },
+                shouldCancel = shouldCancel,
+            )
+        } finally {
+            runCatching { extractor.unselectTrack(trackIndex) }
         }
-        extractor.unselectTrack(trackIndex)
-        return SampleTiming(first, last, count, sampleBytes, monotonic)
     }
 
     private fun readOpenableMetadata(uri: Uri): OpenableMetadata {
@@ -275,14 +289,6 @@ internal class AudioMetadataReader(context: Context) {
         )
     }
 
-    private data class SampleTiming(
-        val firstSampleTimeUs: Long?,
-        val lastSampleTimeUs: Long?,
-        val sampleCount: Long,
-        val sampleBytes: Long,
-        val monotonic: Boolean,
-    )
-
     private data class OpenableMetadata(
         val fileName: String,
         val fileSizeBytes: Long,
@@ -295,6 +301,53 @@ internal class AudioMetadataReader(context: Context) {
         const val MICROSECONDS_PER_MILLISECOND = 1_000L
         const val MILLIS_PER_SECOND = 1_000.0
         const val BITS_PER_BYTE = 8.0
+    }
+}
+
+internal data class AudioSampleTiming(
+    val firstSampleTimeUs: Long?,
+    val lastSampleTimeUs: Long?,
+    val sampleCount: Long,
+    val sampleBytes: Long,
+    val monotonic: Boolean,
+)
+
+internal fun scanAudioSampleMetadata(
+    sampleTimeUs: () -> Long,
+    sampleSizeBytes: () -> Long,
+    advance: () -> Boolean,
+    shouldCancel: () -> Boolean,
+): AudioSampleTiming {
+    var first: Long? = null
+    var previous: Long? = null
+    var last: Long? = null
+    var count = 0L
+    var totalBytes = 0L
+    var monotonic = true
+    while (true) {
+        checkAudioMetadataCancellation(shouldCancel)
+        val sampleTime = sampleTimeUs()
+        if (sampleTime < 0L) break
+        if (first == null) first = sampleTime
+        if (previous != null && sampleTime <= previous) monotonic = false
+        previous = sampleTime
+        last = sampleTime
+        count += 1L
+        checkAudioMetadataCancellation(shouldCancel)
+        sampleSizeBytes().takeIf { it > 0L }?.let { size ->
+            totalBytes =
+                if (totalBytes > Long.MAX_VALUE - size) Long.MAX_VALUE else totalBytes + size
+        }
+        checkAudioMetadataCancellation(shouldCancel)
+        if (!advance()) break
+    }
+    checkAudioMetadataCancellation(shouldCancel)
+    return AudioSampleTiming(first, last, count, totalBytes, monotonic)
+}
+
+private fun checkAudioMetadataCancellation(shouldCancel: () -> Boolean) {
+    if (shouldCancel() || Thread.currentThread().isInterrupted) {
+        throw CancellationException("Audio metadata scan cancelled")
     }
 }
 

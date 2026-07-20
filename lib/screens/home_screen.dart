@@ -734,9 +734,18 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!_isCurrent(generation)) return;
       _awaitingTaskId = false;
       _bufferedProgress.clear();
+      final failureCode = error is VideoEngineException
+          ? _stableCode(error.code)
+          : 'UNKNOWN';
+      _lastFailureCode = failureCode;
       _failGeneration(
         generation,
-        _errorTextFor(error, fallback: '音频提取任务无法启动，请稍后重试。'),
+        _messageForCode(
+          failureCode,
+          error is VideoEngineException ? error.message : null,
+          fallback: '音频提取任务无法启动，请稍后重试。',
+          taskKind: TaskKind.audioExtraction,
+        ),
       );
       _logError('M3 音频提取任务启动失败', error, stackTrace);
     }
@@ -1017,23 +1026,24 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       return;
     }
+    if (_awaitingTaskId) {
+      _bufferedProgress.add(event);
+      _logFlow(
+        '任务编号或恢复快照确定前暂存进度事件',
+        details: <String, Object?>{
+          'taskId': event.taskId,
+          'taskKind': event.taskKind.wireName,
+          'state': event.state.wireName,
+        },
+      );
+      return;
+    }
     if (event.taskKind != _activeTaskKind) {
       _logFlow(
         '忽略其他任务类型的进度',
         details: <String, Object?>{
           'expectedTaskKind': _activeTaskKind.wireName,
           'receivedTaskKind': event.taskKind.wireName,
-        },
-      );
-      return;
-    }
-    if (_awaitingTaskId) {
-      _bufferedProgress.add(event);
-      _logFlow(
-        '任务编号返回前暂存进度事件',
-        details: <String, Object?>{
-          'taskId': event.taskId,
-          'state': event.state.wireName,
         },
       );
       return;
@@ -1283,9 +1293,13 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     _terminalEventHandled = true;
-    _failGeneration(generation, '处理状态连接已中断，请重启应用后再压缩。');
+    final isAudio = _activeTaskKind == TaskKind.audioExtraction;
+    _failGeneration(
+      generation,
+      isAudio ? '处理状态连接已中断，请重启应用后再提取音频。' : '处理状态连接已中断，请重启应用后再压缩。',
+    );
     _logFlow(
-      '活动任务期间进度流关闭',
+      isAudio ? '活动音频提取期间进度流关闭' : '活动视频压缩期间进度流关闭',
       level: AppLogLevel.error,
       details: <String, Object?>{'taskId': _taskId},
     );
@@ -1628,7 +1642,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           !_outputPublished &&
                           !_progressStreamClosed &&
                           ((_activeTaskKind == TaskKind.audioExtraction &&
-                                  _lastAudioExtractRequest != null) ||
+                                  _lastAudioExtractRequest != null &&
+                                  _canRetryAudioFailure(_lastFailureCode)) ||
                               (_activeTaskKind == TaskKind.videoCompression &&
                                   _lastProcessRequest != null &&
                                   _lastFailureCode !=
@@ -2695,7 +2710,9 @@ TaskPhase _laterPhase(TaskPhase current, TaskPhase incoming) =>
     _phaseRank(incoming) >= _phaseRank(current) ? incoming : current;
 
 bool _isNewerThanSnapshot(ProgressEvent event, TaskSnapshot snapshot) {
-  if (event.taskId != snapshot.taskId || snapshot.state != TaskState.running) {
+  if (event.taskKind != snapshot.taskKind ||
+      event.taskId != snapshot.taskId ||
+      snapshot.state != TaskState.running) {
     return false;
   }
   if (event.state != TaskState.running) return true;
@@ -2714,6 +2731,18 @@ String _stableCode(String? value, {String fallback = 'UNKNOWN'}) {
   }
   return normalized.replaceAll(RegExp(r'[^A-Z0-9_\-]'), '_');
 }
+
+bool _canRetryAudioFailure(String? code) => switch (code) {
+  'INSUFFICIENT_STORAGE' ||
+  'SOURCE_PROVIDER_FAILED' ||
+  'AUDIO_DECODING_FAILED' ||
+  'AUDIO_ENCODING_FAILED' ||
+  'AUDIO_OUTPUT_INVALID' ||
+  'OUTPUT_PERMISSION_LOST' ||
+  'CANCELLED' ||
+  'UNKNOWN' => true,
+  _ => false,
+};
 
 String _messageForCode(
   String code,

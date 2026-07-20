@@ -507,7 +507,7 @@ class OrphanCleanup(
         }
         val uri = record.mediaStoreUri!!
         val rowQuery =
-            queryLegacyEntry(uri, report) ?: run {
+            queryLegacyEntry(uri, record.mediaKind, report) ?: run {
                 quarantineUnsafeRecord(record, report, "legacy output query unavailable")
                 return
             }
@@ -538,7 +538,7 @@ class OrphanCleanup(
                     deletedSomething = true
                     allowFileDelete = true
                 } else {
-                    val verification = queryLegacyEntry(uri, report)
+                    val verification = queryLegacyEntry(uri, record.mediaKind, report)
                     if (verification == null) {
                         allClean = false
                     } else if (verification.entry == null) {
@@ -674,16 +674,20 @@ class OrphanCleanup(
     }
 
     @Suppress("DEPRECATION")
-    private fun queryLegacyEntry(uriString: String, report: CleanupReport): EntryQuery<LegacyMediaEntry>? {
-        if (!OrphanCleanupPolicy.isAppMediaVideoUri(uriString)) {
-            unsafe(report, "legacy MediaStore URI is outside the app allocation shape")
+    private fun queryLegacyEntry(
+        uriString: String,
+        mediaKind: OutputMediaKind,
+        report: CleanupReport,
+    ): EntryQuery<LegacyMediaEntry>? {
+        if (!OrphanCleanupPolicy.isAppMediaUri(mediaKind, uriString)) {
+            unsafe(report, "legacy MediaStore URI does not match the recorded media kind")
             return null
         }
         val cursor =
             try {
                 resolver.query(
                     Uri.parse(uriString),
-                    arrayOf(MediaStore.Video.Media.DISPLAY_NAME, MediaStore.Video.Media.DATA),
+                    arrayOf(MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATA),
                     null,
                     null,
                     null,
@@ -702,8 +706,8 @@ class OrphanCleanup(
                 EntryQuery(
                     LegacyMediaEntry(
                         uri = uriString,
-                        displayName = it.nullableString(MediaStore.Video.Media.DISPLAY_NAME),
-                        dataPath = it.nullableString(MediaStore.Video.Media.DATA),
+                        displayName = it.nullableString(MediaStore.MediaColumns.DISPLAY_NAME),
+                        dataPath = it.nullableString(MediaStore.MediaColumns.DATA),
                     ),
                 )
             } catch (error: Throwable) {

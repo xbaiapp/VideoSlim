@@ -9,6 +9,16 @@ import org.junit.Test
 
 class TaskRecoveryCodecTest {
     @Test
+    fun `publication stages require transaction observer boundaries`() {
+        assertFalse(requiresPublicationTransactionBoundary(RecoveryStage.PREPARING))
+        assertFalse(requiresPublicationTransactionBoundary(RecoveryStage.TRANSFORMING))
+        assertTrue(requiresPublicationTransactionBoundary(RecoveryStage.ALLOCATED))
+        assertTrue(requiresPublicationTransactionBoundary(RecoveryStage.PUBLISHING))
+        assertTrue(requiresPublicationTransactionBoundary(RecoveryStage.PUBLISHED))
+        assertFalse(requiresPublicationTransactionBoundary(RecoveryStage.DISCARDING))
+    }
+
+    @Test
     fun `active journal is not cleared when quarantine directory sync fails`() {
         val actions = mutableListOf<String>()
 

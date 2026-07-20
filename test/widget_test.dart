@@ -1377,6 +1377,61 @@ void main() {
   );
 
   testWidgets(
+    'audio progress before reconnect snapshot kind is known is replayed',
+    (WidgetTester tester) async {
+      final sourceMetadata = Completer<VideoInfo>();
+      final engine = _FakeEngine()
+        ..snapshotCompleter = Completer<TaskSnapshot?>()
+        ..metadataCompleters[_sourceUri] = sourceMetadata;
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await tester.pump();
+      engine.progress.add(
+        const ProgressEvent(
+          taskKind: TaskKind.audioExtraction,
+          taskId: 'restored-audio-task',
+          percent: 73,
+          state: TaskState.running,
+          phase: TaskPhase.encoding,
+        ),
+      );
+      await tester.pump();
+      engine.snapshotCompleter!.complete(
+        TaskSnapshot(
+          taskKind: TaskKind.audioExtraction,
+          taskId: 'restored-audio-task',
+          percent: 25,
+          state: TaskState.running,
+          phase: TaskPhase.preparing,
+          sourceUri: _sourceUri,
+          outputFileName: 'restored_audio.m4a',
+          audioRetryRequest: const AudioExtractRequest(
+            uri: _sourceUri,
+            outputFileName: 'restored_audio.m4a',
+            outputLocationLabel: '系统音频 > Music > VideoSlim',
+            mode: AudioExtractMode.copy,
+          ),
+          outputLocationLabel: '系统音频 > Music > VideoSlim',
+          startedAtEpochMs: DateTime(2026, 7, 19, 1).millisecondsSinceEpoch,
+        ),
+      );
+      await tester.pump();
+      sourceMetadata.complete(_videoInfo());
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('73%'), findsOneWidget);
+      expect(find.text('正在提取音频，可以切换应用或熄屏'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
     'equal progress event can enrich an unknown restored encoding mode',
     (WidgetTester tester) async {
       final engine = _FakeEngine()
@@ -1636,6 +1691,40 @@ void main() {
     },
   );
 
+  testWidgets('synchronous copy start failure preserves AAC recovery code', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine()
+      ..audioProcessError = const VideoEngineException(
+        code: 'audio_copy_unsupported',
+        message: 'raw synchronous native detail',
+      );
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapAudioExtraction(tester);
+    await tester.pump();
+
+    expect(find.textContaining('原音轨不是 AAC'), findsOneWidget);
+    expect(find.textContaining('raw synchronous native detail'), findsNothing);
+    expect(find.text('重试音频提取'), findsNothing);
+    final aacRetry = find.byKey(const ValueKey<String>('audio-aac-retry'));
+    expect(aacRetry, findsOneWidget);
+    await tester.ensureVisible(aacRetry);
+    await tester.tap(aacRetry);
+    await tester.pump();
+    await tester.pump();
+
+    expect(engine.audioProcessRequests, hasLength(2));
+    expect(engine.audioProcessRequests.last.mode, AudioExtractMode.aac);
+    expect(engine.audioProcessRequests.last.bitrate, 128000);
+  });
+
   testWidgets('non-AAC copy failure offers one-click AAC retry', (
     WidgetTester tester,
   ) async {
@@ -1664,6 +1753,7 @@ void main() {
 
     expect(find.textContaining('原音轨不是 AAC'), findsOneWidget);
     expect(find.textContaining('raw native detail'), findsNothing);
+    expect(find.text('重试音频提取'), findsNothing);
     final retry = find.byKey(const ValueKey<String>('audio-aac-retry'));
     await tester.ensureVisible(retry);
     await tester.tap(retry);
@@ -1673,6 +1763,99 @@ void main() {
     expect(engine.audioProcessRequests, hasLength(2));
     expect(engine.audioProcessRequests.last.mode, AudioExtractMode.aac);
     expect(engine.audioProcessRequests.last.bitrate, 128000);
+  });
+
+  testWidgets('immutable audio failures do not offer guaranteed-fail retry', (
+    WidgetTester tester,
+  ) async {
+    for (final code in <String>[
+      'AUDIO_TRACK_MISSING',
+      'AUDIO_CHANNEL_LAYOUT_UNSUPPORTED',
+    ]) {
+      final engine = _FakeEngine();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      await _tapAudioExtraction(tester);
+      engine.progress.add(
+        ProgressEvent(
+          taskKind: TaskKind.audioExtraction,
+          taskId: 'task-1',
+          percent: 0,
+          state: TaskState.failed,
+          phase: TaskPhase.preparing,
+          errorCode: code,
+          errorMessage: 'must not be shown',
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('重试音频提取'), findsNothing, reason: code);
+      expect(
+        find.byKey(const ValueKey<String>('audio-aac-retry')),
+        findsNothing,
+        reason: code,
+      );
+      expect(find.textContaining('must not be shown'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await engine.close();
+    }
+  });
+
+  testWidgets('transient AAC encoding failure keeps same-mode retry', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey<String>('audio-mode-aac')),
+    );
+    await tester.tap(find.byKey(const ValueKey<String>('audio-mode-aac')));
+    await tester.pump();
+    await _tapAudioExtraction(tester);
+    engine.progress.add(
+      const ProgressEvent(
+        taskKind: TaskKind.audioExtraction,
+        taskId: 'task-1',
+        percent: 40,
+        state: TaskState.failed,
+        phase: TaskPhase.encoding,
+        errorCode: 'AUDIO_ENCODING_FAILED',
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('重试音频提取'), findsOneWidget);
+    expect(find.byKey(const ValueKey<String>('audio-aac-retry')), findsNothing);
+  });
+
+  testWidgets('audio progress stream closure uses extraction wording', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapAudioExtraction(tester);
+    await engine.progress.close();
+    await tester.pump();
+
+    expect(find.text('处理状态连接已中断，请重启应用后再提取音频。'), findsOneWidget);
+    expect(find.textContaining('再压缩'), findsNothing);
   });
 
   testWidgets('audio metadata failure keeps published actions without retry', (
