@@ -61,6 +61,35 @@ class AudioSampleCopyLoopTest {
     }
 
     @Test
+    fun `copy digest matches exact sink payloads without changing sink ByteBuffer window`() {
+        val sink = FakeSink()
+        val result =
+            copyEncodedAudioSamples(
+                source =
+                    FakeSource(
+                        listOf(
+                            Sample(byteArrayOf(0x00, 0x01, 0xff.toByte()), 1_000L, 7),
+                            Sample("ab".toByteArray(), 2_000L, 9),
+                        ),
+                    ),
+                sink = sink,
+                durationUs = 2_000L,
+                requestedBufferBytes = 8,
+                shouldCancel = { false },
+            )
+
+        assertEquals(
+            "a4a65500d51c53df6c2bc87aeec5794a01fd8fc4f330ac7a04668c8ba1e5473c",
+            result.sampleDigest.sha256Hex,
+        )
+        assertEquals(AUDIO_SAMPLE_DIGEST_VERSION, result.sampleDigest.version)
+        assertEquals(listOf(0, 0), sink.bufferPositionsAtWrite)
+        assertEquals(listOf(3, 2), sink.bufferLimitsAtWrite)
+        assertArrayEquals(byteArrayOf(0x00, 0x01, 0xff.toByte()), sink.payloads[0])
+        assertArrayEquals("ab".toByteArray(), sink.payloads[1])
+    }
+
+    @Test
     fun `progress is bounded and completes after samples are copied`() {
         val progress = mutableListOf<Double>()
         val source = FakeSource(listOf(Sample(byteArrayOf(1), 5_000L, 0)))
@@ -232,12 +261,16 @@ class AudioSampleCopyLoopTest {
     private class FakeSink : EncodedAudioSampleSink {
         val samples = mutableListOf<EncodedAudioSampleInfo>()
         val payloads = mutableListOf<ByteArray>()
+        val bufferPositionsAtWrite = mutableListOf<Int>()
+        val bufferLimitsAtWrite = mutableListOf<Int>()
 
         override fun writeSampleData(
             buffer: ByteBuffer,
             info: EncodedAudioSampleInfo,
         ) {
             samples += info
+            bufferPositionsAtWrite += buffer.position()
+            bufferLimitsAtWrite += buffer.limit()
             val payload = ByteArray(info.size)
             buffer.position(info.offset)
             buffer.get(payload)

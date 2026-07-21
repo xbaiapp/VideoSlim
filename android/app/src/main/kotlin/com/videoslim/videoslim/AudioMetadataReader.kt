@@ -28,6 +28,7 @@ internal data class AudioMetadata(
     val lastSampleTimeUs: Long?,
     val sampleCount: Long,
     val sampleBytes: Long,
+    val sampleDigest: AudioSampleDigest,
     val usesIndexedPhysicalSampleSizes: Boolean = false,
     val sampleTimesMonotonic: Boolean,
     val maxSampleDeltaUs: Long?,
@@ -191,6 +192,7 @@ internal class AudioMetadataReader(context: Context) {
                 lastSampleTimeUs = timing.lastSampleTimeUs,
                 sampleCount = timing.sampleCount,
                 sampleBytes = timing.sampleBytes,
+                sampleDigest = timing.sampleDigest,
                 usesIndexedPhysicalSampleSizes = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P,
                 sampleTimesMonotonic = timing.monotonic,
                 maxSampleDeltaUs = timing.maxSampleDeltaUs,
@@ -232,7 +234,7 @@ internal class AudioMetadataReader(context: Context) {
         return try {
             scanAudioSampleMetadata(
                 sampleTimeUs = { extractor.sampleTime },
-                samplePayloadBytes = {
+                samplePayloadBytes = { consumeVerifiedPayload ->
                     val indexedSize =
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                             extractor.sampleSize
@@ -243,6 +245,7 @@ internal class AudioMetadataReader(context: Context) {
                         sampleBuffer = sampleBuffer,
                         indexedSampleSize = indexedSize,
                         readSampleData = { buffer -> extractor.readSampleData(buffer, 0) },
+                        consumeVerifiedPayload = consumeVerifiedPayload,
                     )
                 },
                 advance = { extractor.advance() },
@@ -316,13 +319,16 @@ internal data class AudioSampleTiming(
     val lastSampleTimeUs: Long?,
     val sampleCount: Long,
     val sampleBytes: Long,
+    val sampleDigest: AudioSampleDigest,
     val monotonic: Boolean,
     val maxSampleDeltaUs: Long?,
 )
 
+internal typealias VerifiedPayloadConsumer = (ByteBuffer, Int, Int) -> Unit
+
 internal fun scanAudioSampleMetadata(
     sampleTimeUs: () -> Long,
-    samplePayloadBytes: () -> Long,
+    samplePayloadBytes: (VerifiedPayloadConsumer) -> Long,
     advance: () -> Boolean,
     shouldCancel: () -> Boolean,
 ): AudioSampleTiming {
@@ -333,6 +339,7 @@ internal fun scanAudioSampleMetadata(
     var totalBytes = 0L
     var monotonic = true
     var maxSampleDeltaUs: Long? = null
+    val sampleDigest = AudioSampleDigestAccumulator()
     while (true) {
         checkAudioMetadataCancellation(shouldCancel)
         val sampleTime = sampleTimeUs()
@@ -350,15 +357,37 @@ internal fun scanAudioSampleMetadata(
         last = sampleTime
         count += 1L
         checkAudioMetadataCancellation(shouldCancel)
-        val size = samplePayloadBytes()
+        var payloadDelivered = false
+        var deliveredPayloadLength = 0
+        val size =
+            samplePayloadBytes { buffer, offset, length ->
+                if (payloadDelivered) {
+                    throw IOException("Audio sample payload was delivered more than once")
+                }
+                payloadDelivered = true
+                deliveredPayloadLength = length
+                sampleDigest.addSample(buffer, offset, length)
+            }
         if (size <= 0L) throw IOException("Audio sample payload is unreadable")
+        if (!payloadDelivered || deliveredPayloadLength.toLong() != size) {
+            throw IOException("Audio sample payload delivery did not match its physical read")
+        }
         totalBytes =
             if (totalBytes > Long.MAX_VALUE - size) Long.MAX_VALUE else totalBytes + size
         checkAudioMetadataCancellation(shouldCancel)
         if (!advance()) break
     }
     checkAudioMetadataCancellation(shouldCancel)
-    return AudioSampleTiming(first, last, count, totalBytes, monotonic, maxSampleDeltaUs)
+    if (count <= 0L) throw IOException("Audio track contains no readable samples")
+    return AudioSampleTiming(
+        firstSampleTimeUs = first,
+        lastSampleTimeUs = last,
+        sampleCount = count,
+        sampleBytes = totalBytes,
+        sampleDigest = sampleDigest.finish(),
+        monotonic = monotonic,
+        maxSampleDeltaUs = maxSampleDeltaUs,
+    )
 }
 
 /**
@@ -375,6 +404,7 @@ internal fun readVerifiedAudioSamplePayload(
     sampleBuffer: ByteBuffer,
     indexedSampleSize: Long?,
     readSampleData: (ByteBuffer) -> Int,
+    consumeVerifiedPayload: VerifiedPayloadConsumer,
 ): Long {
     if (indexedSampleSize != null && indexedSampleSize !in 1..MAX_AUDIO_SAMPLE_BUFFER_BYTES.toLong()) {
         throw IOException("Indexed audio sample size is invalid or exceeds the verification cap")
@@ -387,6 +417,7 @@ internal fun readVerifiedAudioSamplePayload(
     if (indexedSampleSize != null && bytesRead.toLong() != indexedSampleSize) {
         throw IOException("Audio sample payload read did not exactly match its indexed size")
     }
+    consumeVerifiedPayload(sampleBuffer, 0, bytesRead)
     return bytesRead.toLong()
 }
 

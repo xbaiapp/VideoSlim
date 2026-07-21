@@ -20,7 +20,11 @@ class AudioMetadataScanPolicyTest {
         val result =
             scanAudioSampleMetadata(
                 sampleTimeUs = { times[index] },
-                samplePayloadBytes = { sizes[index] },
+                samplePayloadBytes = { consume ->
+                    val payload = ByteArray(sizes[index].toInt()) { index.toByte() }
+                    consume(ByteBuffer.wrap(payload), 0, payload.size)
+                    payload.size.toLong()
+                },
                 advance = {
                     index += 1
                     index < times.size
@@ -60,6 +64,7 @@ class AudioMetadataScanPolicyTest {
                         sampleBuffer = ByteBuffer.allocate(512),
                         indexedSampleSize = 257L,
                         readSampleData = { buffer -> channel.read(buffer) },
+                        consumeVerifiedPayload = { _, _, _ -> },
                     ),
                 )
             }
@@ -79,6 +84,7 @@ class AudioMetadataScanPolicyTest {
                         sampleBuffer = ByteBuffer.allocate(512),
                         indexedSampleSize = 256L,
                         readSampleData = { buffer -> channel.read(buffer) },
+                        consumeVerifiedPayload = { _, _, _ -> },
                     )
                 }
             }
@@ -92,25 +98,35 @@ class AudioMetadataScanPolicyTest {
         val buffer = ByteBuffer.allocate(32)
         listOf(-1, 0).forEach { failedRead ->
             assertThrows(IOException::class.java) {
-                readVerifiedAudioSamplePayload(buffer, null) { failedRead }
+                readVerifiedAudioSamplePayload(
+                    sampleBuffer = buffer,
+                    indexedSampleSize = null,
+                    readSampleData = { failedRead },
+                    consumeVerifiedPayload = { _, _, _ -> },
+                )
             }
         }
         assertThrows(IOException::class.java) {
-            readVerifiedAudioSamplePayload(buffer, 16L) { 15 }
+            readVerifiedAudioSamplePayload(buffer, 16L, { 15 }) { _, _, _ -> }
         }
         assertThrows(IOException::class.java) {
-            readVerifiedAudioSamplePayload(buffer, 16L) { 17 }
+            readVerifiedAudioSamplePayload(buffer, 16L, { 17 }) { _, _, _ -> }
         }
         assertThrows(IOException::class.java) {
             readVerifiedAudioSamplePayload(
                 buffer,
                 MAX_AUDIO_SAMPLE_BUFFER_BYTES.toLong() + 1L,
-            ) { 1 }
+                readSampleData = { 1 },
+                consumeVerifiedPayload = { _, _, _ -> },
+            )
         }
         assertThrows(IOException::class.java) {
-            readVerifiedAudioSamplePayload(buffer, null) {
-                MAX_AUDIO_SAMPLE_BUFFER_BYTES + 1
-            }
+            readVerifiedAudioSamplePayload(
+                sampleBuffer = buffer,
+                indexedSampleSize = null,
+                readSampleData = { MAX_AUDIO_SAMPLE_BUFFER_BYTES + 1 },
+                consumeVerifiedPayload = { _, _, _ -> },
+            )
         }
     }
 
@@ -118,7 +134,12 @@ class AudioMetadataScanPolicyTest {
     fun `legacy API policy accepts a successful bounded physical read without index metadata`() {
         assertEquals(
             24L,
-            readVerifiedAudioSamplePayload(ByteBuffer.allocate(32), null) { 24 },
+            readVerifiedAudioSamplePayload(
+                sampleBuffer = ByteBuffer.allocate(32),
+                indexedSampleSize = null,
+                readSampleData = { 24 },
+                consumeVerifiedPayload = { _, _, _ -> },
+            ),
         )
     }
 
@@ -131,8 +152,10 @@ class AudioMetadataScanPolicyTest {
         assertThrows(CancellationException::class.java) {
             scanAudioSampleMetadata(
                 sampleTimeUs = { times[index] },
-                samplePayloadBytes = {
+                samplePayloadBytes = { consume ->
                     payloadReads += 1
+                    val payload = ByteBuffer.wrap(ByteArray(128))
+                    consume(payload, 0, 128)
                     128L
                 },
                 advance = {
@@ -144,5 +167,87 @@ class AudioMetadataScanPolicyTest {
         }
 
         assertEquals(1, payloadReads)
+    }
+
+    @Test
+    fun `source and output rescans digest the canonical physically read payload stream`() {
+        val samples =
+            listOf(
+                byteArrayOf(0x00, 0x01, 0xff.toByte()),
+                "ab".toByteArray(),
+            )
+
+        val sourceScan = scanVerifiedPayloads(samples, usesIndexedSizes = true)
+        val outputRescan = scanVerifiedPayloads(samples, usesIndexedSizes = true)
+
+        assertEquals(
+            "a4a65500d51c53df6c2bc87aeec5794a01fd8fc4f330ac7a04668c8ba1e5473c",
+            sourceScan.sampleDigest.sha256Hex,
+        )
+        assertEquals(sourceScan.sampleDigest, outputRescan.sampleDigest)
+    }
+
+    @Test
+    fun `indexed and legacy physical read policies produce the same sample digest`() {
+        val samples = listOf(byteArrayOf(1, 2, 3), byteArrayOf(4, 5))
+
+        assertEquals(
+            scanVerifiedPayloads(samples, usesIndexedSizes = true).sampleDigest,
+            scanVerifiedPayloads(samples, usesIndexedSizes = false).sampleDigest,
+        )
+    }
+
+    @Test
+    fun `sample scan requires exactly one matching verified payload delivery`() {
+        fun assertRejected(samplePayloadBytes: (VerifiedPayloadConsumer) -> Long) {
+            assertThrows(IOException::class.java) {
+                scanAudioSampleMetadata(
+                    sampleTimeUs = { 0L },
+                    samplePayloadBytes = samplePayloadBytes,
+                    advance = { false },
+                    shouldCancel = { false },
+                )
+            }
+        }
+
+        assertRejected { 1L }
+        assertRejected { consume ->
+            consume(ByteBuffer.wrap(byteArrayOf(1)), 0, 1)
+            2L
+        }
+        assertRejected { consume ->
+            val payload = ByteBuffer.wrap(byteArrayOf(1))
+            consume(payload, 0, 1)
+            consume(payload, 0, 1)
+            1L
+        }
+    }
+
+    private fun scanVerifiedPayloads(
+        samples: List<ByteArray>,
+        usesIndexedSizes: Boolean,
+    ): AudioSampleTiming {
+        var index = 0
+        val reusableBuffer = ByteBuffer.allocate(64)
+        return scanAudioSampleMetadata(
+            sampleTimeUs = { index * 1_000L },
+            samplePayloadBytes = { consume ->
+                val sample = samples[index]
+                readVerifiedAudioSamplePayload(
+                    sampleBuffer = reusableBuffer,
+                    indexedSampleSize = sample.size.toLong().takeIf { usesIndexedSizes },
+                    readSampleData = { buffer ->
+                        buffer.put(sample)
+                        sample.size
+                    },
+                    consumeVerifiedPayload = consume,
+                )
+            },
+            advance = {
+                index += 1
+                index < samples.size
+            },
+            shouldCancel = { false },
+        )
     }
 }

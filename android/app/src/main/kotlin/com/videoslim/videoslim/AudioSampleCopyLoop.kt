@@ -2,11 +2,98 @@ package com.videoslim.videoslim
 
 import java.io.IOException
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 import kotlin.math.max
 
 internal const val DEFAULT_AUDIO_SAMPLE_BUFFER_BYTES = 1024 * 1024
 internal const val MAX_AUDIO_SAMPLE_BUFFER_BYTES = 4 * 1024 * 1024
+internal const val AUDIO_SAMPLE_DIGEST_VERSION = 0x01
+
+internal data class AudioSampleDigest(
+    val version: Int,
+    val sha256Hex: String,
+) {
+    init {
+        require(version in 0x00..0xff) { "Audio sample digest version must fit in one byte" }
+        require(sha256Hex.length == SHA_256_HEX_LENGTH && sha256Hex.all { it in LOWERCASE_HEX_DIGITS }) {
+            "Audio sample digest must be canonical lowercase SHA-256 hex"
+        }
+    }
+
+    override fun toString(): String =
+        "AudioSampleDigest(version=$version, sha256Hex=<redacted>)"
+
+    private companion object {
+        const val SHA_256_HEX_LENGTH = 64
+        const val LOWERCASE_HEX_DIGITS = "0123456789abcdef"
+    }
+}
+
+/**
+ * Streams the versioned sequence of physically read encoded AAC samples into SHA-256.
+ * The caller's ByteBuffer position and limit are never modified.
+ */
+internal class AudioSampleDigestAccumulator(
+    private val version: Int = AUDIO_SAMPLE_DIGEST_VERSION,
+) {
+    private val digest = MessageDigest.getInstance("SHA-256")
+    private val header = ByteBuffer.allocate(SAMPLE_HEADER_BYTES).order(ByteOrder.BIG_ENDIAN)
+    private var sampleIndex = 0L
+    private var finished = false
+
+    init {
+        require(version in 0x00..0xff) { "Audio sample digest version must fit in one byte" }
+        digest.update(version.toByte())
+    }
+
+    fun addSample(
+        buffer: ByteBuffer,
+        offset: Int,
+        length: Int,
+    ) {
+        check(!finished) { "Audio sample digest is already finished" }
+        require(length > 0) { "Audio sample digest length must be positive" }
+        if (offset < 0 || offset > buffer.capacity() - length) {
+            throw IndexOutOfBoundsException("Audio sample digest range is outside the buffer")
+        }
+        val nextSampleIndex = Math.incrementExact(sampleIndex)
+        header.clear()
+        header.putLong(sampleIndex)
+        header.putLong(length.toLong())
+        header.flip()
+        digest.update(header)
+
+        val payload: ByteBuffer = buffer.duplicate()
+        payload.clear()
+        payload.position(offset)
+        payload.limit(offset + length)
+        digest.update(payload)
+        sampleIndex = nextSampleIndex
+    }
+
+    fun finish(): AudioSampleDigest {
+        check(!finished) { "Audio sample digest is already finished" }
+        finished = true
+        return AudioSampleDigest(version, digest.digest().toLowercaseHex())
+    }
+
+    private companion object {
+        const val SAMPLE_HEADER_BYTES = 16
+    }
+}
+
+private fun ByteArray.toLowercaseHex(): String {
+    val digits = "0123456789abcdef"
+    val chars = CharArray(size * 2)
+    forEachIndexed { index, byte ->
+        val value = byte.toInt() and 0xff
+        chars[index * 2] = digits[value ushr 4]
+        chars[index * 2 + 1] = digits[value and 0x0f]
+    }
+    return String(chars)
+}
 
 internal interface EncodedAudioSampleSource {
     val sampleTimeUs: Long
@@ -40,6 +127,7 @@ internal data class EncodedAudioCopyResult(
     val lastInputTimeUs: Long,
     val lastOutputTimeUs: Long,
     val usesIndexedPhysicalSampleSizes: Boolean,
+    val sampleDigest: AudioSampleDigest,
 )
 
 internal fun boundedAudioSampleBufferSize(declaredMaxInputSize: Int?): Int {
@@ -72,6 +160,7 @@ internal fun copyEncodedAudioSamples(
     var totalBytes = 0L
     var lastInputTimeUs = -1L
     var lastProgress = 0.0
+    val sampleDigest = AudioSampleDigestAccumulator()
     while (true) {
         if (shouldCancel() || Thread.currentThread().isInterrupted) {
             throw CancellationException("Audio extraction cancelled")
@@ -118,6 +207,7 @@ internal fun copyEncodedAudioSamples(
             )
         buffer.position(0)
         buffer.limit(size)
+        sampleDigest.addSample(buffer, info.offset, info.size)
         sink.writeSampleData(buffer, info)
         sampleCount += 1L
         totalBytes += size.toLong()
@@ -147,5 +237,6 @@ internal fun copyEncodedAudioSamples(
         lastInputTimeUs = lastInputTimeUs,
         lastOutputTimeUs = lastOutputTimeUs,
         usesIndexedPhysicalSampleSizes = indexedSizeMode == true,
+        sampleDigest = sampleDigest.finish(),
     )
 }

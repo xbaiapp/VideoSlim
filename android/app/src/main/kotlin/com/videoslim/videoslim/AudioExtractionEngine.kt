@@ -750,6 +750,19 @@ internal fun requireLosslessPayloadAggregateIntegrity(
             throw IOException("Legacy lossless payload exceeds its bounded sentinel invariant")
         }
     }
+    if (
+        source.sampleDigest.version != AUDIO_SAMPLE_DIGEST_VERSION ||
+        copy.sampleDigest.version != AUDIO_SAMPLE_DIGEST_VERSION ||
+        output.sampleDigest.version != AUDIO_SAMPLE_DIGEST_VERSION
+    ) {
+        throw IOException("Lossless sample digest version is unsupported")
+    }
+    if (source.sampleDigest != copy.sampleDigest) {
+        throw IOException("Source payload changed or the lossless copy read differed")
+    }
+    if (copy.sampleDigest != output.sampleDigest) {
+        throw IOException("Muxed output sample payload differed from the lossless copy")
+    }
 }
 
 internal fun mapAudioPipelineFailure(

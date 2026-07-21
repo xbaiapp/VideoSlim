@@ -281,6 +281,73 @@ class AudioOutputVerifierTest {
         }
     }
 
+    @Test
+    fun `lossless integrity rejects equal aggregates when one sample byte changes`() {
+        val originalDigest =
+            AudioSampleDigest(
+                AUDIO_SAMPLE_DIGEST_VERSION,
+                "a4a65500d51c53df6c2bc87aeec5794a01fd8fc4f330ac7a04668c8ba1e5473c",
+            )
+        val changedDigest =
+            AudioSampleDigest(
+                AUDIO_SAMPLE_DIGEST_VERSION,
+                "b6e6c51bc3e5a46cf1ced75186f281b20bd3d638f03c1c2abac3b60284335f79",
+            )
+        val source =
+            validMetadata().copy(
+                sampleCount = 2L,
+                sampleBytes = 5L,
+                usesIndexedPhysicalSampleSizes = true,
+                sampleDigest = originalDigest,
+            )
+        val matchingCopy = copyResult(source, usesIndexedPhysicalSampleSizes = true)
+        val matchingOutput = source.copy(sourceUri = "output.m4a", fileName = "output.m4a")
+
+        requireLosslessPayloadAggregateIntegrity(source, matchingCopy, matchingOutput)
+
+        val sourceCopyMismatch =
+            assertThrows(IOException::class.java) {
+                requireLosslessPayloadAggregateIntegrity(
+                    source,
+                    matchingCopy.copy(sampleDigest = changedDigest),
+                    matchingOutput.copy(sampleDigest = changedDigest),
+                )
+            }
+        assertTrue(sourceCopyMismatch.message.orEmpty().contains("Source payload"))
+        assertFalse(sourceCopyMismatch.message.orEmpty().contains(originalDigest.sha256Hex))
+
+        val copyOutputMismatch =
+            assertThrows(IOException::class.java) {
+                requireLosslessPayloadAggregateIntegrity(
+                    source,
+                    matchingCopy,
+                    matchingOutput.copy(sampleDigest = changedDigest),
+                )
+            }
+        assertTrue(copyOutputMismatch.message.orEmpty().contains("Muxed output"))
+        assertFalse(copyOutputMismatch.message.orEmpty().contains(changedDigest.sha256Hex))
+    }
+
+    @Test
+    fun `lossless integrity rejects unsupported digest version`() {
+        val unsupportedDigest =
+            AudioSampleDigest(
+                version = 0x02,
+                sha256Hex = "b".repeat(64),
+            )
+        val source =
+            validMetadata().copy(
+                usesIndexedPhysicalSampleSizes = true,
+                sampleDigest = unsupportedDigest,
+            )
+        val copy = copyResult(source, usesIndexedPhysicalSampleSizes = true)
+        val output = source.copy(sourceUri = "output.m4a", fileName = "output.m4a")
+
+        assertThrows(IOException::class.java) {
+            requireLosslessPayloadAggregateIntegrity(source, copy, output)
+        }
+    }
+
     private fun copyResult(
         metadata: AudioMetadata,
         usesIndexedPhysicalSampleSizes: Boolean,
@@ -292,6 +359,7 @@ class AudioOutputVerifierTest {
         lastOutputTimeUs =
             requireNotNull(metadata.lastSampleTimeUs) - requireNotNull(metadata.firstSampleTimeUs),
         usesIndexedPhysicalSampleSizes = usesIndexedPhysicalSampleSizes,
+        sampleDigest = metadata.sampleDigest,
     )
 
     private fun shortValidMetadata() =
@@ -311,6 +379,7 @@ class AudioOutputVerifierTest {
             lastSampleTimeUs = 490_667L,
             sampleCount = 24L,
             sampleBytes = 8_000L,
+            sampleDigest = VALID_SAMPLE_DIGEST,
             sampleTimesMonotonic = true,
             maxSampleDeltaUs = 21_334L,
             audioProfile = AudioOutputVerifier.AAC_PROFILE_LC,
@@ -333,8 +402,17 @@ class AudioOutputVerifierTest {
             lastSampleTimeUs = 59_978_000L,
             sampleCount = 2_812L,
             sampleBytes = 990_000L,
+            sampleDigest = VALID_SAMPLE_DIGEST,
             sampleTimesMonotonic = true,
             maxSampleDeltaUs = 21_337L,
             audioProfile = AudioOutputVerifier.AAC_PROFILE_LC,
         )
+
+    private companion object {
+        val VALID_SAMPLE_DIGEST =
+            AudioSampleDigest(
+                version = AUDIO_SAMPLE_DIGEST_VERSION,
+                sha256Hex = "a".repeat(64),
+            )
+    }
 }
