@@ -2,7 +2,6 @@ package com.videoslim.videoslim
 
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -11,35 +10,22 @@ class ProcessingServiceOwnershipPolicyTest {
     fun `user cancellation watchdog wins when engine cancellation never reaches terminal`() {
         val context = activeContext("service-task", "engine-task", generation = 21L)
         val scheduler = ManualWatchdogScheduler()
-        val watchdog = UserCancellationWatchdog(scheduler, timeoutMillis = 5_000L)
-        val operations = CleanupOperations(watchdog)
-        val cleanup = operations.cleanup()
+        val harness =
+            OwnershipPolicyHarness(
+                context = context,
+                scheduler = scheduler,
+                cancelFailure = IllegalStateException("cancel failed"),
+            )
 
-        assertTrue(
-            watchdog.arm {
-                context.finishOnce(
-                    generation = 21L,
-                    outcome = ActiveTaskTerminalOutcome.CANCELLED,
-                    source = ActiveTaskFinishSource.USER_CANCEL_TIMEOUT,
-                    releaseResources = {
-                        cleanup.releaseForTerminalWinner(includeServiceSurface = true)
-                    },
-                )
-            },
-        )
         assertEquals(
-            ActiveTaskCancellationDecision.CancelEngine(
-                EngineTaskRoute(TaskKind.VIDEO_COMPRESSION, "engine-task"),
-            ),
-            context.requestCancellation(
-                taskId = "service-task",
-                generation = 21L,
-                source = ActiveTaskCancellationSource.USER,
-            ),
+            ServiceTerminationResult.AWAITING_ENGINE_TERMINAL,
+            harness.policy.handleCancel("service-task"),
         )
+        val route = EngineTaskRoute(TaskKind.VIDEO_COMPRESSION, "engine-task")
+        assertEquals(listOf(route), harness.discardedRoutes)
+        assertEquals(listOf(route), harness.cancelledRoutes)
+        assertTrue(harness.failures.any { it.first == "engine cancellation" })
 
-        // Model cancel() throwing or returning without ever producing a terminal callback.
-        runCatching { throw IllegalStateException("cancel failed") }
         scheduler.fire()
 
         assertEquals(
@@ -49,7 +35,7 @@ class ProcessingServiceOwnershipPolicyTest {
             ),
             context.terminalOwnership,
         )
-        operations.assertReleasedExactlyOnce()
+        harness.assertReleasedExactlyOnce()
         val lateEngineTerminal =
             context.finishOnce(
                 generation = 21L,
@@ -60,38 +46,7 @@ class ProcessingServiceOwnershipPolicyTest {
     }
 
     @Test
-    fun `service timeout and destruction keep assigned route pending engine unwind`() {
-        val timeoutContext = activeContext("timeout-service", "timeout-engine", generation = 25L)
-        val destroyContext = activeContext("destroy-service", "destroy-engine", generation = 26L)
-
-        assertEquals(
-            ActiveTaskCancellationDecision.CancelEngine(
-                EngineTaskRoute(TaskKind.VIDEO_COMPRESSION, "timeout-engine"),
-            ),
-            timeoutContext.requestCancellation(
-                taskId = "timeout-service",
-                generation = 25L,
-                source = ActiveTaskCancellationSource.TIMEOUT,
-            ),
-        )
-        assertEquals(ActiveTaskLifecycle.ENGINE_ASSIGNED, timeoutContext.lifecycle)
-        assertEquals("timeout-engine", timeoutContext.engineTaskId)
-        assertEquals(
-            ActiveTaskCancellationDecision.CancelEngine(
-                EngineTaskRoute(TaskKind.VIDEO_COMPRESSION, "destroy-engine"),
-            ),
-            destroyContext.requestCancellation(
-                taskId = "destroy-service",
-                generation = 26L,
-                source = ActiveTaskCancellationSource.SERVICE_DESTROY,
-            ),
-        )
-        assertEquals(ActiveTaskLifecycle.ENGINE_ASSIGNED, destroyContext.lifecycle)
-        assertEquals("destroy-engine", destroyContext.engineTaskId)
-    }
-
-    @Test
-    fun `service timeout and destruction claim terminal ownership and release engines`() {
+    fun `service timeout and destruction cancel assigned route before terminal release`() {
         val cases =
             listOf(
                 Triple(
@@ -107,34 +62,69 @@ class ProcessingServiceOwnershipPolicyTest {
             )
 
         cases.forEach { (context, cancellationSource, finishSource) ->
-            val operations = CleanupOperations(UserCancellationWatchdog(ManualWatchdogScheduler(), 5_000L))
-            val cleanup = operations.cleanup()
-            assertTrue(
-                context.requestCancellation(
-                    taskId = context.serviceTaskId,
-                    generation = context.launchGeneration,
-                    source = cancellationSource,
-                ) is ActiveTaskCancellationDecision.CancelEngine,
-            )
+            val route = checkNotNull(context.engineRoute)
+            val harness = OwnershipPolicyHarness(context)
+            val result =
+                when (cancellationSource) {
+                    ActiveTaskCancellationSource.TIMEOUT -> harness.policy.onTimeout()
+                    ActiveTaskCancellationSource.SERVICE_DESTROY -> harness.policy.onDestroy()
+                    ActiveTaskCancellationSource.USER -> error("unexpected user cancellation case")
+                }
 
-            assertTrue(
-                context.finishOnce(
-                    generation = context.launchGeneration,
-                    outcome = ActiveTaskTerminalOutcome.FAILED,
-                    source = finishSource,
-                    releaseResources = {
-                        cleanup.releaseForTerminalWinner(includeServiceSurface = true)
-                    },
-                ) is ActiveTaskFinishDecision.Won,
-            )
-
+            assertEquals(ServiceTerminationResult.TERMINAL, result)
+            assertEquals(listOf(route), harness.discardedRoutes)
+            assertEquals(listOf(route), harness.cancelledRoutes)
             assertEquals(
                 ActiveTaskTerminalOwnership(ActiveTaskTerminalOutcome.FAILED, finishSource),
                 context.terminalOwnership,
             )
             assertEquals(ActiveTaskLifecycle.RELEASED, context.lifecycle)
-            assertFalse(cleanup.releaseForServiceDestroy())
-            operations.assertReleasedExactlyOnce()
+            assertEquals(null, context.engineTaskId)
+            harness.assertReleasedExactlyOnce(
+                expectStop = cancellationSource != ActiveTaskCancellationSource.SERVICE_DESTROY,
+            )
+        }
+    }
+
+    @Test
+    fun `service timeout and destruction still finish when assigned engine cancellation throws`() {
+        val cases =
+            listOf(
+                Triple(
+                    activeContext("timeout-service", "timeout-engine", generation = 30L),
+                    ActiveTaskCancellationSource.TIMEOUT,
+                    ActiveTaskFinishSource.SERVICE_TIMEOUT,
+                ),
+                Triple(
+                    activeContext("destroy-service", "destroy-engine", generation = 31L),
+                    ActiveTaskCancellationSource.SERVICE_DESTROY,
+                    ActiveTaskFinishSource.ON_DESTROY,
+                ),
+            )
+
+        cases.forEach { (context, cancellationSource, finishSource) ->
+            val harness =
+                OwnershipPolicyHarness(
+                    context = context,
+                    cancelFailure = IllegalStateException("cancel failed"),
+                )
+
+            val result =
+                when (cancellationSource) {
+                    ActiveTaskCancellationSource.TIMEOUT -> harness.policy.onTimeout()
+                    ActiveTaskCancellationSource.SERVICE_DESTROY -> harness.policy.onDestroy()
+                    ActiveTaskCancellationSource.USER -> error("unexpected user cancellation case")
+                }
+
+            assertEquals(ServiceTerminationResult.TERMINAL, result)
+            assertEquals(
+                ActiveTaskTerminalOwnership(ActiveTaskTerminalOutcome.FAILED, finishSource),
+                context.terminalOwnership,
+            )
+            assertTrue(harness.failures.any { it.first == "engine cancellation" })
+            harness.assertReleasedExactlyOnce(
+                expectStop = cancellationSource != ActiveTaskCancellationSource.SERVICE_DESTROY,
+            )
         }
     }
 
@@ -146,23 +136,19 @@ class ProcessingServiceOwnershipPolicyTest {
                 taskKind = TaskKind.AUDIO_EXTRACTION,
                 launchGeneration = 27L,
             )
+        val harness = OwnershipPolicyHarness(context)
 
+        assertEquals(ServiceTerminationResult.TERMINAL, harness.policy.onDestroy())
         assertEquals(
-            ActiveTaskCancellationDecision.FinishBeforeEngine,
-            context.requestCancellation(
-                taskId = "service-task",
-                generation = 27L,
-                source = ActiveTaskCancellationSource.SERVICE_DESTROY,
+            ActiveTaskTerminalOwnership(
+                ActiveTaskTerminalOutcome.FAILED,
+                ActiveTaskFinishSource.ON_DESTROY,
             ),
-        )
-        assertTrue(
-            context.finishOnce(
-                generation = 27L,
-                outcome = ActiveTaskTerminalOutcome.FAILED,
-                source = ActiveTaskFinishSource.ON_DESTROY,
-            ) is ActiveTaskFinishDecision.Won,
+            context.terminalOwnership,
         )
         assertEquals(ActiveTaskLifecycle.RELEASED, context.lifecycle)
+        assertTrue(harness.cancelledRoutes.isEmpty())
+        harness.assertReleasedExactlyOnce(expectStop = false)
     }
 
     @Test
@@ -243,16 +229,25 @@ class ProcessingServiceOwnershipPolicyTest {
     @Test
     fun `terminal engine cleanup and onDestroy fallback are idempotent`() {
         val scheduler = ManualWatchdogScheduler()
-        val watchdog = UserCancellationWatchdog(scheduler, timeoutMillis = 5_000L)
-        val operations = CleanupOperations(watchdog)
-        val cleanup = operations.cleanup()
-        assertTrue(watchdog.arm { throw AssertionError("cancelled watchdog must not fire") })
+        val context = activeContext("service-task", "engine-task", generation = 51L)
+        val harness = OwnershipPolicyHarness(context = context, scheduler = scheduler)
 
-        assertTrue(cleanup.releaseForTerminalWinner(includeServiceSurface = true))
-        assertFalse(cleanup.releaseForServiceDestroy())
+        assertEquals(
+            ServiceTerminationResult.AWAITING_ENGINE_TERMINAL,
+            harness.policy.handleCancel(context.serviceTaskId),
+        )
+        assertTrue(
+            harness.policy.finish(
+                ServiceTerminalDirective(
+                    outcome = ActiveTaskTerminalOutcome.CANCELLED,
+                    source = ActiveTaskFinishSource.ENGINE_TERMINAL,
+                ),
+            ) is ActiveTaskFinishDecision.Won,
+        )
+        assertEquals(ServiceTerminationResult.TERMINAL, harness.policy.onDestroy())
         scheduler.fire()
 
-        operations.assertReleasedExactlyOnce()
+        harness.assertReleasedExactlyOnce()
         assertEquals(1, scheduler.cancelCalls.get())
     }
 
@@ -310,20 +305,36 @@ class ProcessingServiceOwnershipPolicyTest {
         )
     }
 
-    private class CleanupOperations(
-        private val watchdog: UserCancellationWatchdog,
+    private class OwnershipPolicyHarness(
+        val context: ActiveTaskContext,
+        scheduler: ManualWatchdogScheduler = ManualWatchdogScheduler(),
+        private val cancelFailure: Throwable? = null,
     ) {
+        val discardedRoutes = mutableListOf<EngineTaskRoute>()
+        val cancelledRoutes = mutableListOf<EngineTaskRoute>()
+        val failures = mutableListOf<Pair<String, Throwable>>()
+        private val watchdog = UserCancellationWatchdog(scheduler, timeoutMillis = 5_000L)
         private val observer = AtomicInteger()
         private val wakeLock = AtomicInteger()
         private val foreground = AtomicInteger()
         private val notification = AtomicInteger()
         private val videoEngine = AtomicInteger()
         private val audioEngine = AtomicInteger()
+        private val clearActive = AtomicInteger()
+        private val stop = AtomicInteger()
 
-        fun cleanup(): ServiceTaskCleanup =
-            ServiceTaskCleanup(
+        val policy =
+            ServiceTerminationPolicy(
+                context = context,
+                cancellationWatchdog = watchdog,
                 actions =
-                    ServiceTaskCleanupActions(
+                    ServiceTerminationPolicyActions(
+                        markPublicationDiscarding = discardedRoutes::add,
+                        cancelEngine = { route ->
+                            cancelledRoutes += route
+                            cancelFailure?.let { throw it }
+                        },
+                        publishRegistryTerminal = {},
                         cancelUserWatchdog = watchdog::cancel,
                         removeRegistryObserver = { observer.incrementAndGet() },
                         releaseWakeLock = { wakeLock.incrementAndGet() },
@@ -331,16 +342,22 @@ class ProcessingServiceOwnershipPolicyTest {
                         publishTerminalNotification = { notification.incrementAndGet() },
                         disposeTranscodeEngine = { videoEngine.incrementAndGet() },
                         disposeAudioExtractionEngine = { audioEngine.incrementAndGet() },
+                        ownsServiceSurface = { true },
+                        clearActiveLaunch = { clearActive.incrementAndGet() },
+                        stopService = { stop.incrementAndGet() },
+                        onFailure = { operation, error -> failures += operation to error },
                     ),
             )
 
-        fun assertReleasedExactlyOnce() {
+        fun assertReleasedExactlyOnce(expectStop: Boolean = true) {
             assertEquals(1, observer.get())
             assertEquals(1, wakeLock.get())
             assertEquals(1, foreground.get())
             assertEquals(1, notification.get())
             assertEquals(1, videoEngine.get())
             assertEquals(1, audioEngine.get())
+            assertEquals(1, clearActive.get())
+            assertEquals(if (expectStop) 1 else 0, stop.get())
         }
     }
 

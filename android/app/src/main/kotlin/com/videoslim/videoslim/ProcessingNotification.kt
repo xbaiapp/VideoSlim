@@ -200,6 +200,117 @@ internal data class ProcessingNotificationText(
     }
 }
 
+internal data class ProcessingTerminalNotificationPayload(
+    val taskId: String,
+    val taskKind: TaskKind,
+    val outcome: ActiveTaskTerminalOutcome,
+    val source: ActiveTaskFinishSource,
+    val terminalSnapshot: TaskRuntimeSnapshot?,
+    val errorCode: String?,
+    val errorMessage: String?,
+) {
+    val text: ProcessingNotificationText
+        get() = terminalSnapshot?.let(ProcessingNotificationText::from) ?: fallbackText()
+
+    fun asSnapshot(): TaskRuntimeSnapshot =
+        terminalSnapshot
+            ?: TaskRuntimeSnapshot(
+                taskId = taskId,
+                percent = if (outcome == ActiveTaskTerminalOutcome.SUCCEEDED) 100.0 else 0.0,
+                state = outcome.toRuntimeState(),
+                phase = TaskRuntimeSnapshot.PHASE_FINISHED,
+                sourceUri = "content://videoslim/terminal/$taskId",
+                outputFileName = if (taskKind == TaskKind.AUDIO_EXTRACTION) "audio.m4a" else "video.mp4",
+                startedAtEpochMs = 0L,
+                taskKind = taskKind,
+                outputLocationLabel = "VideoSlim",
+                errorCode =
+                    if (outcome == ActiveTaskTerminalOutcome.FAILED) {
+                        errorCode ?: EngineErrorCode.UNKNOWN.wireName
+                    } else {
+                        null
+                    },
+                errorMessage =
+                    if (outcome == ActiveTaskTerminalOutcome.FAILED) {
+                        errorMessage ?: "媒体处理任务未能完成"
+                    } else {
+                        null
+                    },
+            )
+
+    private fun fallbackText(): ProcessingNotificationText {
+        val isAudio = taskKind == TaskKind.AUDIO_EXTRACTION
+        return when (outcome) {
+            ActiveTaskTerminalOutcome.SUCCEEDED ->
+                ProcessingNotificationText(
+                    title = if (isAudio) "音频提取已完成" else "视频处理已完成",
+                    body = "打开 VideoSlim 查看保存结果",
+                    progress = 100,
+                    ongoing = false,
+                    showCancel = false,
+                )
+            ActiveTaskTerminalOutcome.FAILED ->
+                ProcessingNotificationText(
+                    title = if (isAudio) "没能完成音频提取" else "没能完成压缩",
+                    body = "任务已结束，请打开 VideoSlim 查看详情",
+                    progress = 0,
+                    ongoing = false,
+                    showCancel = false,
+                )
+            ActiveTaskTerminalOutcome.CANCELLED ->
+                ProcessingNotificationText(
+                    title = if (isAudio) "音频提取已取消" else "压缩已取消",
+                    body = if (isAudio) "原视频和已保存文件没有被修改" else "原视频没有被修改",
+                    progress = 0,
+                    ongoing = false,
+                    showCancel = false,
+                )
+        }
+    }
+}
+
+internal class ServiceTerminalNotificationPolicy(
+    private val context: ActiveTaskContext,
+    private val registrySnapshot: () -> TaskRuntimeSnapshot?,
+    private val notifyTerminal: (ProcessingTerminalNotificationPayload) -> Unit,
+) {
+    fun attempt(terminal: ServiceTerminalDirective) {
+        val snapshot = runCatching { registrySnapshot() }.getOrNull()
+        notifyTerminal(terminalNotificationPayload(context, terminal, snapshot))
+    }
+}
+
+internal fun terminalNotificationPayload(
+    context: ActiveTaskContext,
+    terminal: ServiceTerminalDirective,
+    registrySnapshot: TaskRuntimeSnapshot?,
+): ProcessingTerminalNotificationPayload {
+    val expectedState = terminal.outcome.toRuntimeState()
+    val matchingTerminal =
+        registrySnapshot?.takeIf { snapshot ->
+            snapshot.taskId == context.serviceTaskId &&
+                snapshot.taskKind == context.taskKind &&
+                snapshot.isTerminal &&
+                snapshot.state == expectedState
+        }
+    return ProcessingTerminalNotificationPayload(
+        taskId = context.serviceTaskId,
+        taskKind = context.taskKind,
+        outcome = terminal.outcome,
+        source = terminal.source,
+        terminalSnapshot = matchingTerminal,
+        errorCode = terminal.errorCode,
+        errorMessage = terminal.errorMessage,
+    )
+}
+
+private fun ActiveTaskTerminalOutcome.toRuntimeState(): String =
+    when (this) {
+        ActiveTaskTerminalOutcome.SUCCEEDED -> TaskRuntimeSnapshot.STATE_SUCCESS
+        ActiveTaskTerminalOutcome.FAILED -> TaskRuntimeSnapshot.STATE_FAILED
+        ActiveTaskTerminalOutcome.CANCELLED -> TaskRuntimeSnapshot.STATE_CANCELLED
+    }
+
 internal class ProcessingNotificationFactory(context: Context) {
     private val appContext = context.applicationContext
     private val notificationManager =
@@ -233,6 +344,14 @@ internal class ProcessingNotificationFactory(context: Context) {
         return build(snapshot, null)
     }
 
+    fun terminal(payload: ProcessingTerminalNotificationPayload): Notification =
+        build(
+            snapshot = payload.asSnapshot(),
+            cancelIntent = null,
+            text = payload.text,
+            terminalPayload = payload,
+        )
+
     fun notifyForeground(
         snapshot: TaskRuntimeSnapshot,
         cancelIntent: PendingIntent,
@@ -247,17 +366,26 @@ internal class ProcessingNotificationFactory(context: Context) {
         notificationManager.notify(TERMINAL_NOTIFICATION_ID, terminal(snapshot))
     }
 
+    fun notifyTerminal(payload: ProcessingTerminalNotificationPayload) {
+        notificationManager.notify(TERMINAL_NOTIFICATION_ID, terminal(payload))
+    }
+
     private fun build(
         snapshot: TaskRuntimeSnapshot,
         cancelIntent: PendingIntent?,
+        text: ProcessingNotificationText = ProcessingNotificationText.from(snapshot),
+        terminalPayload: ProcessingTerminalNotificationPayload? = null,
     ): Notification {
-        val text = ProcessingNotificationText.from(snapshot)
         val contentIntent =
             PendingIntent.getActivity(
                 appContext,
                 CONTENT_REQUEST_CODE,
                 Intent(appContext, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    terminalPayload?.let { payload ->
+                        putExtra(EXTRA_TERMINAL_TASK_ID, payload.taskId)
+                        putExtra(EXTRA_TERMINAL_OUTCOME, payload.outcome.name)
+                    }
                 },
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
@@ -297,5 +425,7 @@ internal class ProcessingNotificationFactory(context: Context) {
         const val FOREGROUND_NOTIFICATION_ID = 2_001
         const val TERMINAL_NOTIFICATION_ID = 2_002
         private const val CONTENT_REQUEST_CODE = 2_003
+        private const val EXTRA_TERMINAL_TASK_ID = "processingTerminalTaskId"
+        private const val EXTRA_TERMINAL_OUTCOME = "processingTerminalOutcome"
     }
 }
