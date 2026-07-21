@@ -5,7 +5,9 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 
 internal fun validatedStartTaskKind(
     snapshot: TaskRuntimeSnapshot,
@@ -19,21 +21,20 @@ internal fun validatedStartTaskKind(
 
 internal class RecoveryPublicationObserver(
     private val journal: PublicationRecoveryJournal,
-    private val taskId: () -> String?,
-    private val cancellationRequested: () -> Boolean,
-    private val onOutputFileName: (String) -> Unit = {},
+    private val owner: ActiveTaskPublicationOwner,
+    private val onOutputFileName: (PublicationLaunchIdentity, String) -> Unit = { _, _ -> },
     private val logger: (String) -> Unit = {},
 ) : PublicationObserver {
     override fun onPublicationUriAllocated(publicationUri: String) {
-        val internalTaskId =
-            taskId() ?: throw IllegalStateException("Publication allocated without an engine task")
+        val identity = identityOrIgnore("allocation") ?: return
+        val internalTaskId = identity.engineTaskId
         journal.recordPublicationAllocation(internalTaskId, publicationUri)
         logger("task=$internalTaskId publication allocated uri=$publicationUri")
     }
 
     override fun onPublicationTargetAllocated(target: PublicationTarget) {
-        val internalTaskId =
-            taskId() ?: throw IllegalStateException("Publication started without an engine task")
+        val identity = identityOrIgnore("target allocation") ?: return
+        val internalTaskId = identity.engineTaskId
         journal.recordPublicationTarget(
             taskId = internalTaskId,
             actualOutputDisplayName = target.actualDisplayName,
@@ -41,18 +42,18 @@ internal class RecoveryPublicationObserver(
             canonicalLegacyOutputPath = target.canonicalLegacyOutputPath,
             mediaKind = target.mediaKind,
         )
-        if (cancellationRequested()) journal.markDiscarding(internalTaskId)
+        if (owner.isCancellationRequested) journal.markDiscarding(internalTaskId)
         logger(
             "task=$internalTaskId publication target kind=${target.mediaKind.name} " +
                 "actualName=${target.actualDisplayName} uri=${target.mediaStoreUri}",
         )
-        onOutputFileName(target.actualDisplayName)
+        onOutputFileName(identity, target.actualDisplayName)
     }
 
     override fun onPublicationCompleted(target: PublicationTarget) {
-        val internalTaskId =
-            taskId() ?: throw IllegalStateException("Publication completed without an engine task")
-        when (publicationCompletionRecoveryStage(cancellationRequested())) {
+        val identity = identityOrIgnore("completion") ?: return
+        val internalTaskId = identity.engineTaskId
+        when (publicationCompletionRecoveryStage(owner.isCancellationRequested)) {
             RecoveryStage.PUBLISHED -> journal.markPublished(internalTaskId)
             RecoveryStage.DISCARDING -> journal.markDiscarding(internalTaskId)
             else -> error("Unexpected publication completion stage")
@@ -61,27 +62,43 @@ internal class RecoveryPublicationObserver(
     }
 
     override fun onPublicationDiscarding(target: PublicationTarget) {
-        val internalTaskId =
-            taskId() ?: throw IllegalStateException("Publication discarded without an engine task")
+        val identity = identityOrIgnore("discard") ?: return
+        val internalTaskId = identity.engineTaskId
         journal.markDiscarding(internalTaskId)
         logger("task=$internalTaskId publication discarding uri=${target.mediaStoreUri}")
     }
+
+    private fun identityOrIgnore(callback: String): PublicationLaunchIdentity? =
+        owner.identity.also { identity ->
+            if (identity == null) {
+                logger("ignored publication $callback before launch engine ownership was bound")
+            }
+        }
 }
+
+private data class ActiveServiceLaunch(
+    val context: ActiveTaskContext,
+    val publicationOwner: ActiveTaskPublicationOwner,
+    val cancellationWatchdog: UserCancellationWatchdog,
+    val transcodeEngine: TranscodeEngine,
+    val audioExtractionEngine: AudioExtractionEngine,
+    val cleanup: ServiceTaskCleanup,
+)
 
 internal class ProcessingService : Service() {
     private lateinit var notificationFactory: ProcessingNotificationFactory
     private lateinit var wakeLockGuard: WakeLockGuard
-    private lateinit var transcodeEngine: TranscodeEngine
-    private lateinit var audioExtractionEngine: AudioExtractionEngine
     private lateinit var recoveryStore: TaskRecoveryStore
     private lateinit var logDispatcher: AppLogDispatcher
-    @Volatile private var activeTaskContext: ActiveTaskContext? = null
+    private lateinit var mainHandler: Handler
+    @Volatile private var activeLaunch: ActiveServiceLaunch? = null
+    @Volatile private var latestLaunch: ActiveServiceLaunch? = null
     @Volatile private var registryObserverRegistered = false
     @Volatile private var launchGeneration = 0L
     private var lastStartId = 0
 
     private val registryObserver: (TaskRuntimeSnapshot) -> Unit = { snapshot ->
-        val context = activeTaskContext
+        val context = activeLaunch?.context
         if (
             context != null &&
             context.owns(snapshot.taskId, launchGeneration) &&
@@ -100,42 +117,13 @@ internal class ProcessingService : Service() {
         super.onCreate()
         notificationFactory = ProcessingNotificationFactory(this)
         wakeLockGuard = WakeLockGuard(AndroidPartialWakeLock(this))
+        mainHandler = Handler(Looper.getMainLooper())
         logDispatcher = (application as VideoSlimApplication).logDispatcher
         recoveryStore = TaskRecoveryStore(this, ::log)
         runCatching { OrphanCleanup(this, recoveryStore, ::log).reconcile() }
             .onFailure { error ->
                 log("service startup reconciliation failed ${error.stackTraceToString()}")
             }
-        val publicationObserver =
-            RecoveryPublicationObserver(
-                journal = recoveryStore,
-                taskId = { activeTaskContext?.engineTaskId },
-                cancellationRequested = { activeTaskContext?.isCancellationRequested == true },
-                onOutputFileName = { actualDisplayName ->
-                    activeTaskContext?.serviceTaskId?.let { publicTaskId ->
-                        ProcessingRuntime.registry.updateOutputFileName(
-                            publicTaskId,
-                            actualDisplayName,
-                        )
-                    }
-                },
-                logger = ::log,
-            )
-        val mediaStoreSaver = MediaStoreSaver(this, publicationObserver)
-        transcodeEngine =
-            TranscodeEngine(
-                context = this,
-                mediaStoreSaver = mediaStoreSaver,
-                recoveryStore = recoveryStore,
-                logger = ::log,
-            )
-        audioExtractionEngine =
-            AudioExtractionEngine(
-                context = this,
-                mediaStoreSaver = mediaStoreSaver,
-                recoveryStore = recoveryStore,
-                logger = ::log,
-            )
         ProcessingRuntime.registry.addObserver(registryObserver)
         registryObserverRegistered = true
         log("processing service created")
@@ -165,7 +153,8 @@ internal class ProcessingService : Service() {
         fgsType: Int,
     ) {
         log("processing service timeout startId=$startId type=$fgsType")
-        val context = activeTaskContext ?: return
+        val launch = activeLaunch ?: return
+        val context = launch.context
         when (
             val decision =
                 context.requestCancellation(
@@ -175,56 +164,94 @@ internal class ProcessingService : Service() {
                 )
         ) {
             ActiveTaskCancellationDecision.Ignored -> return
-            ActiveTaskCancellationDecision.FinishBeforeEngine -> Unit
+            ActiveTaskCancellationDecision.FinishBeforeEngine -> {
+                finishActiveTask(
+                    launch = launch,
+                    outcome = ActiveTaskTerminalOutcome.FAILED,
+                    source = ActiveTaskFinishSource.SERVICE_TIMEOUT,
+                    publishTerminal = {
+                        publishFailure(
+                            context,
+                            message = "系统已结束超时的媒体处理任务",
+                        )
+                    },
+                )
+            }
             is ActiveTaskCancellationDecision.CancelEngine -> {
                 markDiscardingForAcceptedCancellation(decision.route.engineTaskId)
-                runCatching { cancelEngineTask(decision.route) }
+                runCatching { cancelEngineTask(launch, decision.route) }
                     .onFailure { log("timeout cancellation failed: ${it.stackTraceToString()}") }
+                finishActiveTask(
+                    launch = launch,
+                    outcome = ActiveTaskTerminalOutcome.FAILED,
+                    source = ActiveTaskFinishSource.SERVICE_TIMEOUT,
+                    publishTerminal = {
+                        publishFailure(
+                            context,
+                            message = "系统已结束超时的媒体处理任务",
+                        )
+                    },
+                )
             }
         }
-        finishActiveTask(
-            context = context,
-            outcome = ActiveTaskTerminalOutcome.FAILED,
-            source = ActiveTaskFinishSource.CANCEL_TIMEOUT,
-            publishTerminal = {
-                publishFailure(
-                    context,
-                    message = "系统已结束超时的媒体处理任务",
-                )
-            },
-        )
     }
 
     override fun onDestroy() {
         try {
-            activeTaskContext?.let { context ->
+            activeLaunch?.let { launch ->
+                val context = launch.context
                 bestEffortCleanup("task=${context.serviceTaskId} destruction terminal handling") {
-                    context.requestCancellation(
-                        taskId = context.serviceTaskId,
-                        generation = context.launchGeneration,
-                        source = ActiveTaskCancellationSource.SERVICE_DESTROY,
-                    )
-                    finishActiveTask(
-                        context = context,
-                        outcome = ActiveTaskTerminalOutcome.FAILED,
-                        source = ActiveTaskFinishSource.ON_DESTROY,
-                        publishTerminal = {
-                            publishFailure(
-                                context,
-                                message = "媒体处理服务已意外终止",
+                    when (
+                        val decision =
+                            context.requestCancellation(
+                                taskId = context.serviceTaskId,
+                                generation = context.launchGeneration,
+                                source = ActiveTaskCancellationSource.SERVICE_DESTROY,
                             )
-                        },
-                    )
+                    ) {
+                        ActiveTaskCancellationDecision.Ignored -> Unit
+                        ActiveTaskCancellationDecision.FinishBeforeEngine -> {
+                            finishActiveTask(
+                                launch = launch,
+                                outcome = ActiveTaskTerminalOutcome.FAILED,
+                                source = ActiveTaskFinishSource.ON_DESTROY,
+                                publishTerminal = {
+                                    publishFailure(
+                                        context,
+                                        message = "媒体处理服务已意外终止",
+                                    )
+                                },
+                            )
+                        }
+                        is ActiveTaskCancellationDecision.CancelEngine -> {
+                            markDiscardingForAcceptedCancellation(decision.route.engineTaskId)
+                            runCatching { cancelEngineTask(launch, decision.route) }
+                                .onFailure {
+                                    log("destruction cancellation failed: ${it.stackTraceToString()}")
+                                }
+                            finishActiveTask(
+                                launch = launch,
+                                outcome = ActiveTaskTerminalOutcome.FAILED,
+                                source = ActiveTaskFinishSource.ON_DESTROY,
+                                publishTerminal = {
+                                    publishFailure(
+                                        context,
+                                        message = "媒体处理服务已意外终止",
+                                    )
+                                },
+                            )
+                        }
+                    }
                 }
             }
+            latestLaunch?.cleanup?.releaseForServiceDestroy()
+            latestLaunch = null
             if (registryObserverRegistered) {
                 registryObserverRegistered = false
                 bestEffortCleanup("registry observer removal") {
                     ProcessingRuntime.registry.removeObserver(registryObserver)
                 }
             }
-            bestEffortCleanup("engine disposal") { transcodeEngine.dispose() }
-            bestEffortCleanup("audio engine disposal") { audioExtractionEngine.dispose() }
             bestEffortCleanup("wake-lock safety release") { wakeLockGuard.releaseAll() }
             runCatching { log("processing service destroyed") }
         } finally {
@@ -259,9 +286,9 @@ internal class ProcessingService : Service() {
                     stopSelfResult(lastStartId)
                     return
                 }
-        val existingContext = activeTaskContext
-        if (existingContext != null) {
-            if (existingContext.serviceTaskId != taskId) {
+        val existingLaunch = activeLaunch
+        if (existingLaunch != null) {
+            if (existingLaunch.context.serviceTaskId != taskId) {
                 ProcessingRuntime.registry.apply(
                     taskId = taskId,
                     percent = snapshot.percent,
@@ -280,7 +307,9 @@ internal class ProcessingService : Service() {
                 taskKind = startTaskKind,
                 launchGeneration = generation,
             )
-        activeTaskContext = context
+        val launch = createServiceLaunch(context)
+        activeLaunch = launch
+        latestLaunch = launch
         if (!registryObserverRegistered) {
             ProcessingRuntime.registry.addObserver(registryObserver)
             registryObserverRegistered = true
@@ -289,21 +318,21 @@ internal class ProcessingService : Service() {
             startForegroundCompat(snapshot, cancelPendingIntent(taskId))
             wakeLockGuard.acquire(taskId, MAX_WAKE_LOCK_MS)
             if (!context.canLaunch(generation)) {
-                finishCancellationBeforeEngine(context)
+                finishCancellationBeforeEngine(launch)
                 return
             }
             val createdEngineTaskId =
                 when (context.taskKind) {
                     TaskKind.VIDEO_COMPRESSION -> {
                         val request = ProcessRequest.parse(readArguments(intent))
-                        transcodeEngine.start(request) { event ->
-                            onEngineEvent(context, generation, event)
+                        launch.transcodeEngine.start(request) { event ->
+                            onEngineEvent(launch, generation, event)
                         }
                     }
                     TaskKind.AUDIO_EXTRACTION -> {
                         val request = AudioExtractRequest.parse(readArguments(intent))
-                        audioExtractionEngine.start(request) { event ->
-                            onEngineEvent(context, generation, event)
+                        launch.audioExtractionEngine.start(request) { event ->
+                            onEngineEvent(launch, generation, event)
                         }
                     }
                 }
@@ -311,34 +340,39 @@ internal class ProcessingService : Service() {
             if (route == null) {
                 if (context.isCancellationRequested) {
                     context.routeForStartedEngine(generation, createdEngineTaskId)?.let { lateRoute ->
+                        launch.publicationOwner.bindEngineRoute(lateRoute)
                         markDiscardingForAcceptedCancellation(lateRoute.engineTaskId)
-                        runCatching { cancelEngineTask(lateRoute) }
+                        runCatching { cancelEngineTask(launch, lateRoute) }
                             .onFailure { error ->
                                 log("task=$taskId late cancellation failed: ${error.stackTraceToString()}")
                             }
                     }
-                    finishCancellationBeforeEngine(context)
+                    finishCancellationBeforeEngine(launch)
                 }
                 return
+            }
+            check(launch.publicationOwner.bindEngineRoute(route)) {
+                "Publication owner rejected its launch engine route"
             }
             log(
                 "task=$taskId taskKind=${context.taskKind.wireName} " +
                     "engineTask=${route.engineTaskId} service processing started",
             )
         } catch (error: ProcessRequestException) {
-            finishStartFailure(context, error.error.message, error.error.code.wireName)
+            finishStartFailure(launch, error.error.message, error.error.code.wireName)
         } catch (error: EngineOperationException) {
-            finishStartFailure(context, error.failure.message, error.failure.code.wireName)
+            finishStartFailure(launch, error.failure.message, error.failure.code.wireName)
         } catch (error: Throwable) {
             val failure = EngineErrorMapper.fromThrowable(error)
             log("processing launch failed: ${error.stackTraceToString()}")
-            finishStartFailure(context, failure.message, failure.code.wireName)
+            finishStartFailure(launch, failure.message, failure.code.wireName)
         }
     }
 
     private fun handleCancel(taskId: String?) {
-        val context = activeTaskContext
-        if (taskId.isNullOrBlank() || context == null || taskId != context.serviceTaskId) {
+        val launch = activeLaunch
+        val context = launch?.context
+        if (taskId.isNullOrBlank() || launch == null || context == null || taskId != context.serviceTaskId) {
             log("ignored cancellation for non-active task=$taskId")
             if (context == null) stopSelfResult(lastStartId)
             return
@@ -352,10 +386,18 @@ internal class ProcessingService : Service() {
                 )
         ) {
             ActiveTaskCancellationDecision.Ignored -> return
-            ActiveTaskCancellationDecision.FinishBeforeEngine -> finishCancellationBeforeEngine(context)
+            ActiveTaskCancellationDecision.FinishBeforeEngine -> finishCancellationBeforeEngine(launch)
             is ActiveTaskCancellationDecision.CancelEngine -> {
+                launch.cancellationWatchdog.arm {
+                    finishActiveTask(
+                        launch = launch,
+                        outcome = ActiveTaskTerminalOutcome.CANCELLED,
+                        source = ActiveTaskFinishSource.USER_CANCEL_TIMEOUT,
+                        publishTerminal = { publishCancellation(context) },
+                    )
+                }
                 markDiscardingForAcceptedCancellation(decision.route.engineTaskId)
-                runCatching { cancelEngineTask(decision.route) }
+                runCatching { cancelEngineTask(launch, decision.route) }
                     .onFailure { error ->
                         if (
                             error is EngineOperationException &&
@@ -370,12 +412,13 @@ internal class ProcessingService : Service() {
         }
     }
 
-    private fun finishCancellationBeforeEngine(context: ActiveTaskContext) {
+    private fun finishCancellationBeforeEngine(launch: ActiveServiceLaunch) {
+        val context = launch.context
         if (context.cancellationSource == ActiveTaskCancellationSource.TIMEOUT) {
             finishActiveTask(
-                context = context,
+                launch = launch,
                 outcome = ActiveTaskTerminalOutcome.FAILED,
-                source = ActiveTaskFinishSource.CANCEL_TIMEOUT,
+                source = ActiveTaskFinishSource.SERVICE_TIMEOUT,
                 publishTerminal = {
                     publishFailure(
                         context,
@@ -385,7 +428,7 @@ internal class ProcessingService : Service() {
             )
         } else {
             finishActiveTask(
-                context = context,
+                launch = launch,
                 outcome = ActiveTaskTerminalOutcome.CANCELLED,
                 source = ActiveTaskFinishSource.CANCEL_BEFORE_ENGINE,
                 publishTerminal = { publishCancellation(context) },
@@ -394,12 +437,13 @@ internal class ProcessingService : Service() {
     }
 
     private fun finishStartFailure(
-        context: ActiveTaskContext,
+        launch: ActiveServiceLaunch,
         message: String,
         errorCode: String,
     ) {
+        val context = launch.context
         finishActiveTask(
-            context = context,
+            launch = launch,
             outcome = ActiveTaskTerminalOutcome.FAILED,
             source = ActiveTaskFinishSource.START_EXCEPTION,
             publishTerminal = { publishFailure(context, message, errorCode) },
@@ -433,21 +477,22 @@ internal class ProcessingService : Service() {
     }
 
     private fun finishActiveTask(
-        context: ActiveTaskContext,
+        launch: ActiveServiceLaunch,
         outcome: ActiveTaskTerminalOutcome,
         source: ActiveTaskFinishSource,
         publishTerminal: () -> Unit = {},
     ) {
+        val context = launch.context
         try {
             val decision =
                 context.finishOnce(
                     generation = context.launchGeneration,
                     outcome = outcome,
                     source = source,
-                    onWinner = publishTerminal,
+                    publishTerminal = publishTerminal,
                     releaseResources = {
                         releaseActiveTaskResources(
-                            context = context,
+                            launch = launch,
                             stopService = source != ActiveTaskFinishSource.ON_DESTROY,
                         )
                     },
@@ -469,33 +514,16 @@ internal class ProcessingService : Service() {
     }
 
     private fun releaseActiveTaskResources(
-        context: ActiveTaskContext,
+        launch: ActiveServiceLaunch,
         stopService: Boolean,
     ) {
-        val ownsService = activeTaskContext === context && context.launchGeneration == launchGeneration
-        if (ownsService && registryObserverRegistered) {
-            registryObserverRegistered = false
-            bestEffortCleanup("task=${context.serviceTaskId} registry observer removal") {
-                ProcessingRuntime.registry.removeObserver(registryObserver)
-            }
-        }
-        bestEffortCleanup("task=${context.serviceTaskId} wake-lock release") {
-            wakeLockGuard.release(context.serviceTaskId)
-        }
-        if (!ownsService) return
-
+        val context = launch.context
+        val ownsService = activeLaunch === launch && context.launchGeneration == launchGeneration
         try {
-            bestEffortCleanup("task=${context.serviceTaskId} foreground release") {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-            }
-            bestEffortCleanup("task=${context.serviceTaskId} terminal notification") {
-                matchingTerminalSnapshot(context)?.let { snapshot ->
-                    notificationFactory.notifyTerminal(snapshot)
-                }
-            }
+            launch.cleanup.releaseForTerminalWinner(includeServiceSurface = ownsService)
         } finally {
-            activeTaskContext = null
-            if (stopService) {
+            if (ownsService) activeLaunch = null
+            if (ownsService && stopService) {
                 bestEffortCleanup("task=${context.serviceTaskId} service stop") {
                     stopSelfResult(lastStartId)
                 }
@@ -508,6 +536,96 @@ internal class ProcessingService : Service() {
             ?.takeIf { snapshot ->
                 snapshot.taskId == context.serviceTaskId && snapshot.isTerminal
             }
+
+    private fun createServiceLaunch(context: ActiveTaskContext): ActiveServiceLaunch {
+        val publicationOwner = ActiveTaskPublicationOwner(context)
+        val publicationObserver =
+            RecoveryPublicationObserver(
+                journal = recoveryStore,
+                owner = publicationOwner,
+                onOutputFileName = { identity, actualDisplayName ->
+                    val currentContext = activeLaunch?.context
+                    if (
+                        currentContext === context &&
+                        context.owns(identity.serviceTaskId, identity.launchGeneration)
+                    ) {
+                        ProcessingRuntime.registry.updateOutputFileName(
+                            identity.serviceTaskId,
+                            actualDisplayName,
+                        )
+                    } else {
+                        log(
+                            "task=${identity.engineTaskId} ignored stale publication filename " +
+                                "generation=${identity.launchGeneration}",
+                        )
+                    }
+                },
+                logger = ::log,
+            )
+        val mediaStoreSaver = MediaStoreSaver(this, publicationObserver)
+        val transcodeEngine =
+            TranscodeEngine(
+                context = this,
+                mediaStoreSaver = mediaStoreSaver,
+                recoveryStore = recoveryStore,
+                logger = ::log,
+            )
+        val audioExtractionEngine =
+            AudioExtractionEngine(
+                context = this,
+                mediaStoreSaver = mediaStoreSaver,
+                recoveryStore = recoveryStore,
+                logger = ::log,
+            )
+        val cancellationWatchdog =
+            UserCancellationWatchdog(
+                scheduler =
+                    CancellationWatchdogScheduler { timeoutMillis, action ->
+                        val runnable = Runnable(action)
+                        check(mainHandler.postDelayed(runnable, timeoutMillis)) {
+                            "Unable to schedule user cancellation watchdog"
+                        }
+                        CancellationWatchdogRegistration {
+                            mainHandler.removeCallbacks(runnable)
+                        }
+                    },
+                timeoutMillis = USER_CANCELLATION_TIMEOUT_MS,
+            )
+        val cleanup =
+            ServiceTaskCleanup(
+                actions =
+                    ServiceTaskCleanupActions(
+                        cancelUserWatchdog = cancellationWatchdog::cancel,
+                        removeRegistryObserver = {
+                            if (registryObserverRegistered) {
+                                registryObserverRegistered = false
+                                ProcessingRuntime.registry.removeObserver(registryObserver)
+                            }
+                        },
+                        releaseWakeLock = { wakeLockGuard.release(context.serviceTaskId) },
+                        removeForeground = { stopForeground(STOP_FOREGROUND_REMOVE) },
+                        publishTerminalNotification = {
+                            matchingTerminalSnapshot(context)?.let(notificationFactory::notifyTerminal)
+                        },
+                        disposeTranscodeEngine = transcodeEngine::dispose,
+                        disposeAudioExtractionEngine = audioExtractionEngine::dispose,
+                    ),
+                onFailure = { resource, error ->
+                    log(
+                        "task=${context.serviceTaskId} $resource cleanup failed: " +
+                            error.stackTraceToString(),
+                    )
+                },
+            )
+        return ActiveServiceLaunch(
+            context = context,
+            publicationOwner = publicationOwner,
+            cancellationWatchdog = cancellationWatchdog,
+            transcodeEngine = transcodeEngine,
+            audioExtractionEngine = audioExtractionEngine,
+            cleanup = cleanup,
+        )
+    }
 
     private fun markDiscardingForAcceptedCancellation(internalTaskId: String) {
         runCatching {
@@ -523,22 +641,31 @@ internal class ProcessingService : Service() {
         }
     }
 
-    private fun cancelEngineTask(route: EngineTaskRoute) {
+    private fun cancelEngineTask(
+        launch: ActiveServiceLaunch,
+        route: EngineTaskRoute,
+    ) {
         when (route.taskKind) {
-            TaskKind.VIDEO_COMPRESSION -> transcodeEngine.cancel(route.engineTaskId)
-            TaskKind.AUDIO_EXTRACTION -> audioExtractionEngine.cancel(route.engineTaskId)
+            TaskKind.VIDEO_COMPRESSION -> launch.transcodeEngine.cancel(route.engineTaskId)
+            TaskKind.AUDIO_EXTRACTION -> launch.audioExtractionEngine.cancel(route.engineTaskId)
         }
     }
 
     private fun onEngineEvent(
-        context: ActiveTaskContext,
+        launch: ActiveServiceLaunch,
         generation: Long,
         event: EngineProgressEvent,
     ) {
-        if (activeTaskContext !== context || !context.acceptsEngineEvent(generation, event.taskId)) return
-        val timeoutRequested = context.cancellationSource == ActiveTaskCancellationSource.TIMEOUT
+        val context = launch.context
+        if (activeLaunch !== launch || !context.acceptsEngineEvent(generation, event.taskId)) return
+        val forcedFinishSource =
+            when (context.cancellationSource) {
+                ActiveTaskCancellationSource.TIMEOUT -> ActiveTaskFinishSource.SERVICE_TIMEOUT
+                ActiveTaskCancellationSource.SERVICE_DESTROY -> ActiveTaskFinishSource.ON_DESTROY
+                else -> null
+            }
         val state =
-            if (timeoutRequested && event.state == TaskRuntimeSnapshot.STATE_CANCELLED) {
+            if (forcedFinishSource != null && event.state != TaskRuntimeSnapshot.STATE_RUNNING) {
                 TaskRuntimeSnapshot.STATE_FAILED
             } else {
                 event.state
@@ -552,14 +679,21 @@ internal class ProcessingService : Service() {
                 actualVideoEncodingMode = event.actualVideoEncodingMode.wireName,
                 outputUri = event.outputUri,
                 errorCode =
-                    if (timeoutRequested && state == TaskRuntimeSnapshot.STATE_FAILED) {
+                    if (forcedFinishSource != null && state == TaskRuntimeSnapshot.STATE_FAILED) {
                         EngineErrorCode.UNKNOWN.wireName
                     } else {
                         event.errorCode
                     },
                 errorMessage =
-                    if (timeoutRequested && state == TaskRuntimeSnapshot.STATE_FAILED) {
+                    if (forcedFinishSource == ActiveTaskFinishSource.SERVICE_TIMEOUT &&
+                        state == TaskRuntimeSnapshot.STATE_FAILED
+                    ) {
                         "系统已结束超时的媒体处理任务"
+                    } else if (
+                        forcedFinishSource == ActiveTaskFinishSource.ON_DESTROY &&
+                        state == TaskRuntimeSnapshot.STATE_FAILED
+                    ) {
+                        "媒体处理服务已意外终止"
                     } else {
                         event.errorMessage
                     },
@@ -570,14 +704,14 @@ internal class ProcessingService : Service() {
             return
         }
         finishActiveTask(
-            context = context,
+            launch = launch,
             outcome =
                 when (state) {
                     TaskRuntimeSnapshot.STATE_SUCCESS -> ActiveTaskTerminalOutcome.SUCCEEDED
                     TaskRuntimeSnapshot.STATE_CANCELLED -> ActiveTaskTerminalOutcome.CANCELLED
                     else -> ActiveTaskTerminalOutcome.FAILED
                 },
-            source = ActiveTaskFinishSource.ENGINE_TERMINAL,
+            source = forcedFinishSource ?: ActiveTaskFinishSource.ENGINE_TERMINAL,
             publishTerminal = publishEvent,
         )
     }
@@ -649,6 +783,7 @@ internal class ProcessingService : Service() {
         const val EXTRA_TASK_KIND = "taskKind"
         const val EXTRA_ARGUMENTS = "arguments"
         private const val CANCEL_REQUEST_CODE = 2_004
+        private const val USER_CANCELLATION_TIMEOUT_MS = 5_000L
         private const val MAX_WAKE_LOCK_MS = 21_900_000L
     }
 }

@@ -38,7 +38,8 @@ internal enum class ActiveTaskFinishSource {
     ENGINE_TERMINAL,
     START_EXCEPTION,
     CANCEL_BEFORE_ENGINE,
-    CANCEL_TIMEOUT,
+    USER_CANCEL_TIMEOUT,
+    SERVICE_TIMEOUT,
     ON_DESTROY,
 }
 
@@ -77,6 +78,7 @@ internal class ActiveTaskContext(
     private var cancellationRequested = false
     private var currentCancellationSource: ActiveTaskCancellationSource? = null
     private var currentTerminalOwnership: ActiveTaskTerminalOwnership? = null
+    private var winnerCompletionStarted = false
 
     init {
         require(serviceTaskId.isNotBlank()) { "serviceTaskId must not be blank" }
@@ -159,7 +161,7 @@ internal class ActiveTaskContext(
             ) {
                 return@synchronized false
             }
-            currentEngineRoute?.engineTaskId?.let { it == engineTaskId } ?: true
+            currentEngineRoute?.engineTaskId == engineTaskId
         }
 
     fun requestCancellation(
@@ -184,14 +186,17 @@ internal class ActiveTaskContext(
         }
 
     /**
-     * Atomically claims terminal ownership, then performs winner work without holding [lock].
-     * Resource release belongs only to the winner and runs exactly once even if winner work throws.
+     * Atomically claims terminal ownership, then gives the winner an idempotent completion without
+     * holding [lock]. The engine route remains installed in [ActiveTaskLifecycle.FINISHING] until
+     * completion publishes the terminal state and releases resources. If scheduling winner work
+     * throws, completion runs immediately so the launch cannot be stranded.
      */
     fun finishOnce(
         generation: Long,
         outcome: ActiveTaskTerminalOutcome,
         source: ActiveTaskFinishSource,
-        onWinner: () -> Unit = {},
+        onWinner: ((() -> Unit) -> Unit) = { completeWinner -> completeWinner() },
+        publishTerminal: () -> Unit = {},
         releaseResources: () -> Unit = {},
     ): ActiveTaskFinishDecision {
         val ownership = ActiveTaskTerminalOwnership(outcome, source)
@@ -202,17 +207,43 @@ internal class ActiveTaskContext(
             currentLifecycle = ActiveTaskLifecycle.FINISHING
         }
 
-        try {
-            onWinner()
-        } finally {
-            try {
-                releaseResources()
-            } finally {
+        val completeWinner: () -> Unit = completeWinner@{
+            val shouldComplete =
                 synchronized(lock) {
-                    currentEngineRoute = null
-                    currentLifecycle = ActiveTaskLifecycle.RELEASED
+                    if (winnerCompletionStarted) {
+                        false
+                    } else {
+                        winnerCompletionStarted = true
+                        true
+                    }
+                }
+            if (!shouldComplete) return@completeWinner
+
+            try {
+                publishTerminal()
+            } finally {
+                try {
+                    releaseResources()
+                } finally {
+                    synchronized(lock) {
+                        currentEngineRoute = null
+                        currentLifecycle = ActiveTaskLifecycle.RELEASED
+                    }
                 }
             }
+        }
+
+        try {
+            onWinner(completeWinner)
+        } catch (schedulingError: Throwable) {
+            try {
+                completeWinner()
+            } catch (completionError: Throwable) {
+                if (completionError !== schedulingError) {
+                    runCatching { schedulingError.addSuppressed(completionError) }
+                }
+            }
+            throw schedulingError
         }
         return ActiveTaskFinishDecision.Won(ownership)
     }

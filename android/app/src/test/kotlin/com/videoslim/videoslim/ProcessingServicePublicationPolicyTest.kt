@@ -43,8 +43,7 @@ class ProcessingServicePublicationPolicyTest {
                 val observer =
                     RecoveryPublicationObserver(
                         journal = journal,
-                        taskId = { taskId },
-                        cancellationRequested = { false },
+                        owner = boundPublicationOwner(taskId),
                     )
                 val payload = ByteArray(37) { (it + apiLevel + kind.ordinal).toByte() }
                 val published = ByteArrayOutputStream()
@@ -96,16 +95,23 @@ class ProcessingServicePublicationPolicyTest {
             StatefulPublicationJournal(
                 transformingRecord(taskId, "song.m4a", OutputMediaKind.AUDIO_M4A),
             )
-        var cancellationRequested = false
+        val context = publicationContext(taskId)
+        val owner = ActiveTaskPublicationOwner(context)
+        check(owner.bindEngineRoute(checkNotNull(context.engineRoute)))
         val observer =
             RecoveryPublicationObserver(
                 journal = journal,
-                taskId = { taskId },
-                cancellationRequested = { cancellationRequested },
+                owner = owner,
             )
 
         observer.onPublicationUriAllocated(uri)
-        cancellationRequested = true
+        assertTrue(
+            context.requestCancellation(
+                taskId = context.serviceTaskId,
+                generation = context.launchGeneration,
+                source = ActiveTaskCancellationSource.USER,
+            ) is ActiveTaskCancellationDecision.CancelEngine,
+        )
         observer.onPublicationTargetAllocated(target)
         assertEquals(RecoveryStage.DISCARDING, journal.record.stage)
         observer.onPublicationCompleted(target)
@@ -170,8 +176,7 @@ class ProcessingServicePublicationPolicyTest {
         val observer =
             RecoveryPublicationObserver(
                 journal = journal,
-                taskId = { taskId },
-                cancellationRequested = { false },
+                owner = boundPublicationOwner(taskId),
             )
 
         observer.onPublicationUriAllocated(uri)
@@ -185,6 +190,22 @@ class ProcessingServicePublicationPolicyTest {
             TaskRecoveryDecodeResult.Success(crashSnapshot),
             TaskRecoveryCodec.decode(TaskRecoveryCodec.encode(crashSnapshot)),
         )
+    }
+
+    private fun publicationContext(taskId: String): ActiveTaskContext =
+        ActiveTaskContext(
+            serviceTaskId = "service-$taskId",
+            taskKind = TaskKind.VIDEO_COMPRESSION,
+            launchGeneration = 1L,
+        ).also { context ->
+            checkNotNull(context.assignEngineTaskId(context.launchGeneration, taskId))
+        }
+
+    private fun boundPublicationOwner(taskId: String): ActiveTaskPublicationOwner {
+        val context = publicationContext(taskId)
+        return ActiveTaskPublicationOwner(context).also { owner ->
+            check(owner.bindEngineRoute(checkNotNull(context.engineRoute)))
+        }
     }
 
     private fun transformingRecord(

@@ -50,6 +50,26 @@ class ActiveTaskContextTest {
     }
 
     @Test
+    fun `engine events are rejected until exact route is assigned`() {
+        val context =
+            ActiveTaskContext(
+                serviceTaskId = "service-task",
+                taskKind = TaskKind.VIDEO_COMPRESSION,
+                launchGeneration = 8L,
+            )
+
+        assertFalse(context.acceptsEngineEvent(8L, "not-yet-assigned"))
+        assertFalse(context.acceptsEngineEvent(7L, "not-yet-assigned"))
+
+        assertEquals(
+            EngineTaskRoute(TaskKind.VIDEO_COMPRESSION, "assigned-engine"),
+            context.assignEngineTaskId(8L, "assigned-engine"),
+        )
+        assertTrue(context.acceptsEngineEvent(8L, "assigned-engine"))
+        assertFalse(context.acceptsEngineEvent(8L, "different-engine"))
+    }
+
+    @Test
     fun `wrong task and stale generation cannot route or finish active ownership`() {
         val context =
             ActiveTaskContext(
@@ -75,7 +95,7 @@ class ActiveTaskContextTest {
                 generation = 8L,
                 outcome = ActiveTaskTerminalOutcome.FAILED,
                 source = ActiveTaskFinishSource.ENGINE_TERMINAL,
-                onWinner = { visibleTerminalCalls.incrementAndGet() },
+                publishTerminal = { visibleTerminalCalls.incrementAndGet() },
                 releaseResources = { releaseCalls.incrementAndGet() },
             ),
         )
@@ -88,12 +108,64 @@ class ActiveTaskContextTest {
                 generation = 9L,
                 outcome = ActiveTaskTerminalOutcome.FAILED,
                 source = ActiveTaskFinishSource.ON_DESTROY,
-                onWinner = { visibleTerminalCalls.incrementAndGet() },
+                publishTerminal = { visibleTerminalCalls.incrementAndGet() },
                 releaseResources = { releaseCalls.incrementAndGet() },
             )
         assertTrue(decision is ActiveTaskFinishDecision.Won)
         assertEquals(1, visibleTerminalCalls.get())
         assertEquals(1, releaseCalls.get())
+    }
+
+    @Test
+    fun `terminal winner remains finishing with route until idempotent completion`() {
+        val context =
+            ActiveTaskContext(
+                serviceTaskId = "service-task",
+                taskKind = TaskKind.VIDEO_COMPRESSION,
+                launchGeneration = 10L,
+            )
+        val route = checkNotNull(context.assignEngineTaskId(10L, "engine-task"))
+        val visibleTerminalCalls = AtomicInteger()
+        val releaseCalls = AtomicInteger()
+        var completeWinner: (() -> Unit)? = null
+
+        val winner =
+            context.finishOnce(
+                generation = 10L,
+                outcome = ActiveTaskTerminalOutcome.SUCCEEDED,
+                source = ActiveTaskFinishSource.ENGINE_TERMINAL,
+                onWinner = { completion -> completeWinner = completion },
+                publishTerminal = { visibleTerminalCalls.incrementAndGet() },
+                releaseResources = { releaseCalls.incrementAndGet() },
+            )
+
+        assertTrue(winner is ActiveTaskFinishDecision.Won)
+        assertEquals(ActiveTaskLifecycle.FINISHING, context.lifecycle)
+        assertEquals(route, context.engineRoute)
+        assertEquals(0, visibleTerminalCalls.get())
+        assertEquals(0, releaseCalls.get())
+
+        val loser =
+            context.finishOnce(
+                generation = 10L,
+                outcome = ActiveTaskTerminalOutcome.FAILED,
+                source = ActiveTaskFinishSource.SERVICE_TIMEOUT,
+                onWinner = { throw AssertionError("loser callback must not run") },
+                publishTerminal = { visibleTerminalCalls.incrementAndGet() },
+                releaseResources = { releaseCalls.incrementAndGet() },
+            )
+        assertTrue(loser is ActiveTaskFinishDecision.Lost)
+        assertEquals((winner as ActiveTaskFinishDecision.Won).ownership, (loser as ActiveTaskFinishDecision.Lost).ownership)
+        assertEquals(ActiveTaskLifecycle.FINISHING, context.lifecycle)
+        assertEquals(route, context.engineRoute)
+
+        checkNotNull(completeWinner).invoke()
+        checkNotNull(completeWinner).invoke()
+
+        assertEquals(1, visibleTerminalCalls.get())
+        assertEquals(1, releaseCalls.get())
+        assertNull(context.engineRoute)
+        assertEquals(ActiveTaskLifecycle.RELEASED, context.lifecycle)
     }
 
     @Test
@@ -126,7 +198,7 @@ class ActiveTaskContextTest {
                                 else -> ActiveTaskTerminalOutcome.CANCELLED
                             },
                         source = source,
-                        onWinner = { visibleTerminalCalls.incrementAndGet() },
+                        publishTerminal = { visibleTerminalCalls.incrementAndGet() },
                         releaseResources = { releaseCalls.incrementAndGet() },
                     )
             }
@@ -194,7 +266,7 @@ class ActiveTaskContextTest {
                 generation = 15L,
                 outcome = ActiveTaskTerminalOutcome.FAILED,
                 source = ActiveTaskFinishSource.START_EXCEPTION,
-                onWinner = {
+                publishTerminal = {
                     registrySnapshot?.let { visibleTerminalCalls.incrementAndGet() }
                 },
                 releaseResources = { releaseCalls.incrementAndGet() },
@@ -222,7 +294,7 @@ class ActiveTaskContextTest {
                 generation = 17L,
                 outcome = ActiveTaskTerminalOutcome.FAILED,
                 source = ActiveTaskFinishSource.ENGINE_TERMINAL,
-                onWinner = { throw IllegalStateException("registry disappeared") },
+                publishTerminal = { throw IllegalStateException("registry disappeared") },
                 releaseResources = { releaseCalls.incrementAndGet() },
             )
             throw AssertionError("Expected terminal publication failure")
@@ -234,12 +306,44 @@ class ActiveTaskContextTest {
             context.finishOnce(
                 generation = 17L,
                 outcome = ActiveTaskTerminalOutcome.CANCELLED,
-                source = ActiveTaskFinishSource.CANCEL_TIMEOUT,
+                source = ActiveTaskFinishSource.USER_CANCEL_TIMEOUT,
                 releaseResources = { releaseCalls.incrementAndGet() },
             )
         assertTrue(loser is ActiveTaskFinishDecision.Lost)
         assertEquals(1, releaseCalls.get())
         assertNull(context.engineTaskId)
+        assertEquals(ActiveTaskLifecycle.RELEASED, context.lifecycle)
+    }
+
+    @Test
+    fun `winner scheduling failure completes immediately and cannot strand resources`() {
+        val context =
+            ActiveTaskContext(
+                serviceTaskId = "service-task",
+                taskKind = TaskKind.VIDEO_COMPRESSION,
+                launchGeneration = 19L,
+            )
+        context.assignEngineTaskId(19L, "engine-task")
+        val visibleTerminalCalls = AtomicInteger()
+        val releaseCalls = AtomicInteger()
+
+        try {
+            context.finishOnce(
+                generation = 19L,
+                outcome = ActiveTaskTerminalOutcome.FAILED,
+                source = ActiveTaskFinishSource.ENGINE_TERMINAL,
+                onWinner = { throw IllegalStateException("cleanup scheduling rejected") },
+                publishTerminal = { visibleTerminalCalls.incrementAndGet() },
+                releaseResources = { releaseCalls.incrementAndGet() },
+            )
+            throw AssertionError("Expected cleanup scheduling failure")
+        } catch (expected: IllegalStateException) {
+            assertEquals("cleanup scheduling rejected", expected.message)
+        }
+
+        assertEquals(1, visibleTerminalCalls.get())
+        assertEquals(1, releaseCalls.get())
+        assertNull(context.engineRoute)
         assertEquals(ActiveTaskLifecycle.RELEASED, context.lifecycle)
     }
 }
