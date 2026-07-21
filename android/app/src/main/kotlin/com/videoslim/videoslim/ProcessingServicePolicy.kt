@@ -255,7 +255,17 @@ internal enum class ReconciliationLaunchFailure {
     WATCHDOG,
     REGISTRATION,
     RECONCILIATION,
+    OWNERSHIP,
 }
+
+internal enum class ReconciliationLaunchDisposition {
+    LAUNCH,
+    IGNORE_STALE,
+    FAIL_CURRENT,
+}
+
+internal const val RECONCILIATION_LAUNCH_OWNERSHIP_FAILURE_MESSAGE =
+    "Reconciled launch no longer owns a valid reservation"
 
 internal data class ServiceReconciliationLaunchActions(
     val startForeground: () -> Unit,
@@ -264,7 +274,7 @@ internal data class ServiceReconciliationLaunchActions(
     val cancelRecoveryWaitWatchdog: () -> Unit,
     val registerReconciliationCompletion: ((Throwable?) -> Unit) -> Unit,
     val postToServiceMain: (() -> Unit) -> Unit,
-    val isLaunchCurrent: () -> Boolean,
+    val revalidateLaunch: () -> ReconciliationLaunchDisposition,
     val launchEngine: () -> Unit,
     val finishFailure: (ReconciliationLaunchFailure, Throwable) -> Unit,
     val onRecoveryWaitTimeout: () -> Unit,
@@ -322,29 +332,38 @@ internal class ServiceReconciliationLaunchCoordinator(
     }
 
     private fun resolveCompletion(error: Throwable?) {
-        if (!claimResolution()) return
-        actions.cancelRecoveryWaitWatchdog()
-        if (!actions.isLaunchCurrent()) return
-        if (error == null) {
-            actions.launchEngine()
-        } else {
-            actions.finishFailure(ReconciliationLaunchFailure.RECONCILIATION, error)
+        resolveCurrentLaunch {
+            if (error == null) {
+                actions.launchEngine()
+            } else {
+                actions.finishFailure(ReconciliationLaunchFailure.RECONCILIATION, error)
+            }
         }
     }
 
     private fun resolveTimeout() {
-        if (!claimResolution()) return
-        actions.cancelRecoveryWaitWatchdog()
-        if (actions.isLaunchCurrent()) actions.onRecoveryWaitTimeout()
+        resolveCurrentLaunch(actions.onRecoveryWaitTimeout)
     }
 
     private fun resolveFailure(
         reason: ReconciliationLaunchFailure,
         error: Throwable,
     ) {
+        resolveCurrentLaunch { actions.finishFailure(reason, error) }
+    }
+
+    private fun resolveCurrentLaunch(onLaunch: () -> Unit) {
         if (!claimResolution()) return
         actions.cancelRecoveryWaitWatchdog()
-        if (actions.isLaunchCurrent()) actions.finishFailure(reason, error)
+        when (actions.revalidateLaunch()) {
+            ReconciliationLaunchDisposition.LAUNCH -> onLaunch()
+            ReconciliationLaunchDisposition.IGNORE_STALE -> Unit
+            ReconciliationLaunchDisposition.FAIL_CURRENT ->
+                actions.finishFailure(
+                    ReconciliationLaunchFailure.OWNERSHIP,
+                    IllegalStateException(RECONCILIATION_LAUNCH_OWNERSHIP_FAILURE_MESSAGE),
+                )
+        }
     }
 
     private fun claimResolution(): Boolean =
@@ -358,22 +377,44 @@ internal class ServiceReconciliationLaunchCoordinator(
         }
 }
 
-internal fun canLaunchAfterReconciliation(
+internal fun reconciliationLaunchDisposition(
     serviceDestroyed: Boolean,
     expectedContext: ActiveTaskContext,
     activeContext: ActiveTaskContext?,
     expectedGeneration: Long,
     installedGeneration: Long,
     reservation: TaskRuntimeSnapshot?,
-): Boolean =
-    !serviceDestroyed &&
-        activeContext === expectedContext &&
-        expectedContext.launchGeneration == expectedGeneration &&
-        installedGeneration == expectedGeneration &&
-        expectedContext.canLaunch(expectedGeneration) &&
-        reservation?.taskId == expectedContext.serviceTaskId &&
-        reservation.taskKind == expectedContext.taskKind &&
-        !reservation.isTerminal
+): ReconciliationLaunchDisposition {
+    if (serviceDestroyed || activeContext !== expectedContext) {
+        return ReconciliationLaunchDisposition.IGNORE_STALE
+    }
+    if (
+        expectedContext.launchGeneration != expectedGeneration ||
+        installedGeneration != expectedGeneration
+    ) {
+        return ReconciliationLaunchDisposition.IGNORE_STALE
+    }
+    if (
+        expectedContext.terminalOwnership != null ||
+        expectedContext.lifecycle == ActiveTaskLifecycle.FINISHING ||
+        expectedContext.lifecycle == ActiveTaskLifecycle.RELEASED ||
+        expectedContext.isCancellationRequested
+    ) {
+        return ReconciliationLaunchDisposition.IGNORE_STALE
+    }
+    if (expectedContext.lifecycle != ActiveTaskLifecycle.AWAITING_ENGINE) {
+        return ReconciliationLaunchDisposition.FAIL_CURRENT
+    }
+    val currentReservation = reservation ?: return ReconciliationLaunchDisposition.FAIL_CURRENT
+    if (
+        currentReservation.taskId != expectedContext.serviceTaskId ||
+        currentReservation.taskKind != expectedContext.taskKind ||
+        currentReservation.isTerminal
+    ) {
+        return ReconciliationLaunchDisposition.FAIL_CURRENT
+    }
+    return ReconciliationLaunchDisposition.LAUNCH
+}
 
 internal data class ServiceTerminalDirective(
     val outcome: ActiveTaskTerminalOutcome,

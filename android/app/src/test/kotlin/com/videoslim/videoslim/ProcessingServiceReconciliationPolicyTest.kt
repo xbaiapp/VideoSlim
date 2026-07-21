@@ -31,60 +31,166 @@ class ProcessingServiceReconciliationPolicyTest {
         assertEquals(1, harness.launchCount)
         assertEquals(1, harness.watchdogCancelCount)
         assertTrue(harness.failures.isEmpty())
+        harness.assertNoTerminalCleanup()
     }
 
     @Test
-    fun `reconciliation failure finishes without launching an engine`() {
+    fun `reconciliation failure finishes exactly once without launching an engine`() {
         val harness = LaunchHarness()
         val expected = IllegalStateException("recovery unavailable")
         harness.coordinator.start()
 
         harness.completeReconciliation(expected)
+        harness.fireRecoveryTimeout()
         harness.runMainActions()
 
         assertEquals(0, harness.launchCount)
         assertEquals(listOf(ReconciliationLaunchFailure.RECONCILIATION to expected), harness.failures)
         assertEquals(1, harness.watchdogCancelCount)
+        harness.assertTerminalCleanupExactlyOnce(ActiveTaskFinishSource.START_EXCEPTION)
     }
 
     @Test
-    fun `cancellation timeout destruction and stale ownership while waiting never launch`() {
-        val scenarios =
-            listOf<Pair<String, (LaunchHarness) -> Unit>>(
-                "cancel" to { harness ->
-                    harness.context.requestCancellation(
-                        taskId = harness.context.serviceTaskId,
-                        generation = harness.context.launchGeneration,
-                        source = ActiveTaskCancellationSource.USER,
-                    )
-                },
-                "timeout" to { harness ->
-                    harness.context.requestCancellation(
-                        taskId = harness.context.serviceTaskId,
-                        generation = harness.context.launchGeneration,
-                        source = ActiveTaskCancellationSource.TIMEOUT,
-                    )
-                },
-                "destroy" to { it.destroyed = true },
-                "stale context" to { it.activeContext = awaitingContext("replacement", GENERATION) },
-                "stale generation" to { it.installedGeneration = GENERATION + 1L },
-                "missing reservation" to { it.reservation = null },
-                "terminal reservation" to {
-                    it.reservation = it.reservation?.copy(state = TaskRuntimeSnapshot.STATE_FAILED)
-                },
+    fun `invalid current reservations use one stable ownership failure and release service`() {
+        val cases =
+            listOf(
+                InvalidReservationCase(
+                    name = "missing reservation",
+                    invalidate = { it.reservation = null },
+                    resolve = { it.completeReconciliation() },
+                ),
+                InvalidReservationCase(
+                    name = "mismatched task reservation",
+                    invalidate = { harness ->
+                        harness.reservation = harness.reservation?.copy(taskId = "other-task")
+                    },
+                    resolve = { harness ->
+                        harness.completeReconciliation(IllegalStateException("recovery failed first"))
+                    },
+                ),
+                InvalidReservationCase(
+                    name = "mismatched kind reservation",
+                    invalidate = { harness ->
+                        harness.reservation =
+                            harness.reservation?.copy(taskKind = TaskKind.AUDIO_EXTRACTION)
+                    },
+                    resolve = { it.fireRecoveryTimeout() },
+                ),
+                InvalidReservationCase(
+                    name = "terminal reservation",
+                    invalidate = { harness ->
+                        harness.reservation =
+                            harness.reservation?.copy(
+                                state = TaskRuntimeSnapshot.STATE_FAILED,
+                                phase = TaskRuntimeSnapshot.PHASE_FINISHED,
+                                errorCode = EngineErrorCode.UNKNOWN.wireName,
+                                errorMessage = "already terminal",
+                            )
+                    },
+                    resolve = { it.completeReconciliation() },
+                ),
             )
 
-        scenarios.forEach { (name, makeStale) ->
+        cases.forEach { case ->
             val harness = LaunchHarness()
             harness.coordinator.start()
-            makeStale(harness)
+            case.invalidate(harness)
+
+            case.resolve(harness)
+            harness.runMainActions()
+
+            assertEquals("${case.name} must not launch", 0, harness.launchCount)
+            assertEquals("${case.name} must not enter timeout", 0, harness.timeoutCount)
+            assertEquals("${case.name} must fail once", 1, harness.failures.size)
+            assertEquals(
+                "${case.name} must use ownership failure",
+                ReconciliationLaunchFailure.OWNERSHIP,
+                harness.failures.single().first,
+            )
+            assertEquals(
+                RECONCILIATION_LAUNCH_OWNERSHIP_FAILURE_MESSAGE,
+                harness.failures.single().second.message,
+            )
+            harness.assertTerminalCleanupExactlyOnce(ActiveTaskFinishSource.START_EXCEPTION)
+        }
+    }
+
+    @Test
+    fun `cancel timeout destroy and replaced terminal owners are not finished twice`() {
+        val cases =
+            listOf(
+                StaleOwnerCase(
+                    name = "cancelled",
+                    ownTerminal = { harness ->
+                        assertEquals(
+                            ServiceTerminationResult.TERMINAL,
+                            harness.terminationPolicy.handleCancel(harness.context.serviceTaskId),
+                        )
+                    },
+                    expectedOutcome = ActiveTaskTerminalOutcome.CANCELLED,
+                    expectedSource = ActiveTaskFinishSource.CANCEL_BEFORE_ENGINE,
+                ),
+                StaleOwnerCase(
+                    name = "timed out",
+                    ownTerminal = { harness -> harness.terminationPolicy.onRecoveryWaitTimeout() },
+                    expectedSource = ActiveTaskFinishSource.SERVICE_TIMEOUT,
+                ),
+                StaleOwnerCase(
+                    name = "destroyed",
+                    ownTerminal = { harness ->
+                        harness.destroyed = true
+                        harness.terminationPolicy.onDestroy()
+                    },
+                    expectedSource = ActiveTaskFinishSource.ON_DESTROY,
+                    expectStop = false,
+                ),
+                StaleOwnerCase(
+                    name = "replaced after terminal",
+                    ownTerminal = { harness ->
+                        harness.finishExistingTerminal()
+                        harness.activeContext = awaitingContext("replacement", GENERATION + 1L)
+                        harness.installedGeneration = GENERATION + 1L
+                    },
+                    expectedSource = ActiveTaskFinishSource.START_EXCEPTION,
+                ),
+            )
+
+        cases.forEach { case ->
+            val harness = LaunchHarness()
+            harness.coordinator.start()
+            case.ownTerminal(harness)
+            harness.assertTerminalCleanupExactlyOnce(
+                expectedSource = case.expectedSource,
+                expectStop = case.expectStop,
+                expectedOutcome = case.expectedOutcome,
+            )
+            val terminalAttempts = harness.terminalAttemptSnapshot()
 
             harness.completeReconciliation()
             harness.runMainActions()
 
-            assertEquals("$name must not launch", 0, harness.launchCount)
-            assertTrue("$name must not replace its existing terminal path", harness.failures.isEmpty())
+            assertEquals("${case.name} must not launch", 0, harness.launchCount)
+            assertTrue("${case.name} must not add a reconciliation failure", harness.failures.isEmpty())
+            assertEquals("${case.name} must not duplicate cleanup", terminalAttempts, harness.terminalAttemptSnapshot())
         }
+    }
+
+    @Test
+    fun `finishing current owner is ignored until its existing terminal completion releases once`() {
+        val harness = LaunchHarness(deferTerminalWinner = true)
+        harness.coordinator.start()
+        harness.finishExistingTerminal()
+        assertEquals(ActiveTaskLifecycle.FINISHING, harness.context.lifecycle)
+
+        harness.completeReconciliation()
+        harness.runMainActions()
+
+        assertEquals(0, harness.launchCount)
+        assertTrue(harness.failures.isEmpty())
+        harness.assertNoTerminalCleanup()
+
+        harness.runTerminalWinner()
+        harness.assertTerminalCleanupExactlyOnce(ActiveTaskFinishSource.START_EXCEPTION)
     }
 
     @Test
@@ -93,13 +199,13 @@ class ProcessingServiceReconciliationPolicyTest {
         harness.coordinator.start()
 
         harness.fireRecoveryTimeout()
-        harness.runMainActions()
         harness.completeReconciliation()
         harness.runMainActions()
 
         assertEquals(1, harness.timeoutCount)
         assertEquals(0, harness.launchCount)
         assertTrue(harness.failures.isEmpty())
+        harness.assertTerminalCleanupExactlyOnce(ActiveTaskFinishSource.SERVICE_TIMEOUT)
     }
 
     @Test
@@ -109,14 +215,32 @@ class ProcessingServiceReconciliationPolicyTest {
 
         assertTrue(harness.coordinator.start())
 
-        assertEquals(listOf("foreground", "wake", "watchdog-arm", "watchdog-cancel"), harness.events)
         assertEquals(0, harness.registrationCount)
         assertEquals(0, harness.launchCount)
         assertEquals(listOf(ReconciliationLaunchFailure.WATCHDOG to expected), harness.failures)
+        harness.assertTerminalCleanupExactlyOnce(
+            expectedSource = ActiveTaskFinishSource.START_EXCEPTION,
+            expectRecoveryWatchdogCancellation = false,
+        )
     }
+
+    private data class InvalidReservationCase(
+        val name: String,
+        val invalidate: (LaunchHarness) -> Unit,
+        val resolve: (LaunchHarness) -> Unit,
+    )
+
+    private data class StaleOwnerCase(
+        val name: String,
+        val ownTerminal: (LaunchHarness) -> Unit,
+        val expectedOutcome: ActiveTaskTerminalOutcome = ActiveTaskTerminalOutcome.FAILED,
+        val expectedSource: ActiveTaskFinishSource,
+        val expectStop: Boolean = true,
+    )
 
     private class LaunchHarness(
         private val watchdogRejection: Throwable? = null,
+        private val deferTerminalWinner: Boolean = false,
     ) {
         val context = awaitingContext(SERVICE_TASK_ID, GENERATION)
         var destroyed = false
@@ -130,8 +254,67 @@ class ProcessingServiceReconciliationPolicyTest {
         var launchCount = 0
         var timeoutCount = 0
         var watchdogCancelCount = 0
+        private var recoveryWatchdogArmed = false
         private var completion: ((Throwable?) -> Unit)? = null
         private var recoveryTimeout: (() -> Unit)? = null
+        private var terminalWinner: (() -> Unit)? = null
+        private var registryTerminalCount = 0
+        private var userWatchdogCancelCount = 0
+        private var observerReleaseCount = 0
+        private var wakeReleaseCount = 0
+        private var foregroundReleaseCount = 0
+        private var notificationCount = 0
+        private var transcodeDisposeCount = 0
+        private var audioDisposeCount = 0
+        private var clearActiveCount = 0
+        private var stopCount = 0
+
+        private fun cancelRecoveryWatchdog() {
+            if (recoveryWatchdogArmed) {
+                recoveryWatchdogArmed = false
+                watchdogCancelCount += 1
+            }
+        }
+
+        private val cancellationWatchdog =
+            UserCancellationWatchdog(
+                scheduler = CancellationWatchdogScheduler { _, _ -> CancellationWatchdogRegistration {} },
+                timeoutMillis = 5_000L,
+            )
+
+        val terminationPolicy =
+            ServiceTerminationPolicy(
+                context = context,
+                cancellationWatchdog = cancellationWatchdog,
+                actions =
+                    ServiceTerminationPolicyActions(
+                        markPublicationDiscarding = {},
+                        cancelEngine = {},
+                        publishRegistryTerminal = { registryTerminalCount += 1 },
+                        scheduleTerminalWinner = { action ->
+                            if (deferTerminalWinner) terminalWinner = action else action()
+                        },
+                        cancelRecoveryWaitWatchdog = ::cancelRecoveryWatchdog,
+                        cancelUserWatchdog = {
+                            userWatchdogCancelCount += 1
+                            cancellationWatchdog.cancel()
+                        },
+                        removeRegistryObserver = { observerReleaseCount += 1 },
+                        releaseWakeLock = { wakeReleaseCount += 1 },
+                        removeForeground = { foregroundReleaseCount += 1 },
+                        publishTerminalNotification = { notificationCount += 1 },
+                        disposeTranscodeEngine = { transcodeDisposeCount += 1 },
+                        disposeAudioExtractionEngine = { audioDisposeCount += 1 },
+                        ownsServiceSurface = {
+                            activeContext === context && installedGeneration == GENERATION
+                        },
+                        clearActiveLaunch = {
+                            clearActiveCount += 1
+                            if (activeContext === context) activeContext = null
+                        },
+                        stopService = { stopCount += 1 },
+                    ),
+            )
 
         val coordinator =
             ServiceReconciliationLaunchCoordinator(
@@ -141,23 +324,21 @@ class ProcessingServiceReconciliationPolicyTest {
                         acquireWakeLock = { events += "wake" },
                         armRecoveryWaitWatchdog = { onTimeout ->
                             events += "watchdog-arm"
-                            watchdogRejection?.let { return@ServiceReconciliationLaunchActions RecoveryWaitWatchdogArmResult.Rejected(it) }
+                            watchdogRejection?.let {
+                                return@ServiceReconciliationLaunchActions RecoveryWaitWatchdogArmResult.Rejected(it)
+                            }
+                            recoveryWatchdogArmed = true
                             recoveryTimeout = onTimeout
                             RecoveryWaitWatchdogArmResult.Armed
                         },
-                        cancelRecoveryWaitWatchdog = {
-                            events += "watchdog-cancel"
-                            watchdogCancelCount += 1
-                            recoveryTimeout = null
-                        },
+                        cancelRecoveryWaitWatchdog = ::cancelRecoveryWatchdog,
                         registerReconciliationCompletion = { callback ->
                             events += "register"
                             registrationCount += 1
                             completion = callback
                         },
-                        postToServiceMain = { action -> postedMainActions += action },
-                        isLaunchCurrent = {
-                            canLaunchAfterReconciliation(
+                        revalidateLaunch = {
+                            reconciliationLaunchDisposition(
                                 serviceDestroyed = destroyed,
                                 expectedContext = context,
                                 activeContext = activeContext,
@@ -166,12 +347,26 @@ class ProcessingServiceReconciliationPolicyTest {
                                 reservation = reservation,
                             )
                         },
+                        postToServiceMain = { action -> postedMainActions += action },
                         launchEngine = {
                             events += "launch"
                             launchCount += 1
                         },
-                        finishFailure = { reason, error -> failures += reason to error },
-                        onRecoveryWaitTimeout = { timeoutCount += 1 },
+                        finishFailure = { reason, error ->
+                            failures += reason to error
+                            terminationPolicy.finish(
+                                ServiceTerminalDirective(
+                                    outcome = ActiveTaskTerminalOutcome.FAILED,
+                                    source = ActiveTaskFinishSource.START_EXCEPTION,
+                                    errorCode = EngineErrorCode.UNKNOWN.wireName,
+                                    errorMessage = EngineErrorCode.UNKNOWN.defaultMessage,
+                                ),
+                            )
+                        },
+                        onRecoveryWaitTimeout = {
+                            timeoutCount += 1
+                            terminationPolicy.onRecoveryWaitTimeout()
+                        },
                     ),
             )
 
@@ -183,8 +378,71 @@ class ProcessingServiceReconciliationPolicyTest {
             checkNotNull(recoveryTimeout).invoke()
         }
 
+        fun finishExistingTerminal() {
+            terminationPolicy.finish(
+                ServiceTerminalDirective(
+                    outcome = ActiveTaskTerminalOutcome.FAILED,
+                    source = ActiveTaskFinishSource.START_EXCEPTION,
+                    errorCode = EngineErrorCode.UNKNOWN.wireName,
+                    errorMessage = "existing terminal",
+                ),
+            )
+        }
+
         fun runMainActions() {
             while (postedMainActions.isNotEmpty()) postedMainActions.removeFirst().invoke()
+        }
+
+        fun runTerminalWinner() {
+            checkNotNull(terminalWinner).invoke()
+        }
+
+        fun terminalAttemptSnapshot(): List<Int> =
+            listOf(
+                registryTerminalCount,
+                watchdogCancelCount,
+                userWatchdogCancelCount,
+                observerReleaseCount,
+                wakeReleaseCount,
+                foregroundReleaseCount,
+                notificationCount,
+                transcodeDisposeCount,
+                audioDisposeCount,
+                clearActiveCount,
+                stopCount,
+            )
+
+        fun assertNoTerminalCleanup() {
+            assertEquals(listOf(0, watchdogCancelCount, 0, 0, 0, 0, 0, 0, 0, 0, 0), terminalAttemptSnapshot())
+        }
+
+        fun assertTerminalCleanupExactlyOnce(
+            expectedSource: ActiveTaskFinishSource,
+            expectStop: Boolean = true,
+            expectedOutcome: ActiveTaskTerminalOutcome = ActiveTaskTerminalOutcome.FAILED,
+            expectRecoveryWatchdogCancellation: Boolean = true,
+        ) {
+            assertEquals(
+                ActiveTaskTerminalOwnership(expectedOutcome, expectedSource),
+                context.terminalOwnership,
+            )
+            assertEquals(ActiveTaskLifecycle.RELEASED, context.lifecycle)
+            assertEquals(
+                listOf(
+                    1,
+                    if (expectRecoveryWatchdogCancellation) 1 else 0,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    if (expectStop) 1 else 0,
+                ),
+                terminalAttemptSnapshot(),
+            )
         }
     }
 

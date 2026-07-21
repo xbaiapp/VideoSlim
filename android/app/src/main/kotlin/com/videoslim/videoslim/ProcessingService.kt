@@ -258,8 +258,8 @@ internal class ProcessingService : Service() {
                                 "Unable to post reconciliation continuation to service main queue"
                             }
                         },
-                        isLaunchCurrent = {
-                            canLaunchAfterReconciliation(
+                        revalidateLaunch = {
+                            reconciliationLaunchDisposition(
                                 serviceDestroyed = serviceDestroyed,
                                 expectedContext = context,
                                 activeContext = activeLaunch?.context,
