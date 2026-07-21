@@ -1042,10 +1042,12 @@ void main() {
         listen: false,
       );
       flow.update(() {
-        flow.generation += 1;
-        flow.validatingDestination = false;
-        flow.selectedUri = 'content://media/video/new-source';
-        flow.sourceInfo = _videoInfo(uri: 'content://media/video/new-source');
+        flow.advanceGeneration();
+        flow.completeInteraction();
+        flow.setSelectedSource(
+          uri: 'content://media/video/new-source',
+          info: _videoInfo(uri: 'content://media/video/new-source'),
+        );
       });
       validation.complete(location);
       await tester.pump();
@@ -2643,10 +2645,12 @@ void main() {
       listen: false,
     );
     flow.update(() {
-      flow.generation += 1;
-      flow.validatingDestination = false;
-      flow.selectedUri = 'content://media/video/reselected';
-      flow.sourceInfo = _videoInfo(uri: 'content://media/video/reselected');
+      flow.advanceGeneration();
+      flow.completeInteraction();
+      flow.setSelectedSource(
+        uri: 'content://media/video/reselected',
+        info: _videoInfo(uri: 'content://media/video/reselected'),
+      );
     });
     validation.complete(OutputLocation.defaultGallery);
     await tester.pump();
@@ -2808,10 +2812,12 @@ void main() {
       listen: false,
     );
     flow.update(() {
-      flow.generation += 1;
-      flow.validatingDestination = false;
-      flow.selectedUri = 'content://media/video/new-source';
-      flow.sourceInfo = _videoInfo(uri: 'content://media/video/new-source');
+      flow.advanceGeneration();
+      flow.completeInteraction();
+      flow.setSelectedSource(
+        uri: 'content://media/video/new-source',
+        info: _videoInfo(uri: 'content://media/video/new-source'),
+      );
     });
     validation.complete(location);
     await tester.pump();

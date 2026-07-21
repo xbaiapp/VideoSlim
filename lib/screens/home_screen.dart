@@ -70,103 +70,51 @@ class _HomeScreenState extends State<HomeScreen> {
   AudioExtractRequest? _lastAudioExtractRequest;
 
   int get _generation => _flow.generation;
-  set _generation(int value) => _flow.generation = value;
   int? get _activeGeneration => _flow.activeGeneration;
-  set _activeGeneration(int? value) => _flow.activeGeneration = value;
   bool get _awaitingTaskId => _flow.awaitingTaskId;
-  set _awaitingTaskId(bool value) => _flow.awaitingTaskId = value;
   bool get _terminalEventHandled => _flow.terminalEventHandled;
-  set _terminalEventHandled(bool value) => _flow.terminalEventHandled = value;
-  PendingProgressBuffer get _bufferedProgress => _flow.bufferedProgress;
-
   bool get _nativeOwnershipUncertain => _flow.nativeOwnershipUncertain;
-  set _nativeOwnershipUncertain(bool value) =>
-      _flow.nativeOwnershipUncertain = value;
 
   bool get _picking => _flow.picking;
-  set _picking(bool value) => _flow.picking = value;
   bool get _readingMetadata => _flow.readingMetadata;
-  set _readingMetadata(bool value) => _flow.readingMetadata = value;
   bool get _selectingOutputLocation => _flow.selectingOutputLocation;
-  set _selectingOutputLocation(bool value) =>
-      _flow.selectingOutputLocation = value;
-  set _validatingDestination(bool value) => _flow.validatingDestination = value;
   bool get _validatingDestination => _flow.validatingDestination;
   bool get _preparing => _flow.preparing;
-  set _preparing(bool value) => _flow.preparing = value;
   bool get _processing => _flow.processing;
-  set _processing(bool value) => _flow.processing = value;
   bool get _finishing => _flow.finishing;
-  set _finishing(bool value) => _flow.finishing = value;
   bool get _restoringTask => _flow.restoringTask;
-  set _restoringTask(bool value) => _flow.restoringTask = value;
   bool get _cancelling => _flow.cancelling;
-  set _cancelling(bool value) => _flow.cancelling = value;
   bool get _progressStreamClosed => _flow.progressStreamClosed;
-  set _progressStreamClosed(bool value) => _flow.progressStreamClosed = value;
   bool get _outputPublished => _flow.outputPublished;
-  set _outputPublished(bool value) => _flow.outputPublished = value;
   double get _percent => _flow.percent;
-  set _percent(double value) => _flow.percent = value;
   Duration get _elapsed => _flow.elapsed;
-  set _elapsed(Duration value) => _flow.elapsed = value;
   Duration? get _remaining => _flow.remaining;
-  set _remaining(Duration? value) => _flow.remaining = value;
   bool get _etaStalled => _flow.etaStalled;
-  set _etaStalled(bool value) => _flow.etaStalled = value;
   TaskPhase get _taskPhase => _flow.taskPhase;
-  set _taskPhase(TaskPhase value) => _flow.taskPhase = value;
   bool get _selectedFromGallery => _flow.selectedFromGallery;
-  set _selectedFromGallery(bool value) => _flow.selectedFromGallery = value;
   bool get _sourceDeleted => _flow.sourceDeleted;
-  set _sourceDeleted(bool value) => _flow.sourceDeleted = value;
   bool get _mediaActionBusy => _flow.mediaActionBusy;
-  set _mediaActionBusy(bool value) => _flow.mediaActionBusy = value;
   bool get _capabilitiesLoading => _flow.capabilitiesLoading;
-  set _capabilitiesLoading(bool value) => _flow.capabilitiesLoading = value;
   DeviceCapabilities? get _capabilities => _flow.capabilities;
-  set _capabilities(DeviceCapabilities? value) => _flow.capabilities = value;
   CompressionPreset? get _selectedPreset => _flow.selectedPreset;
-  set _selectedPreset(CompressionPreset? value) => _flow.selectedPreset = value;
   CompressionResolution get _customResolution => _flow.customResolution;
-  set _customResolution(CompressionResolution value) =>
-      _flow.customResolution = value;
   VideoCodec get _customCodec => _flow.customCodec;
-  set _customCodec(VideoCodec value) => _flow.customCodec = value;
   int get _customVideoBitrate => _flow.customVideoBitrate;
-  set _customVideoBitrate(int value) => _flow.customVideoBitrate = value;
   CompressionAudioMode get _customAudioMode => _flow.customAudioMode;
-  set _customAudioMode(CompressionAudioMode value) =>
-      _flow.customAudioMode = value;
   int get _customAudioBitrate => _flow.customAudioBitrate;
-  set _customAudioBitrate(int value) => _flow.customAudioBitrate = value;
   TaskKind get _activeTaskKind => _flow.activeTaskKind;
-  set _activeTaskKind(TaskKind value) => _flow.activeTaskKind = value;
   AudioExtractMode get _audioExtractMode => _flow.audioExtractMode;
-  set _audioExtractMode(AudioExtractMode value) =>
-      _flow.audioExtractMode = value;
   int get _audioExtractBitrate => _flow.audioExtractBitrate;
-  set _audioExtractBitrate(int value) => _flow.audioExtractBitrate = value;
 
   String? get _selectedUri => _flow.selectedUri;
-  set _selectedUri(String? value) => _flow.selectedUri = value;
   String? get _taskId => _flow.taskId;
-  set _taskId(String? value) => _flow.taskId = value;
   String? get _errorText => _flow.errorText;
-  set _errorText(String? value) => _flow.errorText = value;
   String? get _publishedOutputUri => _flow.publishedOutputUri;
-  set _publishedOutputUri(String? value) => _flow.publishedOutputUri = value;
   String? get _publishedOutputFileName => _flow.publishedOutputFileName;
-  set _publishedOutputFileName(String? value) =>
-      _flow.publishedOutputFileName = value;
   VideoInfo? get _sourceInfo => _flow.sourceInfo;
-  set _sourceInfo(VideoInfo? value) => _flow.sourceInfo = value;
   VideoInfo? get _outputInfo => _flow.outputInfo;
-  set _outputInfo(VideoInfo? value) => _flow.outputInfo = value;
   AudioInfo? get _outputAudioInfo => _flow.outputAudioInfo;
-  set _outputAudioInfo(AudioInfo? value) => _flow.outputAudioInfo = value;
   Stopwatch? get _processStopwatch => _flow.processStopwatch;
-  set _processStopwatch(Stopwatch? value) => _flow.processStopwatch = value;
 
   bool get _interactionLocked => _flow.interactionLocked;
 
@@ -211,45 +159,43 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _chooseOutputFolder() async {
     if (_interactionLocked || _selectingOutputLocation) return;
-    _flow.update(() => _selectingOutputLocation = true);
+    _flow.beginSelectingOutputLocation();
     try {
       final location = await widget.picker.chooseOutputFolder();
       if (!mounted || location == null) return;
       _flow.update(() {
         _applyOutputLocation(location);
-        _errorText = null;
+        _flow.setErrorText(null);
       });
     } catch (error, stackTrace) {
       if (mounted) {
-        _flow.update(() {
-          _errorText = _errorTextFor(error, fallback: '无法使用这个文件夹，请重新选择并允许写入。');
-        });
+        _flow.setErrorText(
+          _errorTextFor(error, fallback: '无法使用这个文件夹，请重新选择并允许写入。'),
+        );
       }
       _logError('选择保存文件夹失败', error, stackTrace);
     } finally {
-      if (mounted) _flow.update(() => _selectingOutputLocation = false);
+      if (mounted) _flow.completeInteraction();
     }
   }
 
   Future<void> _useDefaultOutputLocation() async {
     if (_interactionLocked || _selectingOutputLocation) return;
-    _flow.update(() => _selectingOutputLocation = true);
+    _flow.beginSelectingOutputLocation();
     try {
       final location = await widget.picker.resetOutputLocation();
       if (!mounted) return;
       _flow.update(() {
         _applyOutputLocation(location);
-        _errorText = null;
+        _flow.setErrorText(null);
       });
     } catch (error, stackTrace) {
       if (mounted) {
-        _flow.update(() {
-          _errorText = _errorTextFor(error, fallback: '无法恢复默认保存位置。');
-        });
+        _flow.setErrorText(_errorTextFor(error, fallback: '无法恢复默认保存位置。'));
       }
-      _logError('恢复默认保存位置失败', error, stackTrace);
+      _logError('恢复默认保存文件夹失败', error, stackTrace);
     } finally {
-      if (mounted) _flow.update(() => _selectingOutputLocation = false);
+      if (mounted) _flow.completeInteraction();
     }
   }
 
@@ -266,16 +212,16 @@ class _HomeScreenState extends State<HomeScreen> {
   void _rejectDestinationValidation(int generation, String message) {
     if (!_isCurrent(generation) || !_validatingDestination) return;
     _flow.update(() {
-      _validatingDestination = false;
-      _errorText = message;
+      _flow.completeInteraction();
+      _flow.setErrorText(message);
     });
   }
 
   int _reserveDestinationValidation() {
-    final generation = ++_generation;
+    final generation = _flow.advanceGeneration();
     _flow.update(() {
-      _validatingDestination = true;
-      _errorText = null;
+      _flow.beginValidatingDestination();
+      _flow.setErrorText(null);
     });
     return generation;
   }
@@ -291,7 +237,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted || !_isCurrent(generation) || !_validatingDestination) {
       return;
     }
-    _flow.update(() => _validatingDestination = false);
+    _flow.completeInteraction();
   }
 
   CompressionSettings get _compressionSettings {
@@ -359,12 +305,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _restoreTaskSnapshot() async {
-    final generation = ++_generation;
-    _activeGeneration = generation;
-    _awaitingTaskId = true;
-    _terminalEventHandled = false;
-    _bufferedProgress.clear();
-    _nativeOwnershipUncertain = false;
+    final generation = _flow.advanceGeneration();
+    _flow.update(() {
+      _flow.activateGeneration(generation);
+      _flow.beginAwaitingTaskId();
+      _flow.resetTerminalEvent();
+      _flow.clearBufferedProgress();
+      _flow.beginRestoration();
+    });
     final queryEpoch = ++_snapshotQueryEpoch;
     await _queryAndBindTaskSnapshot(
       generation,
@@ -377,9 +325,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!_isCurrent(generation) || _terminalEventHandled) return;
     final queryEpoch = ++_snapshotQueryEpoch;
     _flow.update(() {
-      _nativeOwnershipUncertain = true;
-      _restoringTask = true;
-      _errorText = '正在重新确认处理任务，请勿开始其他操作。';
+      _flow.markNativeOwnershipUncertain();
+      _flow.setErrorText('正在重新确认处理任务，请勿开始其他操作。');
     });
     await _queryAndBindTaskSnapshot(
       generation,
@@ -394,9 +341,8 @@ class _HomeScreenState extends State<HomeScreen> {
     // snapshot request so a delayed null/error cannot abandon this task.
     _snapshotQueryEpoch += 1;
     _flow.update(() {
-      _nativeOwnershipUncertain = false;
-      _restoringTask = false;
-      _errorText = null;
+      _flow.confirmNativeOwnership();
+      _flow.setErrorText(null);
     });
   }
 
@@ -411,22 +357,20 @@ class _HomeScreenState extends State<HomeScreen> {
       if (snapshot == null) {
         if (!initialRestore && _awaitingTaskId && _preparing) {
           _flow.update(() {
-            _nativeOwnershipUncertain = true;
-            _restoringTask = true;
-            _errorText = '任务仍在创建，正在等待原生任务编号。';
+            _flow.markNativeOwnershipUncertain();
+            _flow.setErrorText('任务仍在创建，正在等待原生任务编号。');
           });
           return;
         }
         if (initialRestore) {
           _flow.update(() {
-            _nativeOwnershipUncertain = false;
-            _restoringTask = false;
-            _activeGeneration = null;
-            _awaitingTaskId = false;
-            _bufferedProgress.clear();
+            _flow.completeRestoration();
+            _flow.clearActiveGeneration();
+            _flow.completeAwaitingTaskId();
+            _flow.clearBufferedProgress();
           });
         } else {
-          _nativeOwnershipUncertain = false;
+          _flow.completeRestoration();
           _failGeneration(generation, '原生已确认当前没有活动任务，请重新开始。');
         }
         return;
@@ -435,9 +379,8 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (error, stackTrace) {
       if (!_isCurrent(generation) || queryEpoch != _snapshotQueryEpoch) return;
       _flow.update(() {
-        _nativeOwnershipUncertain = true;
-        _restoringTask = true;
-        _errorText = '无法确认是否有任务正在运行。为避免重复任务，请重启应用后再继续。';
+        _flow.markNativeOwnershipUncertain();
+        _flow.setErrorText('无法确认是否有任务正在运行。为避免重复任务，请重启应用后再继续。');
       });
       _logError('查询原生任务快照失败；保守保留任务所有权', error, stackTrace);
     }
@@ -456,36 +399,35 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     if (!_isCurrent(generation) || queryEpoch != _snapshotQueryEpoch) return;
 
-    final buffered = _bufferedProgress.drain();
-    _awaitingTaskId = false;
-    _processStopwatch = Stopwatch()..start();
+    final buffered = _flow.drainBufferedProgress();
+    _flow.completeAwaitingTaskId();
+    _flow.startProcessStopwatch();
     _flow.update(() {
-      _nativeOwnershipUncertain = false;
-      _restoringTask = false;
-      _selectedUri = snapshot.sourceUri;
-      _activeTaskKind = snapshot.taskKind;
-      _sourceInfo = sourceInfo;
-      _taskId = snapshot.taskId;
-      _publishedOutputUri = snapshot.outputUri;
-      _publishedOutputFileName = snapshot.outputFileName;
-      _percent = snapshot.percent;
-      _taskPhase = snapshot.phase;
+      _flow.completeRestoration();
+      _flow.setSelectedSource(uri: snapshot.sourceUri, info: sourceInfo);
+      _flow.setActiveTaskKind(snapshot.taskKind);
+      _flow.setTaskId(snapshot.taskId);
+      _flow.setPublishedOutput(
+        uri: snapshot.outputUri,
+        fileName: snapshot.outputFileName,
+      );
+      _flow.setProgress(percent: snapshot.percent, phase: snapshot.phase);
       _taskOutputLocationLabel = snapshot.outputLocationLabel;
       _lastVideoDecoderMode = snapshot.videoDecoderMode;
       _lastProcessRequest = snapshot.retryRequest;
       _lastAudioExtractRequest = snapshot.audioRetryRequest;
       final audioRetry = snapshot.audioRetryRequest;
       if (audioRetry != null) {
-        _audioExtractMode = audioRetry.mode;
-        _audioExtractBitrate = audioRetry.bitrate ?? 128000;
+        _flow.setAudioExtractSettings(
+          mode: audioRetry.mode,
+          bitrate: audioRetry.bitrate ?? 128000,
+        );
       }
       _actualVideoEncodingMode = snapshot.actualVideoEncodingMode;
-      _preparing = false;
-      _processing = true;
-      _finishing = false;
-      _selectedFromGallery = false;
-      _sourceDeleted = false;
-      _errorText = null;
+      _flow.restoreTaskProcessing();
+      _flow.setSelectedFromGallery(false);
+      _flow.resetSourceDeletion();
+      _flow.setErrorText(null);
     });
     _startTiming(snapshot.startedAt);
     if (sourceInfo != null && snapshot.taskKind == TaskKind.videoCompression) {
@@ -519,21 +461,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadCapabilities(int generation) async {
     if (!_isCurrent(generation)) return;
-    _flow.update(() => _capabilitiesLoading = true);
+    _flow.beginCapabilitiesLoad();
     try {
       final capabilities = await widget.engine.getCapabilities();
       if (!_isCurrent(generation)) return;
-      _flow.update(() {
-        _capabilities = capabilities;
-        _capabilitiesLoading = false;
-      });
+      _flow.completeCapabilitiesLoad(capabilities);
       _logFlow('M2 编码能力检查完成', details: capabilities.toMap());
     } catch (error, stackTrace) {
       if (!_isCurrent(generation)) return;
-      _flow.update(() {
-        _capabilities = null;
-        _capabilitiesLoading = false;
-      });
+      _flow.completeCapabilitiesLoad(null);
       _logError('M2 编码能力检查失败', error, stackTrace);
     }
   }
@@ -552,11 +488,11 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted || _etaEstimator == null) return;
     final timing = _etaEstimator!.update(percent: _percent, now: _now());
     final showEta = _taskPhase == TaskPhase.encoding;
-    _flow.update(() {
-      _elapsed = timing.elapsed;
-      _remaining = showEta ? timing.remaining : null;
-      _etaStalled = showEta && timing.isStalled;
-    });
+    _flow.setTiming(
+      elapsed: timing.elapsed,
+      remaining: showEta ? timing.remaining : null,
+      etaStalled: showEta && timing.isStalled,
+    );
   }
 
   void _stopTiming() {
@@ -571,14 +507,14 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    final generation = ++_generation;
-    _activeGeneration = null;
-    _awaitingTaskId = false;
-    _terminalEventHandled = false;
-    _bufferedProgress.clear();
+    final generation = _flow.advanceGeneration();
     _flow.update(() {
-      _restoringTask = false;
-      _picking = true;
+      _flow.clearActiveGeneration();
+      _flow.completeAwaitingTaskId();
+      _flow.resetTerminalEvent();
+      _flow.clearBufferedProgress();
+      _flow.completeRestoration();
+      _flow.beginPickingSource();
     });
     _logFlow(
       '打开视频选择器',
@@ -595,7 +531,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
       if (uri == null) {
-        _flow.update(() => _picking = false);
+        _flow.completeInteraction();
         _logFlow(
           '用户正常取消视频选择',
           details: <String, Object?>{'source': source.name},
@@ -604,23 +540,18 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       _flow.update(() {
-        _picking = false;
-        _readingMetadata = true;
-        _selectedUri = uri;
-        _sourceInfo = null;
-        _outputInfo = null;
-        _outputAudioInfo = null;
-        _activeTaskKind = TaskKind.videoCompression;
-        _errorText = null;
-        _outputPublished = false;
-        _publishedOutputUri = null;
-        _publishedOutputFileName = null;
-        _taskId = null;
-        _percent = 0;
-        _selectedFromGallery = source == _ImportSource.gallery;
-        _sourceDeleted = false;
-        _capabilities = null;
-        _capabilitiesLoading = false;
+        _flow.beginReadingSourceMetadata();
+        _flow.setSelectedSource(uri: uri, info: null);
+        _flow.setOutputInfo(null);
+        _flow.setOutputAudioInfo(null);
+        _flow.setActiveTaskKind(TaskKind.videoCompression);
+        _flow.setErrorText(null);
+        _flow.clearPublishedOutput();
+        _flow.setTaskId(null);
+        _flow.setPercent(0);
+        _flow.setSelectedFromGallery(source == _ImportSource.gallery);
+        _flow.resetSourceDeletion();
+        _flow.clearCapabilities();
       });
       _logFlow(
         '已选择视频，开始读取技术信息',
@@ -639,12 +570,14 @@ class _HomeScreenState extends State<HomeScreen> {
         sourceFileName: info.fileName,
       );
       _flow.update(() {
-        _sourceInfo = info;
-        _audioExtractMode = selectedAudio.supportsCopy
-            ? AudioExtractMode.copy
-            : AudioExtractMode.aac;
-        _readingMetadata = false;
-        _errorText = null;
+        _flow.setSourceInfo(info);
+        _flow.setAudioExtractMode(
+          selectedAudio.supportsCopy
+              ? AudioExtractMode.copy
+              : AudioExtractMode.aac,
+        );
+        _flow.completeInteraction();
+        _flow.setErrorText(null);
       });
       _logFlow(
         '视频技术信息读取完成',
@@ -662,11 +595,9 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
       _flow.update(() {
-        _picking = false;
-        _readingMetadata = false;
-        _selectedUri = null;
-        _sourceInfo = null;
-        _errorText = _errorTextFor(error, fallback: '无法导入这个视频，请重新选择。');
+        _flow.completeInteraction();
+        _flow.setSelectedSource(uri: null, info: null);
+        _flow.setErrorText(_errorTextFor(error, fallback: '无法导入这个视频，请重新选择。'));
       });
       _logError(
         '视频导入失败',
@@ -684,7 +615,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (_progressStreamClosed) {
-      _flow.update(() => _errorText = '处理状态连接已中断，请重启应用后再试。');
+      _flow.setErrorText('处理状态连接已中断，请重启应用后再试。');
       return;
     }
 
@@ -710,12 +641,12 @@ class _HomeScreenState extends State<HomeScreen> {
       final plan = _audioExtractPlan;
       if (plan == null || !plan.available) {
         _flow.update(() {
-          _validatingDestination = false;
-          _errorText = switch (plan?.reason) {
+          _flow.completeInteraction();
+          _flow.setErrorText(switch (plan?.reason) {
             AudioExtractUnavailableReason.copyRequiresAac =>
               '原音轨不是 AAC，请改用 AAC 转码。',
             _ => '这个视频没有可提取的音轨。',
-          };
+          });
         });
         return;
       }
@@ -740,8 +671,10 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (error, stackTrace) {
       if (_ownsDestinationValidation(generation)) {
         _flow.update(() {
-          _validatingDestination = false;
-          _errorText = _errorTextFor(error, fallback: '无法确认保存文件夹权限，请重新选择保存位置。');
+          _flow.completeInteraction();
+          _flow.setErrorText(
+            _errorTextFor(error, fallback: '无法确认保存文件夹权限，请重新选择保存位置。'),
+          );
         });
       }
       _logError('音频提取前保存位置检查失败', error, stackTrace);
@@ -794,10 +727,10 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
       if (asAac) {
-        _flow.update(() {
-          _audioExtractMode = AudioExtractMode.aac;
-          _audioExtractBitrate = 128000;
-        });
+        _flow.setAudioExtractSettings(
+          mode: AudioExtractMode.aac,
+          bitrate: 128000,
+        );
       }
       await _submitAudio(request, reservedGeneration: generation);
     } finally {
@@ -911,51 +844,39 @@ class _HomeScreenState extends State<HomeScreen> {
     AudioExtractRequest request, {
     int? reservedGeneration,
   }) async {
-    final generation = reservedGeneration ?? ++_generation;
+    final generation = reservedGeneration ?? _flow.advanceGeneration();
     if (!_isCurrent(generation) ||
         _progressStreamClosed ||
         (reservedGeneration != null && !_validatingDestination)) {
       return;
     }
-    _activeGeneration = generation;
-    _terminalEventHandled = false;
-    _bufferedProgress.clear();
-    _processStopwatch = Stopwatch()..start();
     _flow.update(() {
-      _validatingDestination = false;
-      _activeTaskKind = TaskKind.audioExtraction;
-      _preparing = true;
-      _processing = false;
-      _finishing = false;
-      _cancelling = false;
-      _percent = 0;
-      _taskPhase = TaskPhase.preparing;
-      _etaStalled = false;
-      _errorText = null;
+      _flow.activateGeneration(generation);
+      _flow.resetTerminalEvent();
+      _flow.clearBufferedProgress();
+      _flow.startProcessStopwatch();
+      _flow.beginTaskPreparation(
+        taskKind: TaskKind.audioExtraction,
+        outputFileName: request.outputFileName,
+      );
       _lastFailureCode = null;
       _lastProcessRequest = null;
       _lastAudioExtractRequest = request;
-      _outputInfo = null;
-      _outputAudioInfo = null;
-      _outputPublished = false;
-      _publishedOutputUri = null;
-      _publishedOutputFileName = request.outputFileName;
-      _taskId = null;
+      _flow.setLastAudioExtractRequest(request);
       _taskOutputLocationLabel = request.outputLocationLabel;
       _actualVideoEncodingMode = ActualVideoEncodingMode.unknown;
     });
     _startTiming(_now());
     try {
-      _awaitingTaskId = true;
+      _flow.beginAwaitingTaskId();
       final taskId = await widget.engine.extractAudio(request);
       if (!_isCurrent(generation)) return;
-      _awaitingTaskId = false;
-      _taskId = taskId;
-      final buffered = _bufferedProgress.drain();
       _flow.update(() {
-        _preparing = false;
-        _processing = true;
+        _flow.completeAwaitingTaskId();
+        _flow.setTaskId(taskId);
+        _flow.beginTaskProcessing();
       });
+      final buffered = _flow.drainBufferedProgress();
       for (final event in buffered) {
         if (event.taskId == taskId &&
             event.taskKind == TaskKind.audioExtraction) {
@@ -968,17 +889,17 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } catch (error, stackTrace) {
       if (!_isCurrent(generation)) return;
-      _awaitingTaskId = false;
+      _flow.completeAwaitingTaskId();
       if (_nativeOwnershipUncertain) {
         _flow.update(() {
-          _restoringTask = true;
-          _errorText = '任务启动结果不确定，正在重新确认原生任务。';
+          _flow.beginRestoration(ownershipUncertain: true);
+          _flow.setErrorText('任务启动结果不确定，正在重新确认原生任务。');
         });
         unawaited(_reconcileNativeOwnership(generation));
         _logError('M3 音频提取返回错误；保留所有权等待快照确认', error, stackTrace);
         return;
       }
-      _bufferedProgress.clear();
+      _flow.clearBufferedProgress();
       final failureCode = error is VideoEngineException
           ? _stableCode(error.code)
           : 'UNKNOWN';
@@ -1166,9 +1087,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (!plan.isSupported) {
-      _flow.update(() {
-        _errorText = '当前手机没有可用的视频压缩方式。';
-      });
+      _flow.setErrorText('当前手机没有可用的视频压缩方式。');
       return;
     }
     if (_outputPublished) {
@@ -1176,9 +1095,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (_progressStreamClosed) {
-      _flow.update(() {
-        _errorText = '处理状态连接已中断，请重启应用后再压缩。';
-      });
+      _flow.setErrorText('处理状态连接已中断，请重启应用后再压缩。');
       _logFlow('阻止压缩：进度通道已关闭', level: AppLogLevel.error);
       return;
     }
@@ -1232,8 +1149,10 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (error, stackTrace) {
       if (_ownsDestinationValidation(generation)) {
         _flow.update(() {
-          _validatingDestination = false;
-          _errorText = _errorTextFor(error, fallback: '无法确认保存文件夹权限，请重新选择保存位置。');
+          _flow.completeInteraction();
+          _flow.setErrorText(
+            _errorTextFor(error, fallback: '无法确认保存文件夹权限，请重新选择保存位置。'),
+          );
         });
       }
       _logError('压缩前保存位置检查失败', error, stackTrace);
@@ -1252,55 +1171,43 @@ class _HomeScreenState extends State<HomeScreen> {
         _outputPublished) {
       return;
     }
-    final generation = reservedGeneration ?? ++_generation;
+    final generation = reservedGeneration ?? _flow.advanceGeneration();
     if (!_isCurrent(generation) ||
         _progressStreamClosed ||
         (reservedGeneration != null && !_validatingDestination)) {
       return;
     }
     final taskStartedAt = startedAt ?? _now();
-    _activeGeneration = generation;
-    _terminalEventHandled = false;
-    _bufferedProgress.clear();
-    _processStopwatch = Stopwatch()..start();
     _flow.update(() {
-      _validatingDestination = false;
-      _activeTaskKind = TaskKind.videoCompression;
-      _preparing = true;
-      _processing = false;
-      _finishing = false;
-      _cancelling = false;
-      _percent = 0;
-      _taskPhase = TaskPhase.preparing;
-      _etaStalled = false;
-      _errorText = null;
+      _flow.activateGeneration(generation);
+      _flow.resetTerminalEvent();
+      _flow.clearBufferedProgress();
+      _flow.startProcessStopwatch();
+      _flow.beginTaskPreparation(
+        taskKind: TaskKind.videoCompression,
+        outputFileName: request.outputFileName,
+      );
       _lastFailureCode = null;
       _lastVideoDecoderMode = requestedVideoDecoderModeFromWireName(
         request.videoDecoderMode,
       );
       _lastProcessRequest = request;
-      _outputInfo = null;
-      _outputPublished = false;
-      _publishedOutputUri = null;
-      _publishedOutputFileName = request.outputFileName;
-      _taskId = null;
       _taskOutputLocationLabel = request.outputLocationLabel;
       _actualVideoEncodingMode = ActualVideoEncodingMode.unknown;
     });
     _startTiming(taskStartedAt);
 
     try {
-      _awaitingTaskId = true;
+      _flow.beginAwaitingTaskId();
       _logFlow('提交 M2 压缩任务', details: request.toChannelMap());
       final taskId = await widget.engine.process(request);
       if (!_isCurrent(generation)) return;
-      _awaitingTaskId = false;
-      _taskId = taskId;
-      final buffered = _bufferedProgress.drain();
       _flow.update(() {
-        _preparing = false;
-        _processing = true;
+        _flow.completeAwaitingTaskId();
+        _flow.setTaskId(taskId);
+        _flow.beginTaskProcessing();
       });
+      final buffered = _flow.drainBufferedProgress();
       _logFlow(
         'M2 压缩任务已创建',
         details: <String, Object?>{
@@ -1330,11 +1237,11 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } catch (error, stackTrace) {
       if (!_isCurrent(generation)) return;
-      _awaitingTaskId = false;
+      _flow.completeAwaitingTaskId();
       if (_nativeOwnershipUncertain) {
         _flow.update(() {
-          _restoringTask = true;
-          _errorText = '任务启动结果不确定，正在重新确认原生任务。';
+          _flow.beginRestoration(ownershipUncertain: true);
+          _flow.setErrorText('任务启动结果不确定，正在重新确认原生任务。');
         });
         unawaited(_reconcileNativeOwnership(generation));
         _logError(
@@ -1345,7 +1252,7 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         return;
       }
-      _bufferedProgress.clear();
+      _flow.clearBufferedProgress();
       final failureCode = error is VideoEngineException
           ? _stableCode(error.code)
           : 'UNKNOWN';
@@ -1415,7 +1322,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (_awaitingTaskId) {
-      _bufferedProgress.add(event, generation: generation);
+      _flow.bufferProgress(event, generation: generation);
       _logFlow(
         '任务编号或恢复快照确定前暂存进度事件',
         details: <String, Object?>{
@@ -1468,25 +1375,25 @@ class _HomeScreenState extends State<HomeScreen> {
         final nextPhase = _laterPhase(_taskPhase, event.phase);
         if (mounted) {
           _flow.update(() {
-            _preparing = false;
-            _processing = true;
-            _taskPhase = nextPhase;
-            _cancelling = _cancelling || nextPhase == TaskPhase.cancelling;
-            if (nextPercent > _percent) {
-              _percent = nextPercent;
+            _flow.beginTaskProcessing();
+            _flow.setProgress(
+              percent: nextPercent > _percent ? nextPercent : _percent,
+              phase: nextPhase,
+            );
+            if (!_cancelling && nextPhase == TaskPhase.cancelling) {
+              _flow.beginCancellation();
             }
           });
           _updateTiming();
         }
       case TaskState.success:
-        _terminalEventHandled = true;
         _flow.update(() {
-          _percent = 100;
-          _taskPhase = TaskPhase.finished;
+          _flow.markTerminalEventHandled();
+          _flow.setProgress(percent: 100, phase: TaskPhase.finished);
+          _flow.markOutputPublished();
         });
         _updateTiming();
         _stopTiming();
-        _outputPublished = true;
         final outputUri = event.outputUri?.trim();
         if (outputUri == null || outputUri.isEmpty) {
           _failGeneration(
@@ -1502,12 +1409,12 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         final actualName = event.outputFileName?.trim();
         _flow.update(() {
-          _processing = false;
-          _finishing = true;
-          _percent = 100;
-          _publishedOutputUri = outputUri;
+          _flow.completeCancellation();
+          _flow.beginTaskFinishing();
+          _flow.setPercent(100);
+          _flow.setPublishedOutputUri(outputUri);
           if (actualName != null && actualName.isNotEmpty) {
-            _publishedOutputFileName = actualName;
+            _flow.setPublishedOutputFileName(actualName);
           }
         });
         _logFlow(
@@ -1520,7 +1427,7 @@ class _HomeScreenState extends State<HomeScreen> {
               : _loadOutputInfo(outputUri, generation),
         );
       case TaskState.failed:
-        _terminalEventHandled = true;
+        _flow.markTerminalEventHandled();
         final code = _stableCode(event.errorCode);
         _lastFailureCode = code;
         final message = _messageForCode(
@@ -1535,7 +1442,7 @@ class _HomeScreenState extends State<HomeScreen> {
           details: event.toMap(),
         );
       case TaskState.cancelled:
-        _terminalEventHandled = true;
+        _flow.markTerminalEventHandled();
         final code = _stableCode(event.errorCode, fallback: 'CANCELLED');
         _lastFailureCode = code;
         final message = _messageForCode(
@@ -1562,15 +1469,17 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!_isCurrent(generation)) {
         return;
       }
-      _processStopwatch?.stop();
+      _flow.stopProcessStopwatch();
       _flow.update(() {
-        _finishing = false;
-        _outputInfo = outputInfo;
-        _publishedOutputUri = outputInfo.uri;
-        _publishedOutputFileName = outputInfo.fileName;
-        _errorText = null;
+        _flow.completeTaskLifecycle();
+        _flow.setOutputInfo(outputInfo);
+        _flow.setPublishedOutput(
+          uri: outputInfo.uri,
+          fileName: outputInfo.fileName,
+        );
+        _flow.setErrorText(null);
+        _flow.clearActiveGeneration();
       });
-      _activeGeneration = null;
       _logFlow(
         'M2 压缩任务完成',
         details: <String, Object?>{
@@ -1585,13 +1494,12 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!_isCurrent(generation)) {
         return;
       }
-      _processStopwatch?.stop();
+      _flow.stopProcessStopwatch();
       _flow.update(() {
-        _finishing = false;
-        _processing = false;
-        _errorText = '压缩文件已经保存到 $_taskOutputLocationLabel，但暂时无法显示文件信息。';
+        _flow.completeTaskLifecycle();
+        _flow.setErrorText('压缩文件已经保存到 $_taskOutputLocationLabel，但暂时无法显示文件信息。');
+        _flow.clearActiveGeneration();
       });
-      _activeGeneration = null;
       _logError(
         '读取压缩输出信息失败',
         error,
@@ -1605,16 +1513,17 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final outputInfo = await widget.engine.getAudioInfo(outputUri);
       if (!_isCurrent(generation)) return;
-      _processStopwatch?.stop();
+      _flow.stopProcessStopwatch();
       _flow.update(() {
-        _finishing = false;
-        _processing = false;
-        _outputAudioInfo = outputInfo;
-        _publishedOutputUri = outputInfo.uri;
-        _publishedOutputFileName = outputInfo.fileName;
-        _errorText = null;
+        _flow.completeTaskLifecycle();
+        _flow.setOutputAudioInfo(outputInfo);
+        _flow.setPublishedOutput(
+          uri: outputInfo.uri,
+          fileName: outputInfo.fileName,
+        );
+        _flow.setErrorText(null);
+        _flow.clearActiveGeneration();
       });
-      _activeGeneration = null;
       _logFlow(
         'M3 音频提取任务完成',
         details: <String, Object?>{
@@ -1626,13 +1535,12 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     } catch (error, stackTrace) {
       if (!_isCurrent(generation)) return;
-      _processStopwatch?.stop();
+      _flow.stopProcessStopwatch();
       _flow.update(() {
-        _finishing = false;
-        _processing = false;
-        _errorText = '音频文件已经保存到 $_taskOutputLocationLabel，但暂时无法显示文件信息。';
+        _flow.completeTaskLifecycle();
+        _flow.setErrorText('音频文件已经保存到 $_taskOutputLocationLabel，但暂时无法显示文件信息。');
+        _flow.clearActiveGeneration();
       });
-      _activeGeneration = null;
       _logError(
         '读取音频输出信息失败',
         error,
@@ -1658,9 +1566,8 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     _flow.update(() {
-      _nativeOwnershipUncertain = true;
-      _restoringTask = true;
-      _errorText = '处理状态暂时中断，正在重新确认原生任务。';
+      _flow.markNativeOwnershipUncertain();
+      _flow.setErrorText('处理状态暂时中断，正在重新确认原生任务。');
     });
     unawaited(_reconcileNativeOwnership(generation));
     _logError(
@@ -1675,7 +1582,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) {
       return;
     }
-    _flow.update(() => _progressStreamClosed = true);
+    _flow.markProgressStreamClosed();
     if (_validatingDestination) {
       final pendingGeneration = _generation;
       _failGeneration(pendingGeneration, '处理状态连接已中断，请重启应用后再开始任务。');
@@ -1689,7 +1596,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _logFlow('进度通道已关闭；本次运行不再接受新任务', level: AppLogLevel.error);
       return;
     }
-    _terminalEventHandled = true;
+    _flow.markTerminalEventHandled();
     final isAudio = _activeTaskKind == TaskKind.audioExtraction;
     _failGeneration(
       generation,
@@ -1706,23 +1613,20 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!_isCurrent(generation)) {
       return;
     }
-    _generation += 1;
     _stopTiming();
-    _processStopwatch?.stop();
+    _flow.stopProcessStopwatch();
     _flow.update(() {
-      _validatingDestination = false;
-      _nativeOwnershipUncertain = false;
-      _restoringTask = false;
-      _preparing = false;
-      _processing = false;
-      _finishing = false;
-      _cancelling = false;
-      _errorText = message;
+      _flow.advanceGeneration();
+      _flow.completeInteraction();
+      _flow.completeCancellation();
+      _flow.completeTaskLifecycle();
+      _flow.completeRestoration();
+      _flow.setErrorText(message);
+      _flow.completeAwaitingTaskId();
+      _flow.markTerminalEventHandled();
+      _flow.clearBufferedProgress();
+      _flow.clearActiveGeneration();
     });
-    _awaitingTaskId = false;
-    _terminalEventHandled = true;
-    _bufferedProgress.clear();
-    _activeGeneration = null;
   }
 
   Future<void> _cancelTask() async {
@@ -1755,9 +1659,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
     if (confirmed != true || !_isCurrent(generation)) return;
     _flow.update(() {
-      _cancelling = true;
-      _remaining = null;
-      _etaStalled = false;
+      _flow.beginCancellation();
+      _flow.clearRemainingTiming();
     });
     try {
       await widget.engine.cancel(taskId);
@@ -1765,7 +1668,9 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (error, stackTrace) {
       if (mounted && generation == _generation) {
         _flow.update(() {
-          _cancelling = _taskPhase == TaskPhase.cancelling;
+          if (_taskPhase != TaskPhase.cancelling) {
+            _flow.completeCancellation();
+          }
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1786,50 +1691,22 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_interactionLocked) {
       return;
     }
-    ++_generation;
-    _activeGeneration = null;
-    _awaitingTaskId = false;
-    _terminalEventHandled = false;
-    _bufferedProgress.clear();
     _stopTiming();
+    _flow.stopProcessStopwatch();
     _etaEstimator = null;
     _flow.update(() {
-      _picking = false;
-      _readingMetadata = false;
-      _validatingDestination = false;
-      _preparing = false;
-      _processing = false;
-      _finishing = false;
-      _cancelling = false;
-      _percent = 0;
-      _elapsed = Duration.zero;
-      _remaining = null;
-      _taskPhase = TaskPhase.preparing;
-      _etaStalled = false;
-      _selectedUri = null;
-      _taskId = null;
-      _errorText = null;
+      _flow.advanceGeneration();
+      _flow.clearActiveGeneration();
+      _flow.completeAwaitingTaskId();
+      _flow.resetTerminalEvent();
+      _flow.clearBufferedProgress();
+      _flow.resetWorkflow();
       _lastFailureCode = null;
       _lastVideoDecoderMode = RequestedVideoDecoderMode.hardware;
       _lastProcessRequest = null;
       _lastAudioExtractRequest = null;
-      _activeTaskKind = TaskKind.videoCompression;
-      _audioExtractMode = AudioExtractMode.copy;
-      _audioExtractBitrate = 128000;
-      _sourceInfo = null;
-      _outputInfo = null;
-      _outputAudioInfo = null;
-      _outputPublished = false;
-      _publishedOutputUri = null;
-      _publishedOutputFileName = null;
       _actualVideoEncodingMode = ActualVideoEncodingMode.unknown;
       _taskOutputLocationLabel = _outputLocation.label;
-      _selectedFromGallery = false;
-      _sourceDeleted = false;
-      _mediaActionBusy = false;
-      _capabilities = null;
-      _capabilitiesLoading = false;
-      _selectedPreset = CompressionPreset.balanced;
     });
     _logFlow('重置 M2 流程，等待选择新视频');
   }
@@ -1880,7 +1757,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await _runMediaAction(() async {
       final deleted = await widget.mediaActions.deleteSource(uri);
       if (!deleted || !mounted) return;
-      _flow.update(() => _sourceDeleted = true);
+      _flow.markSourceDeleted();
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('原视频已删除，$preservedResultName已保留')));
@@ -1888,7 +1765,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _runMediaAction(Future<void> Function() action) async {
-    _flow.update(() => _mediaActionBusy = true);
+    _flow.beginMediaAction();
     try {
       await action();
     } catch (error, stackTrace) {
@@ -1901,7 +1778,7 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       }
     } finally {
-      if (mounted) _flow.update(() => _mediaActionBusy = false);
+      if (mounted) _flow.completeMediaAction();
     }
   }
 
@@ -2120,18 +1997,23 @@ class _HomeScreenState extends State<HomeScreen> {
                           _interactionLocked ||
                           _outputLocationLoading ||
                           _selectingOutputLocation,
-                      onPresetChanged: (value) =>
-                          _changeSettings(() => _selectedPreset = value),
-                      onResolutionChanged: (value) =>
-                          _changeSettings(() => _customResolution = value),
+                      onPresetChanged: (value) => _changeSettings(
+                        () => _flow.selectCompressionPreset(value),
+                      ),
+                      onResolutionChanged: (value) => _changeSettings(
+                        () => _flow.selectCustomResolution(value),
+                      ),
                       onCodecChanged: (value) =>
-                          _changeSettings(() => _customCodec = value),
-                      onVideoBitrateChanged: (value) =>
-                          _changeSettings(() => _customVideoBitrate = value),
-                      onAudioModeChanged: (value) =>
-                          _changeSettings(() => _customAudioMode = value),
-                      onAudioBitrateChanged: (value) =>
-                          _changeSettings(() => _customAudioBitrate = value),
+                          _changeSettings(() => _flow.selectCustomCodec(value)),
+                      onVideoBitrateChanged: (value) => _changeSettings(
+                        () => _flow.setCustomVideoBitrate(value),
+                      ),
+                      onAudioModeChanged: (value) => _changeSettings(
+                        () => _flow.selectCustomAudioMode(value),
+                      ),
+                      onAudioBitrateChanged: (value) => _changeSettings(
+                        () => _flow.setCustomAudioBitrate(value),
+                      ),
                       onChooseOutputLocation: _interactionLocked
                           ? null
                           : _chooseOutputFolder,
@@ -2159,10 +2041,12 @@ class _HomeScreenState extends State<HomeScreen> {
                           _interactionLocked ||
                           _outputLocationLoading ||
                           _selectingOutputLocation,
-                      onModeChanged: (value) =>
-                          _changeSettings(() => _audioExtractMode = value),
-                      onBitrateChanged: (value) =>
-                          _changeSettings(() => _audioExtractBitrate = value),
+                      onModeChanged: (value) => _changeSettings(
+                        () => _flow.setAudioExtractMode(value),
+                      ),
+                      onBitrateChanged: (value) => _changeSettings(
+                        () => _flow.setAudioExtractBitrate(value),
+                      ),
                       onChooseOutputLocation: _interactionLocked
                           ? null
                           : _chooseOutputFolder,
