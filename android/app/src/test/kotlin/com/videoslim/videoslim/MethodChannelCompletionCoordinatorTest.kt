@@ -9,11 +9,11 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class LogChannelCompletionCoordinatorTest {
+class MethodChannelCompletionCoordinatorTest {
     @Test
     fun `success and failure race completes exactly once`() {
-        val scheduled = ManualActionDispatcher()
-        val coordinator = LogChannelCompletionCoordinator(scheduled::dispatch)
+        val scheduled = ManualMethodActionDispatcher()
+        val coordinator = MethodChannelCompletionCoordinator(scheduled::dispatch)
         val outcomes = mutableListOf<String>()
         val completion = coordinator.register { outcomes += "disposed" }
         assertNotNull(completion)
@@ -41,9 +41,9 @@ class LogChannelCompletionCoordinatorTest {
     }
 
     @Test
-    fun `disposal wins a completion that is claimed but not delivered`() {
-        val scheduled = ManualActionDispatcher()
-        val coordinator = LogChannelCompletionCoordinator(scheduled::dispatch)
+    fun `disposal wins a completion claimed before main delivery`() {
+        val scheduled = ManualMethodActionDispatcher()
+        val coordinator = MethodChannelCompletionCoordinator(scheduled::dispatch)
         val outcomes = mutableListOf<String>()
         val completion = coordinator.register { outcomes += "disposed" }!!
 
@@ -57,8 +57,8 @@ class LogChannelCompletionCoordinatorTest {
 
     @Test
     fun `delivered completion remains final when disposal follows`() {
-        val scheduled = ManualActionDispatcher()
-        val coordinator = LogChannelCompletionCoordinator(scheduled::dispatch)
+        val scheduled = ManualMethodActionDispatcher()
+        val coordinator = MethodChannelCompletionCoordinator(scheduled::dispatch)
         val outcomes = mutableListOf<String>()
         val completion = coordinator.register { outcomes += "disposed" }!!
 
@@ -71,9 +71,9 @@ class LogChannelCompletionCoordinatorTest {
     }
 
     @Test
-    fun `synchronous submission rejection fails once and ignores a late callback`() {
-        val scheduled = ManualActionDispatcher()
-        val coordinator = LogChannelCompletionCoordinator(scheduled::dispatch)
+    fun `synchronous executor rejection fails once and ignores late callback`() {
+        val scheduled = ManualMethodActionDispatcher()
+        val coordinator = MethodChannelCompletionCoordinator(scheduled::dispatch)
         val outcomes = mutableListOf<String>()
         val completion = coordinator.register { outcomes += "disposed" }!!
 
@@ -88,21 +88,36 @@ class LogChannelCompletionCoordinatorTest {
     }
 
     @Test
-    fun `registration after disposal reports disposal once without admission`() {
-        val scheduled = ManualActionDispatcher()
-        val coordinator = LogChannelCompletionCoordinator(scheduled::dispatch)
+    fun `registration after disposal reports disposal once on dispatch target`() {
+        val scheduled = ManualMethodActionDispatcher()
+        val coordinator = MethodChannelCompletionCoordinator(scheduled::dispatch)
         val outcomes = mutableListOf<String>()
 
         coordinator.dispose()
-        val completion = coordinator.register { outcomes += "disposed" }
-        scheduled.runAll()
+        val completion = coordinator.register { outcomes += "disposed:${Thread.currentThread().name}" }
+        assertTrue(outcomes.isEmpty())
+        scheduled.runAllOn("fake-main")
 
         assertEquals(null, completion)
-        assertEquals(listOf("disposed"), outcomes)
+        assertEquals(listOf("disposed:fake-main"), outcomes)
+    }
+
+    @Test
+    fun `successful delivery runs exactly once on dispatch target`() {
+        val scheduled = ManualMethodActionDispatcher()
+        val coordinator = MethodChannelCompletionCoordinator(scheduled::dispatch)
+        val outcomes = mutableListOf<String>()
+        val completion = coordinator.register { outcomes += "disposed" }!!
+
+        assertTrue(completion.complete { outcomes += Thread.currentThread().name })
+        assertFalse(completion.complete { outcomes += "duplicate" })
+        scheduled.runAllOn("channel-main")
+
+        assertEquals(listOf("channel-main"), outcomes)
     }
 }
 
-private class ManualActionDispatcher {
+private class ManualMethodActionDispatcher {
     private val actions = ArrayDeque<() -> Unit>()
 
     fun dispatch(action: () -> Unit) {
@@ -114,5 +129,14 @@ private class ManualActionDispatcher {
             val action = synchronized(actions) { actions.removeFirstOrNull() } ?: return
             action()
         }
+    }
+
+    fun runAllOn(name: String) {
+        val done = CountDownLatch(1)
+        Thread({
+            runAll()
+            done.countDown()
+        }, name).start()
+        assertTrue(done.await(10, TimeUnit.SECONDS))
     }
 }

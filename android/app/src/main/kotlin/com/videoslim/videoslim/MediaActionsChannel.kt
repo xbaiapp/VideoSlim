@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.IntentSender
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import androidx.annotation.RequiresApi
 import io.flutter.plugin.common.MethodCall
@@ -56,72 +58,102 @@ internal class MediaActionsChannel(
     private val activity: Activity,
     private val channel: MethodChannel,
     private val deleteConsentLauncher: DeleteConsentLauncher,
+    private val ioDispatcher: AppMediaIoDispatcher,
     private val log: (level: String, event: String, details: Map<String, Any?>) -> Unit,
 ) : MethodChannel.MethodCallHandler {
     private val resolver = activity.contentResolver
-    private var pendingDeleteResult: MethodChannel.Result? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val completionCoordinator = MethodChannelCompletionCoordinator(::postToMain)
+    private var pendingDelete: DeleteToken? = null
+    private var disposed = false
 
     init {
         channel.setMethodCallHandler(this)
     }
 
-    override fun onMethodCall(
-        call: MethodCall,
-        result: MethodChannel.Result,
-    ) {
+    override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        val reply =
+            registerReply(
+                result,
+                if (call.method == METHOD_DELETE) {
+                    "媒体操作通道已关闭，删除结果可能未知"
+                } else {
+                    "媒体操作通道已关闭"
+                },
+            ) ?: return
         if (call.method !in SUPPORTED_METHODS) {
-            result.notImplemented()
+            reply.notImplemented()
             return
         }
         val uri =
             try {
                 Uri.parse(MediaActionPolicy.validatedContentUri(call.argument<String>("uri")))
             } catch (error: IllegalArgumentException) {
-                result.error("MEDIA_ACTION_FAILED", error.message ?: "媒体 URI 无效", null)
+                reply.error("MEDIA_ACTION_FAILED", error.message ?: "媒体 URI 无效", null)
                 return
             }
         when (call.method) {
-            "openMedia" -> executeImmediate(call.method, uri, result) { openMedia(uri) }
-            "shareMedia" -> executeImmediate(call.method, uri, result) { shareMedia(uri) }
-            "deleteSource" -> deleteSource(uri, result)
-            else -> result.notImplemented()
+            METHOD_OPEN -> prepareActivityAction(call.method, uri, reply, ::prepareOpenIntent)
+            METHOD_SHARE -> prepareActivityAction(call.method, uri, reply, ::prepareShareIntent)
+            METHOD_DELETE -> deleteSource(uri, reply)
         }
     }
 
     fun dispose() {
+        if (disposed) return
+        disposed = true
         channel.setMethodCallHandler(null)
-        pendingDeleteResult?.success(mapOf("deleted" to false))
-        pendingDeleteResult = null
+        pendingDelete = null
+        completionCoordinator.dispose()
     }
 
-    private fun executeImmediate(
+    private fun prepareActivityAction(
         method: String,
         uri: Uri,
-        result: MethodChannel.Result,
-        action: () -> Unit,
+        reply: PendingMediaReply,
+        prepare: (Uri) -> Intent,
     ) {
-        try {
-            action()
-            log("info", "media_action_completed", mapOf("method" to method, "uri" to uri.toString()))
-            result.success(emptyMap<String, Any?>())
-        } catch (error: Throwable) {
-            fail(result, method, uri, error)
+        val operation =
+            if (method == METHOD_OPEN) {
+                MediaIoOperation.MEDIA_OPEN_PREPARATION
+            } else {
+                MediaIoOperation.MEDIA_SHARE_PREPARATION
+            }
+        ioDispatcher.submit(operation, { prepare(uri) }) { outcome ->
+            outcome.fold(
+                onSuccess = { intent ->
+                    reply.complete {
+                        try {
+                            // Activity launch and MethodChannel delivery remain on the main looper.
+                            activity.startActivity(intent)
+                            log(
+                                "info",
+                                "media_action_completed",
+                                mapOf("method" to method, "uri" to uri.toString()),
+                            )
+                            reply.result.success(emptyMap<String, Any?>())
+                        } catch (error: Throwable) {
+                            deliverFailure(reply.result, method, uri, error)
+                        }
+                    }
+                },
+                onFailure = { error -> reply.failure(method, uri, error) },
+            )
         }
     }
 
-    private fun openMedia(uri: Uri) {
+    /** MIME lookup, ClipData/provider preparation, and intent resolution all run on media I/O. */
+    private fun prepareOpenIntent(uri: Uri): Intent {
         val mediaKind = mediaKind(uri)
-        val intent =
-            Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, mediaKind.mimeType)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                clipData = ClipData.newUri(resolver, "VideoSlim 输出", uri)
-            }
-        require(intent.resolveActivity(activity.packageManager) != null) { "没有可用的媒体播放器" }
-        activity.startActivity(intent)
+        return Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mediaKind.mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            clipData = ClipData.newUri(resolver, "VideoSlim 输出", uri)
+            require(resolveActivity(activity.packageManager) != null) { "没有可用的媒体播放器" }
+        }
     }
 
-    private fun shareMedia(uri: Uri) {
+    private fun prepareShareIntent(uri: Uri): Intent {
         val mediaKind = mediaKind(uri)
         val sendIntent =
             Intent(Intent.ACTION_SEND).apply {
@@ -130,94 +162,130 @@ internal class MediaActionsChannel(
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 clipData = ClipData.newUri(resolver, "VideoSlim 输出", uri)
             }
-        val chooser = Intent.createChooser(sendIntent, mediaKind.chooserTitle)
-        require(chooser.resolveActivity(activity.packageManager) != null) { "没有可用的分享应用" }
-        activity.startActivity(chooser)
+        return Intent.createChooser(sendIntent, mediaKind.chooserTitle).also { chooser ->
+            require(chooser.resolveActivity(activity.packageManager) != null) { "没有可用的分享应用" }
+        }
     }
 
     private fun mediaKind(uri: Uri): MediaActionMediaKind =
         MediaActionMediaKind.fromResolvedMimeType(resolver.getType(uri))
 
-    private fun deleteSource(
-        originalUri: Uri,
-        result: MethodChannel.Result,
-    ) {
-        if (pendingDeleteResult != null) {
-            result.error("MEDIA_ACTION_BUSY", "已有删除确认正在进行", null)
+    private fun deleteSource(originalUri: Uri, reply: PendingMediaReply) {
+        if (pendingDelete != null) {
+            reply.error("MEDIA_ACTION_BUSY", "已有删除确认正在进行", null)
             return
         }
-        val uri = normalizeMediaUri(originalUri)
-        try {
-            when {
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
-                    pendingDeleteResult = result
-                    val request = MediaStore.createDeleteRequest(resolver, listOf(uri))
-                    deleteConsentLauncher.launch(request.intentSender) { approved ->
-                        completeDelete(result, uri, approved, retryDelete = false)
-                    }
-                }
+        val token = DeleteToken(originalUri, reply)
+        pendingDelete = token
+        submitDeletePreflight(token)
+    }
 
-                Build.VERSION.SDK_INT == Build.VERSION_CODES.Q -> deleteOnAndroidTen(uri, result)
-                else -> {
-                    val deleted = resolver.delete(uri, null, null) > 0
-                    logDelete(uri, deleted)
-                    result.success(mapOf("deleted" to deleted))
-                }
+    private fun submitDeletePreflight(token: DeleteToken) {
+        ioDispatcher.submit(MediaIoOperation.MEDIA_DELETE_PREFLIGHT, {
+            val uri = normalizeMediaUri(token.originalUri)
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ->
+                    DeletePreflight.Consent(
+                        uri = uri,
+                        intentSender = MediaStore.createDeleteRequest(resolver, listOf(uri)).intentSender,
+                        retryDelete = false,
+                    )
+                Build.VERSION.SDK_INT == Build.VERSION_CODES.Q -> deleteOnAndroidTen(uri)
+                else -> DeletePreflight.Completed(uri, resolver.delete(uri, null, null) > 0)
             }
-        } catch (error: Throwable) {
-            if (pendingDeleteResult === result) pendingDeleteResult = null
-            fail(result, "deleteSource", uri, error)
+        }) { outcome ->
+            outcome.fold(
+                onSuccess = { preflight -> handleDeletePreflight(token, preflight) },
+                onFailure = { error -> finishDeleteFailure(token, token.originalUri, error) },
+            )
         }
     }
 
     @RequiresApi(Build.VERSION_CODES.Q)
-    private fun deleteOnAndroidTen(
-        uri: Uri,
-        result: MethodChannel.Result,
-    ) {
+    private fun deleteOnAndroidTen(uri: Uri): DeletePreflight =
         try {
-            val deleted = resolver.delete(uri, null, null) > 0
-            logDelete(uri, deleted)
-            result.success(mapOf("deleted" to deleted))
+            DeletePreflight.Completed(uri, resolver.delete(uri, null, null) > 0)
         } catch (error: RecoverableSecurityException) {
-            pendingDeleteResult = result
-            deleteConsentLauncher.launch(error.userAction.actionIntent.intentSender) { approved ->
-                completeDelete(result, uri, approved, retryDelete = true)
-            }
+            DeletePreflight.Consent(
+                uri = uri,
+                intentSender = error.userAction.actionIntent.intentSender,
+                retryDelete = true,
+            )
+        }
+
+    private fun handleDeletePreflight(token: DeleteToken, preflight: DeletePreflight) {
+        when (preflight) {
+            is DeletePreflight.Completed ->
+                finishDeleteSuccess(token, preflight.uri, preflight.deleted)
+            is DeletePreflight.Consent ->
+                postToMain { launchDeleteConsent(token, preflight) }
         }
     }
 
-    private fun completeDelete(
-        result: MethodChannel.Result,
-        uri: Uri,
-        approved: Boolean,
-        retryDelete: Boolean,
-    ) {
-        if (pendingDeleteResult !== result) return
-        pendingDeleteResult = null
-        if (!approved) {
-            logDelete(uri, false)
-            result.success(mapOf("deleted" to false))
-            return
-        }
+    private fun launchDeleteConsent(token: DeleteToken, consent: DeletePreflight.Consent) {
+        if (!isActive(token, DeleteStage.PREFLIGHT)) return
+        token.stage = DeleteStage.CONSENT
+        token.normalizedUri = consent.uri
+        token.retryDelete = consent.retryDelete
         try {
-            val deleted = !retryDelete || resolver.delete(uri, null, null) > 0
-            logDelete(uri, deleted)
-            result.success(mapOf("deleted" to deleted))
+            deleteConsentLauncher.launch(consent.intentSender) { approved ->
+                handleDeleteConsent(token, approved)
+            }
         } catch (error: Throwable) {
-            fail(result, "deleteSource", uri, error)
+            finishDeleteFailure(token, consent.uri, error)
         }
     }
+
+    private fun handleDeleteConsent(token: DeleteToken, approved: Boolean) {
+        if (!isActive(token, DeleteStage.CONSENT)) return
+        val uri = token.normalizedUri ?: token.originalUri
+        if (!approved) {
+            finishDeleteSuccess(token, uri, false)
+            return
+        }
+        if (!token.retryDelete) {
+            // Android 11+ performs deletion as part of the approved system request.
+            finishDeleteSuccess(token, uri, true)
+            return
+        }
+        token.stage = DeleteStage.RETRY
+        ioDispatcher.submit(
+            MediaIoOperation.MEDIA_DELETE_RETRY,
+            { resolver.delete(uri, null, null) > 0 },
+        ) { outcome ->
+            outcome.fold(
+                onSuccess = { deleted -> finishDeleteSuccess(token, uri, deleted) },
+                onFailure = { error -> finishDeleteFailure(token, uri, error) },
+            )
+        }
+    }
+
+    private fun finishDeleteSuccess(token: DeleteToken, uri: Uri, deleted: Boolean) {
+        token.reply.complete {
+            if (pendingDelete !== token) return@complete
+            pendingDelete = null
+            logDelete(uri, deleted)
+            token.reply.result.success(mapOf("deleted" to deleted))
+        }
+    }
+
+    private fun finishDeleteFailure(token: DeleteToken, uri: Uri, error: Throwable) {
+        token.reply.complete {
+            if (pendingDelete !== token) return@complete
+            pendingDelete = null
+            deliverFailure(token.reply.result, METHOD_DELETE, uri, error)
+        }
+    }
+
+    private fun isActive(token: DeleteToken, expectedStage: DeleteStage): Boolean =
+        !disposed && pendingDelete === token && token.stage == expectedStage
 
     private fun normalizeMediaUri(uri: Uri): Uri {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return uri
         return runCatching { MediaStore.getMediaUri(activity, uri) }.getOrNull() ?: uri
     }
 
-    private fun logDelete(
-        uri: Uri,
-        deleted: Boolean,
-    ) {
+    private fun logDelete(uri: Uri, deleted: Boolean) {
         log(
             "info",
             "source_delete_completed",
@@ -225,7 +293,18 @@ internal class MediaActionsChannel(
         )
     }
 
-    private fun fail(
+    private fun registerReply(
+        result: MethodChannel.Result,
+        disposalMessage: String,
+    ): PendingMediaReply? {
+        val completion =
+            completionCoordinator.register {
+                result.error("MEDIA_ACTION_FAILED", disposalMessage, null)
+            } ?: return null
+        return PendingMediaReply(result, completion)
+    }
+
+    private fun deliverFailure(
         result: MethodChannel.Result,
         method: String,
         uri: Uri,
@@ -233,6 +312,7 @@ internal class MediaActionsChannel(
     ) {
         val message =
             when (error) {
+                is AppMediaIoRejectedException -> "媒体操作繁忙，请稍后重试"
                 is SecurityException -> "系统未授予此媒体文件的操作权限"
                 is IllegalArgumentException -> error.message ?: "系统不支持此媒体操作"
                 else -> error.message?.takeIf { it.isNotBlank() } ?: "系统媒体操作失败"
@@ -250,7 +330,61 @@ internal class MediaActionsChannel(
         result.error("MEDIA_ACTION_FAILED", message, mapOf("method" to method))
     }
 
+    private fun postToMain(action: () -> Unit) {
+        if (Looper.myLooper() == mainHandler.looper) {
+            action()
+        } else {
+            mainHandler.post(action)
+        }
+    }
+
+    private inner class PendingMediaReply(
+        val result: MethodChannel.Result,
+        private val completion: MethodChannelCompletionCoordinator.Completion,
+    ) {
+        fun complete(action: () -> Unit): Boolean = completion.complete(action)
+
+        fun error(code: String, message: String, details: Any?) {
+            completion.complete { result.error(code, message, details) }
+        }
+
+        fun failure(method: String, uri: Uri, error: Throwable) {
+            completion.complete { deliverFailure(result, method, uri, error) }
+        }
+
+        fun notImplemented() {
+            completion.complete(result::notImplemented)
+        }
+    }
+
+    private data class DeleteToken(
+        val originalUri: Uri,
+        val reply: PendingMediaReply,
+        var stage: DeleteStage = DeleteStage.PREFLIGHT,
+        var normalizedUri: Uri? = null,
+        var retryDelete: Boolean = false,
+    )
+
+    private sealed interface DeletePreflight {
+        data class Completed(val uri: Uri, val deleted: Boolean) : DeletePreflight
+
+        data class Consent(
+            val uri: Uri,
+            val intentSender: IntentSender,
+            val retryDelete: Boolean,
+        ) : DeletePreflight
+    }
+
+    private enum class DeleteStage {
+        PREFLIGHT,
+        CONSENT,
+        RETRY,
+    }
+
     private companion object {
-        val SUPPORTED_METHODS = setOf("openMedia", "shareMedia", "deleteSource")
+        const val METHOD_OPEN = "openMedia"
+        const val METHOD_SHARE = "shareMedia"
+        const val METHOD_DELETE = "deleteSource"
+        val SUPPORTED_METHODS = setOf(METHOD_OPEN, METHOD_SHARE, METHOD_DELETE)
     }
 }

@@ -10,87 +10,6 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
-/**
- * Pure exactly-once coordinator for channel replies that may race with disposal.
- * Claimed replies are still replaced by the disposal outcome until their
- * main-thread action is actually delivered.
- */
-internal class LogChannelCompletionCoordinator(
-    private val dispatch: (() -> Unit) -> Unit,
-) {
-    private val lock = Any()
-    private val pending = mutableSetOf<Completion>()
-    private var disposed = false
-
-    fun register(onDisposed: () -> Unit): Completion? {
-        val completion = synchronized(lock) {
-            if (disposed) {
-                null
-            } else {
-                Completion(onDisposed).also(pending::add)
-            }
-        }
-        if (completion == null) dispatch(onDisposed)
-        return completion
-    }
-
-    fun dispose() {
-        val toClose = synchronized(lock) {
-            if (disposed) return
-            disposed = true
-            pending.toList()
-        }
-        toClose.forEach(Completion::scheduleDelivery)
-    }
-
-    inner class Completion internal constructor(
-        private val onDisposed: () -> Unit,
-    ) {
-        private var claimed = false
-        private var delivered = false
-        private var delivery: (() -> Unit)? = null
-
-        fun complete(action: () -> Unit): Boolean {
-            val accepted = synchronized(lock) {
-                if (disposed || claimed || delivered) {
-                    false
-                } else {
-                    claimed = true
-                    delivery = action
-                    true
-                }
-            }
-            if (accepted) scheduleDelivery()
-            return accepted
-        }
-
-        fun submit(
-            submission: () -> Unit,
-            onSynchronousFailure: (Throwable) -> Unit,
-        ) {
-            try {
-                submission()
-            } catch (error: Throwable) {
-                complete { onSynchronousFailure(error) }
-            }
-        }
-
-        internal fun scheduleDelivery() {
-            dispatch(::deliver)
-        }
-
-        private fun deliver() {
-            val action = synchronized(lock) {
-                if (delivered || (!claimed && !disposed)) return
-                delivered = true
-                pending.remove(this)
-                if (disposed) onDisposed else delivery
-            }
-            action?.invoke()
-        }
-    }
-}
-
 /** Native endpoint for the videoslim/logs Flutter method channel. */
 internal class LogChannel(
     private val activity: Activity,
@@ -104,7 +23,7 @@ internal class LogChannel(
 
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val completionCoordinator = LogChannelCompletionCoordinator(::postToMain)
+    private val completionCoordinator = MethodChannelCompletionCoordinator(::postToMain)
 
     init {
         channel.setMethodCallHandler(this)
@@ -115,7 +34,7 @@ internal class LogChannel(
             "append" -> append(call, result)
             "readAll" -> readAll(result)
             "shareAll" -> shareAll(result)
-            else -> postToMain { result.notImplemented() }
+            else -> registerReply(result, "log_method_failed")?.notImplemented()
         }
     }
 
@@ -229,7 +148,7 @@ internal class LogChannel(
 
     private inner class PendingReply(
         private val result: MethodChannel.Result,
-        private val completion: LogChannelCompletionCoordinator.Completion,
+        private val completion: MethodChannelCompletionCoordinator.Completion,
     ) {
         fun submit(
             synchronousErrorCode: String,
@@ -243,6 +162,10 @@ internal class LogChannel(
 
         fun success(value: Any?) {
             completion.complete { result.success(value) }
+        }
+
+        fun notImplemented() {
+            completion.complete(result::notImplemented)
         }
 
         fun error(

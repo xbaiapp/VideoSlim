@@ -7,8 +7,6 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 
 internal typealias LegacyWritePermissionRequester = ((Boolean) -> Unit) -> Unit
 internal typealias NotificationPermissionRequester = ((Boolean) -> Unit) -> Unit
@@ -33,17 +31,17 @@ internal class EngineChannel(
     private val transcodeEngine: TranscodeEngine,
     private val requestLegacyWritePermission: LegacyWritePermissionRequester,
     private val requestNotificationPermission: NotificationPermissionRequester,
+    private val ioDispatcher: AppMediaIoDispatcher,
     private val logger: (String) -> Unit = {},
     private val progressLogger: (String, String) -> Unit = { _, _ -> },
-    private val metadataExecutor: ExecutorService = Executors.newSingleThreadExecutor(),
 ) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
     private val methodChannel = MethodChannel(messenger, METHOD_CHANNEL)
     private val eventChannel = EventChannel(messenger, EVENT_CHANNEL)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val completionCoordinator = MethodChannelCompletionCoordinator(::postToMain)
     private val audioMetadataReader = AudioMetadataReader(context)
     private var eventSink: EventChannel.EventSink? = null
-    private var waitingForLegacyPermission = false
-    private var waitingForNotificationPermission = false
+    private var activeLaunch: LaunchToken? = null
     private var disposed = false
     private val registryObserver: (TaskRuntimeSnapshot) -> Unit = { snapshot ->
         runCatching { eventSink?.success(snapshot.toProgressMap()) }
@@ -58,20 +56,17 @@ internal class EngineChannel(
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-        if (disposed) {
-            result.error(EngineErrorCode.UNKNOWN.wireName, "原生引擎已关闭", null)
-            return
-        }
+        val reply = registerReply(result) ?: return
         log("method=${call.method} arguments=${call.arguments}")
         when (call.method) {
-            "getVideoInfo" -> getVideoInfo(call.arguments, result)
-            "getAudioInfo" -> getAudioInfo(call.arguments, result)
-            "getCapabilities" -> getCapabilities(call.arguments, result)
-            "getTaskSnapshot" -> getTaskSnapshot(call.arguments, result)
-            "process" -> process(call.arguments, result)
-            "extractAudio" -> extractAudio(call.arguments, result)
-            "cancel" -> cancel(call.arguments, result)
-            else -> result.notImplemented()
+            "getVideoInfo" -> getVideoInfo(call.arguments, reply)
+            "getAudioInfo" -> getAudioInfo(call.arguments, reply)
+            "getCapabilities" -> getCapabilities(call.arguments, reply)
+            "getTaskSnapshot" -> getTaskSnapshot(call.arguments, reply)
+            "process" -> process(call.arguments, reply)
+            "extractAudio" -> extractAudio(call.arguments, reply)
+            "cancel" -> cancel(call.arguments, reply)
+            else -> reply.notImplemented()
         }
     }
 
@@ -89,17 +84,16 @@ internal class EngineChannel(
     fun dispose() {
         if (disposed) return
         disposed = true
-        waitingForLegacyPermission = false
-        waitingForNotificationPermission = false
+        activeLaunch = null
         ProcessingRuntime.registry.removeObserver(registryObserver)
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
         eventSink = null
-        metadataExecutor.shutdownNow()
+        completionCoordinator.dispose()
         transcodeEngine.dispose()
     }
 
-    private fun getVideoInfo(arguments: Any?, result: MethodChannel.Result) {
+    private fun getVideoInfo(arguments: Any?, reply: PendingEngineReply) {
         val uri =
             try {
                 val value =
@@ -110,26 +104,24 @@ internal class EngineChannel(
                 }
                 value
             } catch (error: Throwable) {
-                replyError(result, EngineFailure(EngineErrorCode.UNKNOWN, "视频信息参数无效"), error)
+                reply.error(EngineFailure(EngineErrorCode.UNKNOWN, "视频信息参数无效"), error)
                 return
             }
-        metadataExecutor.execute {
-            try {
-                val response = metadataReader.read(uri).toChannelMap()
-                mainHandler.post {
-                    if (!disposed) {
+        submitIo(reply, MediaIoOperation.VIDEO_METADATA, {
+            metadataReader.read(uri).toChannelMap()
+        }) { outcome ->
+            outcome.fold(
+                onSuccess = { response ->
+                    reply.success(response) {
                         log("method=getVideoInfo response=$response")
-                        result.success(response)
                     }
-                }
-            } catch (error: Throwable) {
-                val failure = metadataFailure(error)
-                mainHandler.post { if (!disposed) replyError(result, failure, error) }
-            }
+                },
+                onFailure = { error -> reply.error(metadataFailure(error), error) },
+            )
         }
     }
 
-    private fun getAudioInfo(arguments: Any?, result: MethodChannel.Result) {
+    private fun getAudioInfo(arguments: Any?, reply: PendingEngineReply) {
         val uri =
             try {
                 val value =
@@ -140,215 +132,266 @@ internal class EngineChannel(
                 }
                 value
             } catch (error: Throwable) {
-                replyError(result, EngineFailure(EngineErrorCode.UNKNOWN, "音频信息参数无效"), error)
+                reply.error(EngineFailure(EngineErrorCode.UNKNOWN, "音频信息参数无效"), error)
                 return
             }
-        metadataExecutor.execute {
-            try {
-                val response = audioMetadataReader.read(uri).toChannelMap()
-                mainHandler.post {
-                    if (!disposed) {
+        submitIo(reply, MediaIoOperation.AUDIO_METADATA, {
+            audioMetadataReader.read(uri).toChannelMap()
+        }) { outcome ->
+            outcome.fold(
+                onSuccess = { response ->
+                    reply.success(response) {
                         log("method=getAudioInfo response=$response")
-                        result.success(response)
                     }
-                }
-            } catch (error: Throwable) {
-                val failure = audioMetadataFailure(error)
-                mainHandler.post { if (!disposed) replyError(result, failure, error) }
-            }
+                },
+                onFailure = { error -> reply.error(audioMetadataFailure(error), error) },
+            )
         }
     }
 
-    private fun getCapabilities(arguments: Any?, result: MethodChannel.Result) {
+    private fun getCapabilities(arguments: Any?, reply: PendingEngineReply) {
         try {
             requireExactMap(arguments, emptySet())
             val response = transcodeEngine.getCapabilities()
-            log("method=getCapabilities response=$response")
-            result.success(response)
+            reply.success(response) { log("method=getCapabilities response=$response") }
         } catch (error: Throwable) {
-            replyError(result, EngineFailure(EngineErrorCode.UNKNOWN), error)
+            reply.error(EngineFailure(EngineErrorCode.UNKNOWN), error)
         }
     }
 
-    private fun getTaskSnapshot(arguments: Any?, result: MethodChannel.Result) {
+    private fun getTaskSnapshot(arguments: Any?, reply: PendingEngineReply) {
         try {
             requireExactMap(arguments, emptySet())
-            result.success(ProcessingRuntime.registry.snapshot()?.toSnapshotMap())
+            reply.success(ProcessingRuntime.registry.snapshot()?.toSnapshotMap())
         } catch (error: Throwable) {
-            replyError(result, EngineFailure(EngineErrorCode.UNKNOWN), error)
+            reply.error(EngineFailure(EngineErrorCode.UNKNOWN), error)
         }
     }
 
-    private fun process(arguments: Any?, result: MethodChannel.Result) {
+    private fun process(arguments: Any?, reply: PendingEngineReply) {
         val request =
             try {
                 ProcessRequest.parse(arguments)
             } catch (error: ProcessRequestException) {
-                replyError(result, error.error, error)
+                reply.error(error.error, error)
                 return
             } catch (error: Throwable) {
-                replyError(result, EngineFailure(EngineErrorCode.UNKNOWN, "压缩参数无效"), error)
+                reply.error(EngineFailure(EngineErrorCode.UNKNOWN, "压缩参数无效"), error)
                 return
             }
-        try {
-            transcodeEngine.validateOutputDestination(request.outputTreeUri)
-        } catch (error: EngineOperationException) {
-            replyError(result, error.failure, error)
-            return
-        }
-        if (waitingForLegacyPermission || waitingForNotificationPermission) {
-            replyError(
-                result,
-                EngineFailure(EngineErrorCode.UNKNOWN, "正在等待系统权限，请勿重复提交"),
-                null,
-            )
-            return
-        }
-        val requestNotificationAndLaunch: () -> Unit = {
-            waitingForNotificationPermission = true
-            requestNotificationPermission notificationPermission@{ notificationGranted ->
-                if (disposed) return@notificationPermission
-                waitingForNotificationPermission = false
-                if (!notificationGranted) {
-                    replyError(
-                        result,
-                        EngineFailure(
-                            EngineErrorCode.UNKNOWN,
-                            "后台压缩需要通知权限，请在系统设置中允许通知",
-                        ),
-                        null,
-                    )
-                    return@notificationPermission
-                }
-                try {
-                    val taskId = ProcessingRuntime.launch(context, arguments, request)
-                    val response = mapOf("taskId" to taskId)
-                    log("method=process response=$response")
-                    result.success(response)
-                } catch (error: EngineOperationException) {
-                    replyError(result, error.failure, error)
-                } catch (error: Throwable) {
-                    replyError(result, EngineErrorMapper.fromThrowable(error), error)
-                }
-            }
-        }
-        if (request.outputTreeUri != null) {
-            requestNotificationAndLaunch()
-            return
-        }
-        waitingForLegacyPermission = true
-        requestLegacyWritePermission legacyPermission@{ granted ->
-            if (disposed) return@legacyPermission
-            waitingForLegacyPermission = false
-            if (!granted) {
-                replyError(
-                    result,
-                    EngineFailure(
-                        EngineErrorCode.UNKNOWN,
-                        "Android 8–9 保存到相册需要存储写入权限",
-                    ),
-                    null,
-                )
-                return@legacyPermission
-            }
-            requestNotificationAndLaunch()
-        }
+        startLaunch(
+            token =
+                LaunchToken(
+                    kind = LaunchKind.VIDEO,
+                    outputTreeUri = request.outputTreeUri,
+                    arguments = arguments,
+                    processRequest = request,
+                    audioRequest = null,
+                    reply = reply,
+                ),
+        )
     }
 
-    private fun extractAudio(arguments: Any?, result: MethodChannel.Result) {
+    private fun extractAudio(arguments: Any?, reply: PendingEngineReply) {
         val request =
             try {
                 AudioExtractRequest.parse(arguments)
             } catch (error: ProcessRequestException) {
-                replyError(result, error.error, error)
+                reply.error(error.error, error)
                 return
             } catch (error: Throwable) {
-                replyError(result, EngineFailure(EngineErrorCode.UNKNOWN, "音频提取参数无效"), error)
+                reply.error(EngineFailure(EngineErrorCode.UNKNOWN, "音频提取参数无效"), error)
                 return
             }
-        try {
-            transcodeEngine.validateOutputDestination(request.outputTreeUri)
-        } catch (error: EngineOperationException) {
-            replyError(result, error.failure, error)
-            return
-        }
-        if (waitingForLegacyPermission || waitingForNotificationPermission) {
-            replyError(
-                result,
+        startLaunch(
+            token =
+                LaunchToken(
+                    kind = LaunchKind.AUDIO,
+                    outputTreeUri = request.outputTreeUri,
+                    arguments = arguments,
+                    processRequest = null,
+                    audioRequest = request,
+                    reply = reply,
+                ),
+        )
+    }
+
+    /** The main-owned token covers validation, both permission handoffs, and service launch. */
+    private fun startLaunch(token: LaunchToken) {
+        if (activeLaunch != null) {
+            token.reply.error(
                 EngineFailure(EngineErrorCode.UNKNOWN, "正在等待系统权限，请勿重复提交"),
                 null,
             )
             return
         }
-        val requestNotificationAndLaunch: () -> Unit = {
-            waitingForNotificationPermission = true
-            requestNotificationPermission notificationPermission@{ notificationGranted ->
-                if (disposed) return@notificationPermission
-                waitingForNotificationPermission = false
-                if (!notificationGranted) {
-                    replyError(
-                        result,
-                        EngineFailure(
-                            EngineErrorCode.UNKNOWN,
-                            "后台提取音频需要通知权限，请在系统设置中允许通知",
-                        ),
-                        null,
-                    )
-                    return@notificationPermission
-                }
-                try {
-                    val taskId = ProcessingRuntime.launchAudio(context, arguments, request)
-                    val response = mapOf("taskId" to taskId)
-                    log("method=extractAudio response=$response")
-                    result.success(response)
-                } catch (error: EngineOperationException) {
-                    replyError(result, error.failure, error)
-                } catch (error: Throwable) {
-                    replyError(result, EngineErrorMapper.fromThrowable(error), error)
-                }
-            }
-        }
-        if (request.outputTreeUri != null) {
-            requestNotificationAndLaunch()
-            return
-        }
-        waitingForLegacyPermission = true
-        requestLegacyWritePermission legacyPermission@{ granted ->
-            if (disposed) return@legacyPermission
-            waitingForLegacyPermission = false
-            if (!granted) {
-                replyError(
-                    result,
-                    EngineFailure(
-                        EngineErrorCode.UNKNOWN,
-                        "Android 8–9 保存音频需要存储写入权限",
-                    ),
-                    null,
-                )
-                return@legacyPermission
-            }
-            requestNotificationAndLaunch()
+        activeLaunch = token
+        ioDispatcher.submit(
+            MediaIoOperation.OUTPUT_DESTINATION_VALIDATION,
+            { transcodeEngine.validateOutputDestination(token.outputTreeUri) },
+        ) { outcome ->
+            outcome.fold(
+                onSuccess = {
+                    // Validation is blocking I/O; every permission launcher and service launch is main-owned.
+                    postToMain { continueAfterValidation(token) }
+                },
+                onFailure = { error -> finishLaunchError(token, launchFailure(error), error) },
+            )
         }
     }
 
-    private fun cancel(arguments: Any?, result: MethodChannel.Result) {
+    private fun continueAfterValidation(token: LaunchToken) {
+        if (!isActive(token, LaunchStage.VALIDATING)) return
+        if (token.outputTreeUri != null) {
+            requestNotificationAndLaunch(token)
+            return
+        }
+        token.stage = LaunchStage.LEGACY_PERMISSION
+        try {
+            requestLegacyWritePermission { granted -> handleLegacyPermission(token, granted) }
+        } catch (error: Throwable) {
+            finishLaunchError(token, EngineErrorMapper.fromThrowable(error), error)
+        }
+    }
+
+    private fun handleLegacyPermission(token: LaunchToken, granted: Boolean) {
+        if (!isActive(token, LaunchStage.LEGACY_PERMISSION)) return
+        if (!granted) {
+            val message =
+                if (token.kind == LaunchKind.VIDEO) {
+                    "Android 8–9 保存到相册需要存储写入权限"
+                } else {
+                    "Android 8–9 保存音频需要存储写入权限"
+                }
+            finishLaunchError(token, EngineFailure(EngineErrorCode.UNKNOWN, message), null)
+            return
+        }
+        requestNotificationAndLaunch(token)
+    }
+
+    private fun requestNotificationAndLaunch(token: LaunchToken) {
+        if (activeLaunch !== token || disposed) return
+        token.stage = LaunchStage.NOTIFICATION_PERMISSION
+        try {
+            requestNotificationPermission { granted -> handleNotificationPermission(token, granted) }
+        } catch (error: Throwable) {
+            finishLaunchError(token, EngineErrorMapper.fromThrowable(error), error)
+        }
+    }
+
+    private fun handleNotificationPermission(token: LaunchToken, granted: Boolean) {
+        if (!isActive(token, LaunchStage.NOTIFICATION_PERMISSION)) return
+        if (!granted) {
+            val operation = if (token.kind == LaunchKind.VIDEO) "压缩" else "提取音频"
+            finishLaunchError(
+                token,
+                EngineFailure(
+                    EngineErrorCode.UNKNOWN,
+                    "后台${operation}需要通知权限，请在系统设置中允许通知",
+                ),
+                null,
+            )
+            return
+        }
+        token.stage = LaunchStage.LAUNCHING
+        try {
+            val taskId =
+                when (token.kind) {
+                    LaunchKind.VIDEO ->
+                        ProcessingRuntime.launch(
+                            context,
+                            token.arguments,
+                            checkNotNull(token.processRequest),
+                        )
+                    LaunchKind.AUDIO ->
+                        ProcessingRuntime.launchAudio(
+                            context,
+                            token.arguments,
+                            checkNotNull(token.audioRequest),
+                        )
+                }
+            val response = mapOf("taskId" to taskId)
+            finishLaunch(token) {
+                log("method=${token.kind.methodName} response=$response")
+                token.reply.result.success(response)
+            }
+        } catch (error: EngineOperationException) {
+            finishLaunchError(token, error.failure, error)
+        } catch (error: Throwable) {
+            finishLaunchError(token, EngineErrorMapper.fromThrowable(error), error)
+        }
+    }
+
+    private fun cancel(arguments: Any?, reply: PendingEngineReply) {
         val taskId =
             try {
                 requireExactMap(arguments, setOf("taskId"))["taskId"] as? String
                     ?: throw IllegalArgumentException("taskId 必须是字符串")
             } catch (error: Throwable) {
-                replyError(result, EngineFailure(EngineErrorCode.UNKNOWN, "取消参数无效"), error)
+                reply.error(EngineFailure(EngineErrorCode.UNKNOWN, "取消参数无效"), error)
                 return
             }
         try {
             ProcessingRuntime.cancel(context, taskId)
-            result.success(emptyMap<String, Any?>())
+            reply.success(emptyMap<String, Any?>())
         } catch (error: Throwable) {
-            replyError(result, EngineErrorMapper.fromThrowable(error), error)
+            reply.error(EngineErrorMapper.fromThrowable(error), error)
         }
     }
 
-    private fun replyError(
+    private fun <T> submitIo(
+        reply: PendingEngineReply,
+        operation: MediaIoOperation,
+        block: () -> T,
+        callback: (Result<T>) -> Unit,
+    ) {
+        try {
+            ioDispatcher.submit(operation, block, callback)
+        } catch (error: Throwable) {
+            reply.error(EngineErrorMapper.fromThrowable(error), error)
+        }
+    }
+
+    private fun launchFailure(error: Throwable): EngineFailure =
+        when (error) {
+            is EngineOperationException -> error.failure
+            is AppMediaIoRejectedException ->
+                EngineFailure(EngineErrorCode.UNKNOWN, "媒体操作繁忙，请稍后重试")
+            else -> EngineErrorMapper.fromThrowable(error)
+        }
+
+    private fun isActive(token: LaunchToken, expectedStage: LaunchStage): Boolean =
+        !disposed && activeLaunch === token && token.stage == expectedStage
+
+    private fun finishLaunchError(
+        token: LaunchToken,
+        failure: EngineFailure,
+        error: Throwable?,
+    ) {
+        finishLaunch(token) { token.reply.deliverError(failure, error) }
+    }
+
+    private fun finishLaunch(token: LaunchToken, action: () -> Unit) {
+        token.reply.complete {
+            if (activeLaunch !== token) return@complete
+            activeLaunch = null
+            action()
+        }
+    }
+
+    private fun registerReply(result: MethodChannel.Result): PendingEngineReply? {
+        val completion =
+            completionCoordinator.register {
+                result.error(
+                    EngineErrorCode.UNKNOWN.wireName,
+                    "原生引擎已关闭",
+                    null,
+                )
+            } ?: return null
+        return PendingEngineReply(result, completion)
+    }
+
+    private fun deliverError(
         result: MethodChannel.Result,
         failure: EngineFailure,
         error: Throwable?,
@@ -371,16 +414,12 @@ internal class EngineChannel(
         when (error) {
             is VideoMetadataException ->
                 if (error.code == VideoMetadataException.SOURCE_CORRUPTED) {
-                    EngineFailure(
-                        EngineErrorCode.SOURCE_CORRUPTED,
-                        error.message,
-                    )
+                    EngineFailure(EngineErrorCode.SOURCE_CORRUPTED, error.message)
                 } else {
-                    EngineFailure(
-                        EngineErrorCode.UNKNOWN,
-                        error.message,
-                    )
+                    EngineFailure(EngineErrorCode.UNKNOWN, error.message)
                 }
+            is AppMediaIoRejectedException ->
+                EngineFailure(EngineErrorCode.UNKNOWN, "媒体操作繁忙，请稍后重试")
             else -> EngineErrorMapper.fromThrowable(error)
         }
 
@@ -394,6 +433,8 @@ internal class EngineChannel(
                         EngineFailure(EngineErrorCode.AUDIO_TRACK_MISSING, error.message)
                     else -> EngineFailure(EngineErrorCode.UNKNOWN, error.message)
                 }
+            is AppMediaIoRejectedException ->
+                EngineFailure(EngineErrorCode.UNKNOWN, "媒体操作繁忙，请稍后重试")
             else -> EngineErrorMapper.fromThrowable(error)
         }
 
@@ -405,20 +446,72 @@ internal class EngineChannel(
         return map
     }
 
+    private fun postToMain(action: () -> Unit) {
+        if (Looper.myLooper() == mainHandler.looper) {
+            action()
+        } else {
+            mainHandler.post(action)
+        }
+    }
+
     private fun log(message: String) {
         runCatching { logger(message) }
     }
 
-    private fun logProgress(
-        taskId: String,
-        message: String,
-    ) {
+    private fun logProgress(taskId: String, message: String) {
         runCatching { progressLogger(taskId, message) }
+    }
+
+    private inner class PendingEngineReply(
+        val result: MethodChannel.Result,
+        private val completion: MethodChannelCompletionCoordinator.Completion,
+    ) {
+        fun complete(action: () -> Unit): Boolean = completion.complete(action)
+
+        fun success(value: Any?, beforeDelivery: () -> Unit = {}) {
+            completion.complete {
+                beforeDelivery()
+                result.success(value)
+            }
+        }
+
+        fun error(failure: EngineFailure, error: Throwable?) {
+            completion.complete { deliverError(failure, error) }
+        }
+
+        fun deliverError(failure: EngineFailure, error: Throwable?) {
+            this@EngineChannel.deliverError(result, failure, error)
+        }
+
+        fun notImplemented() {
+            completion.complete(result::notImplemented)
+        }
+    }
+
+    private data class LaunchToken(
+        val kind: LaunchKind,
+        val outputTreeUri: String?,
+        val arguments: Any?,
+        val processRequest: ProcessRequest?,
+        val audioRequest: AudioExtractRequest?,
+        val reply: PendingEngineReply,
+        var stage: LaunchStage = LaunchStage.VALIDATING,
+    )
+
+    private enum class LaunchKind(val methodName: String) {
+        VIDEO("process"),
+        AUDIO("extractAudio"),
+    }
+
+    private enum class LaunchStage {
+        VALIDATING,
+        LEGACY_PERMISSION,
+        NOTIFICATION_PERMISSION,
+        LAUNCHING,
     }
 
     private companion object {
         const val METHOD_CHANNEL = "videoslim/engine"
         const val EVENT_CHANNEL = "videoslim/progress"
-        const val STATE_RUNNING = "running"
     }
 }

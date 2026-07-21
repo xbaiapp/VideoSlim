@@ -7,10 +7,13 @@ import android.util.Log
 class VideoSlimApplication : Application() {
     internal lateinit var logDispatcher: AppLogDispatcher
         private set
+    internal lateinit var mediaIoDispatcher: AppMediaIoDispatcher
+        private set
 
     override fun onCreate() {
         super.onCreate()
         logDispatcher = AppLogDispatcher(AppLogStore(this))
+        mediaIoDispatcher = AppMediaIoDispatcher()
         val recoveryLogger: (String) -> Unit = { message -> logNative("F19 recovery $message") }
         try {
             val recoveryStore = TaskRecoveryStore(this, recoveryLogger)
@@ -49,6 +52,11 @@ class VideoSlimApplication : Application() {
     }
 
     override fun onTerminate() {
+        if (::mediaIoDispatcher.isInitialized) {
+            // Activity channels only borrow this process worker. Emulator/test teardown requests
+            // a graceful drain without blocking the main thread.
+            mediaIoDispatcher.shutdown()
+        }
         if (::logDispatcher.isInitialized) {
             logDispatcher.shutdown { outcome ->
                 outcome.exceptionOrNull()?.let { error ->

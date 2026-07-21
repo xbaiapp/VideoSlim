@@ -48,7 +48,13 @@ class MainActivity : FlutterFragmentActivity() {
         val messenger = flutterEngine.dartExecutor.binaryMessenger
         val app = application as VideoSlimApplication
         logChannel = LogChannel(this, messenger, app.logDispatcher)
-        pickerChannel = VideoPickerChannel(this, messenger, ::appendNativeLog)
+        pickerChannel =
+            VideoPickerChannel(
+                activity = this,
+                messenger = messenger,
+                ioDispatcher = app.mediaIoDispatcher,
+                logger = ::appendNativeLog,
+            )
         val metadataReader = VideoMetadataReader(this)
         val transcodeEngine =
             TranscodeEngine(
@@ -65,6 +71,7 @@ class MainActivity : FlutterFragmentActivity() {
                 transcodeEngine = transcodeEngine,
                 requestLegacyWritePermission = ::requestLegacyWritePermission,
                 requestNotificationPermission = ::requestNotificationPermission,
+                ioDispatcher = app.mediaIoDispatcher,
                 logger = ::appendNativeLog,
                 progressLogger = app::logProgress,
             )
@@ -73,6 +80,7 @@ class MainActivity : FlutterFragmentActivity() {
                 activity = this,
                 channel = MethodChannel(messenger, "videoslim/media_actions"),
                 deleteConsentLauncher = DeleteConsentLauncher(::launchDeleteConsent),
+                ioDispatcher = app.mediaIoDispatcher,
                 log = { level, event, details ->
                     appendNativeLog("$level $event ${JSONObject(details).toString()}")
                 },
@@ -85,12 +93,13 @@ class MainActivity : FlutterFragmentActivity() {
         mediaActionsChannel = null
         pendingDeleteConsent?.invoke(false)
         pendingDeleteConsent = null
+        // Dispose first so late permission callbacks fail their main-owned launch token checks.
+        engineChannel?.dispose()
+        engineChannel = null
         pendingNotificationPermission?.invoke(false)
         pendingNotificationPermission = null
         pendingLegacyPermission?.invoke(false)
         pendingLegacyPermission = null
-        engineChannel?.dispose()
-        engineChannel = null
         pickerChannel?.dispose()
         pickerChannel = null
         logChannel?.dispose()
