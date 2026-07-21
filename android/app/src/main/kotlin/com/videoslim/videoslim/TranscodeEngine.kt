@@ -125,7 +125,6 @@ internal class TranscodeEngine(
                 EngineFailure(EngineErrorCode.UNKNOWN, "已有视频处理任务正在进行中"),
             )
         }
-        validateOutputDestination(request.outputTreeUri)
         val requestedVideoMime = videoMimeType(request.videoCodec)
         if (!codecCatalog.hasHardwareEncoder(requestedVideoMime)) {
             throw EngineOperationException(EngineFailure(EngineErrorCode.ENCODER_UNAVAILABLE))
@@ -204,13 +203,23 @@ internal class TranscodeEngine(
     private fun prepare(task: ActiveTask) {
         try {
             if (task.cancelRequested) return
-            log(
-                "task=${task.id} environment manufacturer=${Build.MANUFACTURER} " +
-                    "model=${Build.MODEL} device=${Build.DEVICE} sdk=${Build.VERSION.SDK_INT} " +
-                    "release=${Build.VERSION.RELEASE} securityPatch=${Build.VERSION.SECURITY_PATCH} " +
-                    "app=${appVersionName()} media3=${MediaLibraryInfo.VERSION}",
+            lateinit var sourceAccess: SourceAccessProbeResult
+            EngineIoPreparationPolicy.prepare(
+                validateDestination = {
+                    validateOutputDestination(task.request.outputTreeUri)
+                },
+                prepareMedia = mediaPreparation@{
+                    if (task.cancelRequested) return@mediaPreparation
+                    log(
+                        "task=${task.id} environment manufacturer=${Build.MANUFACTURER} " +
+                            "model=${Build.MODEL} device=${Build.DEVICE} sdk=${Build.VERSION.SDK_INT} " +
+                            "release=${Build.VERSION.RELEASE} securityPatch=${Build.VERSION.SECURITY_PATCH} " +
+                            "app=${appVersionName()} media3=${MediaLibraryInfo.VERSION}",
+                    )
+                    sourceAccess = sourceAccessProbe.probe(task.request.sourceUri)
+                },
             )
-            val sourceAccess = sourceAccessProbe.probe(task.request.sourceUri)
+            if (task.cancelRequested) return
             task.sourceAccessAtStart = sourceAccess
             log("task=${task.id} source access before metadata ${sourceAccess.toLogString()}")
             sourceAccess.toEngineFailure()?.let { failure ->

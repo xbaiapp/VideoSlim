@@ -30,6 +30,7 @@ class MediaIoRoutingPolicyTest {
     @Test
     fun `engine metadata and destination preflight use bounded media io without activity executor ownership`() {
         val engine = source("EngineChannel.kt")
+        val transcode = source("TranscodeEngine.kt")
 
         assertFalse(engine.contains("metadataExecutor"))
         assertFalse(engine.contains("Executors.newSingleThreadExecutor"))
@@ -42,6 +43,19 @@ class MediaIoRoutingPolicyTest {
             engine.indexOf("activeLaunch = token") <
                 engine.indexOf("MediaIoOperation.OUTPUT_DESTINATION_VALIDATION"),
         )
+        val start =
+            transcode.substring(
+                transcode.indexOf("fun start(request: ProcessRequest"),
+                transcode.indexOf("fun cancel(taskId: String)"),
+            )
+        assertFalse(start.contains("validateOutputDestination("))
+        val prepare =
+            transcode.substring(
+                transcode.indexOf("private fun prepare(task: ActiveTask)"),
+                transcode.indexOf("private fun beginTransformer(task: ActiveTask)"),
+            )
+        assertTrue(prepare.contains("EngineIoPreparationPolicy.prepare("))
+        assertTrue(prepare.contains("validateOutputDestination(task.request.outputTreeUri)"))
     }
 
     @Test
@@ -64,6 +78,25 @@ class MediaIoRoutingPolicyTest {
         val resetRelease = store.indexOf("previous?.let")
         assertTrue(recoveryPreparation >= 0 && recoveryPreparation < resetCommit)
         assertTrue(resetCommit < resetRelease)
+
+        val replacement =
+            picker.substring(
+                picker.indexOf("private fun completeOutputFolderRequest"),
+                picker.indexOf("private fun resetOutputLocation"),
+            )
+        assertTrue(
+            replacement.indexOf("outputLocationChangeGuard.replaceCustomFolder") <
+                replacement.indexOf("MediaIoOperation.OUTPUT_FOLDER_REPLACEMENT"),
+        )
+        val reset =
+            picker.substring(
+                picker.indexOf("private fun resetOutputLocation"),
+                picker.indexOf("private fun <T> submit"),
+            )
+        assertTrue(
+            reset.indexOf("outputLocationChangeGuard.resetToDefault") <
+                reset.indexOf("MediaIoOperation.OUTPUT_LOCATION_RESET"),
+        )
     }
 
     @Test

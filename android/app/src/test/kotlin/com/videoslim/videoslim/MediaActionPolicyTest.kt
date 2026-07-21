@@ -1,6 +1,7 @@
 package com.videoslim.videoslim
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.fail
 import org.junit.Test
@@ -57,6 +58,28 @@ class MediaActionPolicyTest {
                 MediaActionMediaKind.fromResolvedMimeType(it)
             }
         }
+    }
+
+    @Test
+    fun `unclassified provider failures keep diagnostics out of the Flutter error`() {
+        listOf(
+            IllegalStateException("provider account detail"),
+            IllegalArgumentException("content provider implementation detail"),
+        ).forEach { error ->
+            val failure = MediaActionFailurePolicy.from(error)
+
+            assertEquals("MEDIA_ACTION_FAILED", failure.code)
+            assertEquals("系统媒体操作失败", failure.message)
+            assertFalse(failure.message.contains(error.message.orEmpty()))
+        }
+    }
+
+    @Test
+    fun `controlled media action failures retain stable user guidance`() {
+        val failure = MediaActionFailurePolicy.from(MediaActionUserException("没有可用的媒体播放器"))
+
+        assertEquals("MEDIA_ACTION_FAILED", failure.code)
+        assertEquals("没有可用的媒体播放器", failure.message)
     }
 
     private fun assertRejected(

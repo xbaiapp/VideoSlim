@@ -139,6 +139,10 @@ internal class VideoPickerChannel(
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val completionCoordinator = MethodChannelCompletionCoordinator(::postToMain)
+    private val outputLocationChangeGuard =
+        OutputLocationChangeGuard {
+            ProcessingRuntime.registry.snapshot()?.state == TaskRuntimeSnapshot.STATE_RUNNING
+        }
     private var activeRequest: RequestToken? = null
     private var disposed = false
 
@@ -190,10 +194,7 @@ internal class VideoPickerChannel(
                     outputLocationStore::getOutputLocation,
                 )
 
-            METHOD_CHOOSE_OUTPUT_FOLDER ->
-                startLauncherRequest(result, RequestKind.OUTPUT_FOLDER, "正在打开系统文件夹选择器") {
-                    outputFolderLauncher.launch(Unit)
-                }
+            METHOD_CHOOSE_OUTPUT_FOLDER -> chooseOutputFolder(result)
 
             METHOD_RESET_OUTPUT_LOCATION -> resetOutputLocation(result)
             else -> registerReply(result)?.notImplemented()
@@ -255,6 +256,21 @@ internal class VideoPickerChannel(
         }
     }
 
+    private fun chooseOutputFolder(result: MethodChannel.Result) {
+        val token = claimRequest(result, RequestKind.OUTPUT_FOLDER) ?: return
+        val rejection =
+            outputLocationChangeGuard.replaceCustomFolder {
+                log("正在打开系统文件夹选择器")
+                try {
+                    outputFolderLauncher.launch(Unit)
+                } catch (error: Throwable) {
+                    log("无法打开系统选择器：${error.message.orEmpty()}")
+                    finishError(token, ERROR_UNKNOWN, "无法打开系统选择器", null)
+                }
+            }
+        rejection?.let { finishError(token, it.code, it.message, null) }
+    }
+
     private fun completeOutputFolderRequest(selection: OpenDocumentSelection?) {
         val token = activeRequest?.takeIf { it.kind == RequestKind.OUTPUT_FOLDER } ?: return
         if (selection == null) {
@@ -262,21 +278,24 @@ internal class VideoPickerChannel(
             finishSuccess(token, null)
             return
         }
-        submit(token, MediaIoOperation.OUTPUT_FOLDER_REPLACEMENT) {
-            outputLocationStore.replaceOutputFolder(selection)
-        }
+        val rejection =
+            outputLocationChangeGuard.replaceCustomFolder {
+                submit(token, MediaIoOperation.OUTPUT_FOLDER_REPLACEMENT) {
+                    outputLocationStore.replaceOutputFolder(selection)
+                }
+            }
+        rejection?.let { finishError(token, it.code, it.message, null) }
     }
 
     private fun resetOutputLocation(result: MethodChannel.Result) {
         val token = claimRequest(result, RequestKind.RESET_OUTPUT_LOCATION) ?: return
-        val runningSnapshot = ProcessingRuntime.registry.snapshot()
-        if (runningSnapshot?.state == TaskRuntimeSnapshot.STATE_RUNNING) {
-            finishError(token, ERROR_UNKNOWN, "视频处理期间不能更改保存位置", null)
-            return
-        }
-        submit(token, MediaIoOperation.OUTPUT_LOCATION_RESET) {
-            outputLocationStore.resetOutputLocation()
-        }
+        val rejection =
+            outputLocationChangeGuard.resetToDefault {
+                submit(token, MediaIoOperation.OUTPUT_LOCATION_RESET) {
+                    outputLocationStore.resetOutputLocation()
+                }
+            }
+        rejection?.let { finishError(token, it.code, it.message, null) }
     }
 
     private fun <T> submit(

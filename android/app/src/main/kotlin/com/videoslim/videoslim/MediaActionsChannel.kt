@@ -28,15 +28,47 @@ internal object MediaActionPolicy {
     private const val MAX_URI_LENGTH = 4_096
 
     fun validatedContentUri(raw: String?): String {
-        require(!raw.isNullOrBlank()) { "媒体 URI 不能为空" }
-        require(raw.length <= MAX_URI_LENGTH) { "媒体 URI 过长" }
-        require(raw == raw.trim()) { "媒体 URI 格式无效" }
-        val parsed = runCatching { URI(raw) }.getOrElse { throw IllegalArgumentException("媒体 URI 格式无效", it) }
-        require(!parsed.isOpaque) { "媒体 URI 格式无效" }
-        require(parsed.scheme == ContentResolver.SCHEME_CONTENT) { "仅支持系统 content URI" }
-        require(!parsed.rawAuthority.isNullOrBlank()) { "媒体 URI 缺少内容提供方" }
+        if (raw.isNullOrBlank()) throw MediaActionUserException("媒体 URI 不能为空")
+        if (raw.length > MAX_URI_LENGTH) throw MediaActionUserException("媒体 URI 过长")
+        if (raw != raw.trim()) throw MediaActionUserException("媒体 URI 格式无效")
+        val parsed =
+            runCatching { URI(raw) }
+                .getOrElse { throw MediaActionUserException("媒体 URI 格式无效") }
+        if (parsed.isOpaque) throw MediaActionUserException("媒体 URI 格式无效")
+        if (parsed.scheme != ContentResolver.SCHEME_CONTENT) {
+            throw MediaActionUserException("仅支持系统 content URI")
+        }
+        if (parsed.rawAuthority.isNullOrBlank()) {
+            throw MediaActionUserException("媒体 URI 缺少内容提供方")
+        }
         return raw
     }
+}
+
+internal class MediaActionUserException(
+    val userMessage: String,
+) : IllegalArgumentException(userMessage)
+
+internal data class MediaActionFailure(
+    val code: String,
+    val message: String,
+)
+
+internal object MediaActionFailurePolicy {
+    const val ERROR_CODE = "MEDIA_ACTION_FAILED"
+    const val GENERIC_MESSAGE = "系统媒体操作失败"
+
+    fun from(error: Throwable): MediaActionFailure =
+        MediaActionFailure(
+            code = ERROR_CODE,
+            message =
+                when (error) {
+                    is AppMediaIoRejectedException -> "媒体操作繁忙，请稍后重试"
+                    is SecurityException -> "系统未授予此媒体文件的操作权限"
+                    is MediaActionUserException -> error.userMessage
+                    else -> GENERIC_MESSAGE
+                },
+        )
 }
 
 internal enum class MediaActionMediaKind(
@@ -50,7 +82,7 @@ internal enum class MediaActionMediaKind(
     companion object {
         fun fromResolvedMimeType(value: String?): MediaActionMediaKind =
             entries.firstOrNull { it.mimeType == value }
-                ?: throw IllegalArgumentException("仅支持 VideoSlim 生成的 MP4 视频或 M4A 音频")
+                ?: throw MediaActionUserException("仅支持 VideoSlim 生成的 MP4 视频或 M4A 音频")
     }
 }
 
@@ -88,8 +120,8 @@ internal class MediaActionsChannel(
         val uri =
             try {
                 Uri.parse(MediaActionPolicy.validatedContentUri(call.argument<String>("uri")))
-            } catch (error: IllegalArgumentException) {
-                reply.error("MEDIA_ACTION_FAILED", error.message ?: "媒体 URI 无效", null)
+            } catch (error: MediaActionUserException) {
+                reply.error(MediaActionFailurePolicy.ERROR_CODE, error.userMessage, null)
                 return
             }
         when (call.method) {
@@ -149,7 +181,9 @@ internal class MediaActionsChannel(
             setDataAndType(uri, mediaKind.mimeType)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             clipData = ClipData.newUri(resolver, "VideoSlim 输出", uri)
-            require(resolveActivity(activity.packageManager) != null) { "没有可用的媒体播放器" }
+            if (resolveActivity(activity.packageManager) == null) {
+                throw MediaActionUserException("没有可用的媒体播放器")
+            }
         }
     }
 
@@ -163,7 +197,9 @@ internal class MediaActionsChannel(
                 clipData = ClipData.newUri(resolver, "VideoSlim 输出", uri)
             }
         return Intent.createChooser(sendIntent, mediaKind.chooserTitle).also { chooser ->
-            require(chooser.resolveActivity(activity.packageManager) != null) { "没有可用的分享应用" }
+            if (chooser.resolveActivity(activity.packageManager) == null) {
+                throw MediaActionUserException("没有可用的分享应用")
+            }
         }
     }
 
@@ -310,13 +346,7 @@ internal class MediaActionsChannel(
         uri: Uri,
         error: Throwable,
     ) {
-        val message =
-            when (error) {
-                is AppMediaIoRejectedException -> "媒体操作繁忙，请稍后重试"
-                is SecurityException -> "系统未授予此媒体文件的操作权限"
-                is IllegalArgumentException -> error.message ?: "系统不支持此媒体操作"
-                else -> error.message?.takeIf { it.isNotBlank() } ?: "系统媒体操作失败"
-            }
+        val failure = MediaActionFailurePolicy.from(error)
         log(
             "error",
             "media_action_failed",
@@ -327,7 +357,7 @@ internal class MediaActionsChannel(
                 "errorMessage" to error.message,
             ),
         )
-        result.error("MEDIA_ACTION_FAILED", message, mapOf("method" to method))
+        result.error(failure.code, failure.message, mapOf("method" to method))
     }
 
     private fun postToMain(action: () -> Unit) {
