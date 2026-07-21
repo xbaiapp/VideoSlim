@@ -289,6 +289,7 @@ internal data class ServiceReconciliationLaunchActions(
     val startForeground: () -> Unit,
     val acquireWakeLock: () -> Unit,
     val armRecoveryWaitWatchdog: ((() -> Unit) -> RecoveryWaitWatchdogArmResult),
+    val detachReconciliationCompletion: () -> Boolean,
     val cancelRecoveryWaitWatchdog: () -> Unit,
     val registerReconciliationCompletion: ((Throwable?) -> Unit) -> Unit,
     val postToServiceMain: (() -> Unit) -> ServiceMainDispatchResult,
@@ -331,6 +332,7 @@ internal class ServiceReconciliationLaunchCoordinator(
         val armResult =
             try {
                 actions.armRecoveryWaitWatchdog {
+                    detachReconciliationCompletionBestEffort()
                     dispatchToServiceMain("recovery wait timeout", ::resolveTimeout)
                 }
             } catch (error: Throwable) {
@@ -459,15 +461,27 @@ internal class ServiceReconciliationLaunchCoordinator(
         runCatching { actions.onFailure(operation, error) }
     }
 
-    private fun claimResolution(): Boolean =
-        synchronized(lock) {
-            if (resolved) {
-                false
-            } else {
-                resolved = true
-                true
+    private fun claimResolution(): Boolean {
+        val claimed =
+            synchronized(lock) {
+                if (resolved) {
+                    false
+                } else {
+                    resolved = true
+                    true
+                }
             }
+        if (claimed) detachReconciliationCompletionBestEffort()
+        return claimed
+    }
+
+    private fun detachReconciliationCompletionBestEffort() {
+        try {
+            actions.detachReconciliationCompletion()
+        } catch (error: Throwable) {
+            reportFailure("reconciliation completion detachment", error)
         }
+    }
 }
 
 internal fun reconciliationLaunchDisposition(

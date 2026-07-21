@@ -1,5 +1,11 @@
 package com.videoslim.videoslim
 
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -44,6 +50,7 @@ class ProcessingServiceReconciliationPolicyTest {
         harness.completeReconciliation()
 
         assertEquals(0, harness.launchCount)
+        assertEquals(0, harness.attachedReconciliationActionCount)
         assertEquals(listOf(ReconciliationLaunchFailure.MAIN_DISPATCH to expected), harness.failures)
         assertTrue(harness.reports.any { it.second === expected })
         harness.assertTerminalCleanupExactlyOnce(
@@ -62,6 +69,7 @@ class ProcessingServiceReconciliationPolicyTest {
         harness.completeReconciliation()
 
         assertEquals(0, harness.launchCount)
+        assertEquals(0, harness.attachedReconciliationActionCount)
         assertEquals(listOf(ReconciliationLaunchFailure.MAIN_DISPATCH to expected), harness.failures)
         assertTrue(harness.reports.any { it.second === expected })
         harness.assertTerminalCleanupExactlyOnce(
@@ -71,18 +79,19 @@ class ProcessingServiceReconciliationPolicyTest {
     }
 
     @Test
-    fun `completion post rejection wins queued watchdog exactly once`() {
-        val expected = IllegalStateException("completion dispatch rejected")
+    fun `timeout post rejection wins late reconciliation completion exactly once`() {
+        val expected = IllegalStateException("timeout dispatch rejected")
         val harness = LaunchHarness()
         harness.coordinator.start()
-        harness.fireRecoveryTimeout()
         harness.rejectNextMainPost(expected)
+        harness.fireRecoveryTimeout()
 
         harness.completeReconciliation()
         harness.runMainActions()
 
         assertEquals(0, harness.timeoutCount)
         assertEquals(0, harness.launchCount)
+        assertEquals(0, harness.attachedReconciliationActionCount)
         assertEquals(listOf(ReconciliationLaunchFailure.MAIN_DISPATCH to expected), harness.failures)
         harness.assertTerminalCleanupExactlyOnce(
             ActiveTaskFinishSource.START_EXCEPTION,
@@ -288,8 +297,99 @@ class ProcessingServiceReconciliationPolicyTest {
 
         assertEquals(1, harness.timeoutCount)
         assertEquals(0, harness.launchCount)
+        assertEquals(0, harness.attachedReconciliationActionCount)
         assertTrue(harness.failures.isEmpty())
         harness.assertTerminalCleanupExactlyOnce(ActiveTaskFinishSource.SERVICE_TIMEOUT)
+    }
+
+    @Test
+    fun `hung reconciliation timeout detaches its action without completing the gate`() {
+        val gate = CompletableFuture<Unit>()
+        val harness = LaunchHarness(reconciliationGate = gate)
+        harness.coordinator.start()
+
+        assertEquals(1, harness.attachedReconciliationActionCount)
+        harness.fireRecoveryTimeout()
+
+        assertEquals(0, harness.attachedReconciliationActionCount)
+        assertFalse(gate.isDone)
+        assertFalse(gate.isCancelled)
+        harness.runMainActions()
+        harness.assertTerminalCleanupExactlyOnce(ActiveTaskFinishSource.SERVICE_TIMEOUT)
+    }
+
+    @Test
+    fun `repeated timed out retries leave no action payload attached to one hung gate`() {
+        val gate = CompletableFuture<Unit>()
+        val retries = mutableListOf<LaunchHarness>()
+
+        repeat(25) {
+            val harness = LaunchHarness(reconciliationGate = gate)
+            retries += harness
+            harness.coordinator.start()
+            harness.fireRecoveryTimeout()
+            harness.runMainActions()
+        }
+
+        assertFalse(gate.isDone)
+        assertEquals(0, retries.sumOf { it.attachedReconciliationActionCount })
+        assertTrue(gate.complete(Unit))
+        retries.forEach { harness ->
+            assertEquals(0, harness.launchCount)
+            assertTrue(harness.postedMainActions.isEmpty())
+        }
+    }
+
+    @Test
+    fun `late hung gate completion after timeout neither dispatches nor launches`() {
+        val gate = CompletableFuture<Unit>()
+        val harness = LaunchHarness(reconciliationGate = gate)
+        harness.coordinator.start()
+
+        harness.fireRecoveryTimeout()
+        assertEquals(1, harness.postedMainActions.size)
+        assertTrue(gate.complete(Unit))
+
+        assertEquals(1, harness.postedMainActions.size)
+        harness.runMainActions()
+        assertEquals(1, harness.timeoutCount)
+        assertEquals(0, harness.launchCount)
+        assertTrue(harness.postedMainActions.isEmpty())
+    }
+
+    @Test
+    fun `concurrent completion and detach give the action to exactly one winner`() {
+        val workers = Executors.newFixedThreadPool(2)
+        try {
+            repeat(100) {
+                val gate = CompletableFuture<Unit>()
+                val observation = DetachableReconciliationObservation()
+                val callbacks = AtomicInteger()
+                val detachWon = AtomicBoolean()
+                val start = CountDownLatch(1)
+                val done = CountDownLatch(2)
+                observation.observe(gate) { callbacks.incrementAndGet() }
+
+                workers.execute {
+                    start.await()
+                    gate.complete(Unit)
+                    done.countDown()
+                }
+                workers.execute {
+                    start.await()
+                    detachWon.set(observation.detach())
+                    done.countDown()
+                }
+                start.countDown()
+                assertTrue(done.await(5, TimeUnit.SECONDS))
+
+                assertEquals(1, callbacks.get() + if (detachWon.get()) 1 else 0)
+                assertEquals(0, observation.attachedActionCount)
+            }
+        } finally {
+            workers.shutdownNow()
+            assertTrue(workers.awaitTermination(5, TimeUnit.SECONDS))
+        }
     }
 
     @Test
@@ -326,6 +426,7 @@ class ProcessingServiceReconciliationPolicyTest {
         private val watchdogRejection: Throwable? = null,
         private val deferTerminalWinner: Boolean = false,
         private val recoveryWatchdogCancelFailure: Throwable? = null,
+        private val reconciliationGate: CompletableFuture<Unit> = CompletableFuture(),
     ) {
         val context = awaitingContext(SERVICE_TASK_ID, GENERATION)
         var destroyed = false
@@ -341,7 +442,7 @@ class ProcessingServiceReconciliationPolicyTest {
         var timeoutCount = 0
         var watchdogCancelCount = 0
         private var recoveryWatchdogArmed = false
-        private var completion: ((Throwable?) -> Unit)? = null
+        private val reconciliationObservation = DetachableReconciliationObservation()
         private var recoveryTimeout: (() -> Unit)? = null
         private var terminalWinner: (() -> Unit)? = null
         private var nextMainPostFailure: Throwable? = null
@@ -358,6 +459,9 @@ class ProcessingServiceReconciliationPolicyTest {
         private var audioDisposeCount = 0
         private var clearActiveCount = 0
         private var stopCount = 0
+
+        val attachedReconciliationActionCount: Int
+            get() = reconciliationObservation.attachedActionCount
 
         private fun cancelRecoveryWatchdog() {
             if (recoveryWatchdogArmed) {
@@ -385,7 +489,10 @@ class ProcessingServiceReconciliationPolicyTest {
                         scheduleTerminalWinner = { action ->
                             if (deferTerminalWinner) terminalWinner = action else action()
                         },
-                        cancelRecoveryWaitWatchdog = ::cancelRecoveryWatchdog,
+                        cancelRecoveryWaitWatchdog = {
+                            reconciliationObservation.detach()
+                            cancelRecoveryWatchdog()
+                        },
                         cancelUserWatchdog = {
                             userWatchdogCancelCount += 1
                             cancellationWatchdog.cancel()
@@ -430,11 +537,12 @@ class ProcessingServiceReconciliationPolicyTest {
                             recoveryTimeout = onTimeout
                             RecoveryWaitWatchdogArmResult.Armed
                         },
+                        detachReconciliationCompletion = reconciliationObservation::detach,
                         cancelRecoveryWaitWatchdog = ::cancelRecoveryWatchdog,
                         registerReconciliationCompletion = { callback ->
                             events += "register"
                             registrationCount += 1
-                            completion = callback
+                            reconciliationObservation.observe(reconciliationGate, callback)
                         },
                         postToServiceMain = { action ->
                             val failure = nextMainPostFailure
@@ -494,7 +602,13 @@ class ProcessingServiceReconciliationPolicyTest {
             )
 
         fun completeReconciliation(error: Throwable? = null) {
-            checkNotNull(completion).invoke(error)
+            val completed =
+                if (error == null) {
+                    reconciliationGate.complete(Unit)
+                } else {
+                    reconciliationGate.completeExceptionally(error)
+                }
+            check(completed) { "Reconciliation was already completed" }
         }
 
         fun fireRecoveryTimeout() {

@@ -81,6 +81,7 @@ private data class ActiveServiceLaunch(
     val publicationOwner: ActiveTaskPublicationOwner,
     val transcodeEngine: TranscodeEngine,
     val audioExtractionEngine: AudioExtractionEngine,
+    val reconciliationObservation: DetachableReconciliationObservation,
     val recoveryWaitWatchdog: RecoveryWaitWatchdog,
     val terminationPolicy: ServiceTerminationPolicy,
 )
@@ -247,11 +248,13 @@ internal class ProcessingService : Service() {
                             wakeLockGuard.acquire(taskId, MAX_WAKE_LOCK_MS)
                         },
                         armRecoveryWaitWatchdog = launch.recoveryWaitWatchdog::arm,
+                        detachReconciliationCompletion = launch.reconciliationObservation::detach,
                         cancelRecoveryWaitWatchdog = launch.recoveryWaitWatchdog::cancel,
                         registerReconciliationCompletion = { callback ->
-                            ProcessingRuntime.reconciliationCompletion().whenComplete { _, error ->
-                                callback(error)
-                            }
+                            launch.reconciliationObservation.observe(
+                                ProcessingRuntime.reconciliationCompletion(),
+                                callback,
+                            )
                         },
                         postToServiceMain = { action ->
                             if (mainHandler.post(action)) {
@@ -543,6 +546,7 @@ internal class ProcessingService : Service() {
                     }
                 },
             )
+        val reconciliationObservation = DetachableReconciliationObservation()
         val terminalNotifications =
             ServiceTerminalNotificationPolicy(
                 context = context,
@@ -568,7 +572,13 @@ internal class ProcessingService : Service() {
                             publishTerminalDirective(context, terminal)
                         },
                         scheduleTerminalWinner = ::runTerminalWinnerOnMain,
-                        cancelRecoveryWaitWatchdog = recoveryWaitWatchdog::cancel,
+                        cancelRecoveryWaitWatchdog = {
+                            try {
+                                reconciliationObservation.detach()
+                            } finally {
+                                recoveryWaitWatchdog.cancel()
+                            }
+                        },
                         cancelUserWatchdog = cancellationWatchdog::cancel,
                         removeRegistryObserver = {
                             if (registryObserverRegistered) {
@@ -609,6 +619,7 @@ internal class ProcessingService : Service() {
             publicationOwner = publicationOwner,
             transcodeEngine = transcodeEngine,
             audioExtractionEngine = audioExtractionEngine,
+            reconciliationObservation = reconciliationObservation,
             recoveryWaitWatchdog = recoveryWaitWatchdog,
             terminationPolicy = terminationPolicy,
         )

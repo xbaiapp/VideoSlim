@@ -20,15 +20,29 @@ import org.junit.Test
 
 class RecoveryIoCoordinatorTest {
     @Test
-    fun `API 26 policy excludes post-floor CompletableFuture views`() {
+    fun `API 26 policy excludes known post-floor CompletableFuture calls`() {
+        val forbiddenCalls =
+            listOf(
+                Regex("\\bminimalCompletionStage\\s*\\("),
+                Regex("\\.copy\\s*\\(\\s*\\)"),
+                Regex("\\bfailedFuture\\s*\\("),
+                Regex("\\bfailedStage\\s*\\("),
+                Regex("\\borTimeout\\s*\\("),
+                Regex("\\bcompleteOnTimeout\\s*\\("),
+                Regex("\\bdelayedExecutor\\s*\\("),
+            )
         productionSourceRoot()
             .walkTopDown()
             .filter { it.isFile && it.extension in setOf("java", "kt") }
             .forEach { source ->
-                assertFalse(
-                    "${source.path} must use only future APIs available on Android API 26",
-                    source.readText().contains("minimalCompletionStage"),
-                )
+                val contents = source.readText()
+                forbiddenCalls.forEach { forbiddenCall ->
+                    assertFalse(
+                        "${source.path} must use only future APIs available on Android API 26: " +
+                            forbiddenCall.pattern,
+                        forbiddenCall.containsMatchIn(contents),
+                    )
+                }
             }
     }
 
