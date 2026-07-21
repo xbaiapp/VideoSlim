@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import java.io.Serializable
 import java.util.UUID
+import java.util.concurrent.CompletionStage
 
 internal object SerializableArguments {
     fun copy(arguments: Any?): HashMap<String, Any?> {
@@ -47,6 +48,12 @@ internal object SerializableArguments {
 
 internal object ProcessingRuntime {
     val registry = ProcessingRegistry()
+    private val reconciliationGate = ProcessReconciliationGate()
+
+    internal fun startReconciliationOnce(action: () -> Unit): CompletionStage<Unit> =
+        reconciliationGate.startOnce(action)
+
+    internal fun reconciliationCompletion(): CompletionStage<Unit> = reconciliationGate.completion()
 
     fun launch(
         context: Context,

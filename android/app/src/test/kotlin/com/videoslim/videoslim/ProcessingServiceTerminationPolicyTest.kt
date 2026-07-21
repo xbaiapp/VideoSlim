@@ -32,7 +32,14 @@ class ProcessingServiceTerminationPolicyTest {
 
         assertEquals(ServiceTerminationResult.TERMINAL, result)
         assertEquals(
-            listOf("watchdog-arm", "discard", "cancel-engine", "registry", "watchdog-cancel") +
+            listOf(
+                "watchdog-arm",
+                "discard",
+                "cancel-engine",
+                "registry",
+                "recovery-watchdog-cancel",
+                "watchdog-cancel",
+            ) +
                 RESOURCE_RELEASE_ORDER,
             harness.events,
         )
@@ -100,7 +107,13 @@ class ProcessingServiceTerminationPolicyTest {
         assertEquals(ServiceTerminationResult.TERMINAL, harness.policy.onTimeout())
 
         assertEquals(
-            listOf("discard", "cancel-engine", "registry", "watchdog-cancel") + RESOURCE_RELEASE_ORDER,
+            listOf(
+                "discard",
+                "cancel-engine",
+                "registry",
+                "recovery-watchdog-cancel",
+                "watchdog-cancel",
+            ) + RESOURCE_RELEASE_ORDER,
             harness.events,
         )
         assertEquals(
@@ -129,7 +142,13 @@ class ProcessingServiceTerminationPolicyTest {
         assertEquals(ServiceTerminationResult.TERMINAL, harness.policy.onDestroy())
 
         assertEquals(
-            listOf("discard", "cancel-engine", "registry", "watchdog-cancel") +
+            listOf(
+                "discard",
+                "cancel-engine",
+                "registry",
+                "recovery-watchdog-cancel",
+                "watchdog-cancel",
+            ) +
                 RESOURCE_RELEASE_ORDER.filterNot { it == "stop" },
             harness.events,
         )
@@ -265,6 +284,9 @@ class ProcessingServiceTerminationPolicyTest {
                                 registryFailure?.let { throw it }
                             },
                             scheduleTerminalWinner = terminalWinnerScheduler,
+                            cancelRecoveryWaitWatchdog = {
+                                events += "recovery-watchdog-cancel"
+                            },
                             cancelUserWatchdog = {
                                 events += "watchdog-cancel"
                                 watchdog.cancel()

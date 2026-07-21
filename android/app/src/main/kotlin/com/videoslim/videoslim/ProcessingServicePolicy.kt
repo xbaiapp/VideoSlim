@@ -176,6 +176,205 @@ internal class UserCancellationWatchdog(
     }
 }
 
+internal sealed interface RecoveryWaitWatchdogArmResult {
+    data object Armed : RecoveryWaitWatchdogArmResult
+
+    data object AlreadyArmed : RecoveryWaitWatchdogArmResult
+
+    data class Rejected(
+        val error: Throwable,
+    ) : RecoveryWaitWatchdogArmResult
+}
+
+/** A bounded one-shot deadline used only while a launch awaits process reconciliation. */
+internal class RecoveryWaitWatchdog(
+    private val scheduler: CancellationWatchdogScheduler,
+    private val timeoutMillis: Long,
+) {
+    private val lock = Any()
+    private var armed = false
+    private var registration: CancellationWatchdogRegistration? = null
+
+    init {
+        require(timeoutMillis > 0L) { "timeoutMillis must be positive" }
+    }
+
+    fun arm(onTimeout: () -> Unit): RecoveryWaitWatchdogArmResult {
+        synchronized(lock) {
+            if (armed) return RecoveryWaitWatchdogArmResult.AlreadyArmed
+            armed = true
+        }
+        val scheduled =
+            try {
+                scheduler.schedule(timeoutMillis) {
+                    val shouldFire =
+                        synchronized(lock) {
+                            if (!armed) {
+                                false
+                            } else {
+                                armed = false
+                                registration = null
+                                true
+                            }
+                        }
+                    if (shouldFire) onTimeout()
+                }
+            } catch (error: Throwable) {
+                synchronized(lock) {
+                    armed = false
+                    registration = null
+                }
+                return RecoveryWaitWatchdogArmResult.Rejected(error)
+            }
+        val cancelImmediately =
+            synchronized(lock) {
+                if (!armed) {
+                    true
+                } else {
+                    registration = scheduled
+                    false
+                }
+            }
+        if (cancelImmediately) runCatching { scheduled.cancel() }
+        return RecoveryWaitWatchdogArmResult.Armed
+    }
+
+    fun cancel() {
+        val scheduled =
+            synchronized(lock) {
+                if (!armed) return
+                armed = false
+                registration.also { registration = null }
+            }
+        scheduled?.cancel()
+    }
+}
+
+internal enum class ReconciliationLaunchFailure {
+    SETUP,
+    WATCHDOG,
+    REGISTRATION,
+    RECONCILIATION,
+}
+
+internal data class ServiceReconciliationLaunchActions(
+    val startForeground: () -> Unit,
+    val acquireWakeLock: () -> Unit,
+    val armRecoveryWaitWatchdog: ((() -> Unit) -> RecoveryWaitWatchdogArmResult),
+    val cancelRecoveryWaitWatchdog: () -> Unit,
+    val registerReconciliationCompletion: ((Throwable?) -> Unit) -> Unit,
+    val postToServiceMain: (() -> Unit) -> Unit,
+    val isLaunchCurrent: () -> Boolean,
+    val launchEngine: () -> Unit,
+    val finishFailure: (ReconciliationLaunchFailure, Throwable) -> Unit,
+    val onRecoveryWaitTimeout: () -> Unit,
+)
+
+/**
+ * Pure foreground-before-wait launch coordinator.
+ *
+ * Exactly one reconciliation continuation is registered. Completion and the bounded watchdog are
+ * always dispatched to the service main queue, race through one resolution claim, and revalidate
+ * launch ownership before invoking any lifecycle action.
+ */
+internal class ServiceReconciliationLaunchCoordinator(
+    private val actions: ServiceReconciliationLaunchActions,
+) {
+    private val lock = Any()
+    private var started = false
+    private var resolved = false
+
+    fun start(): Boolean {
+        synchronized(lock) {
+            if (started) return false
+            started = true
+        }
+
+        try {
+            actions.startForeground()
+            actions.acquireWakeLock()
+        } catch (error: Throwable) {
+            resolveFailure(ReconciliationLaunchFailure.SETUP, error)
+            return true
+        }
+
+        val armResult =
+            try {
+                actions.armRecoveryWaitWatchdog {
+                    actions.postToServiceMain(::resolveTimeout)
+                }
+            } catch (error: Throwable) {
+                RecoveryWaitWatchdogArmResult.Rejected(error)
+            }
+        if (armResult is RecoveryWaitWatchdogArmResult.Rejected) {
+            resolveFailure(ReconciliationLaunchFailure.WATCHDOG, armResult.error)
+            return true
+        }
+
+        try {
+            actions.registerReconciliationCompletion { error ->
+                actions.postToServiceMain { resolveCompletion(error) }
+            }
+        } catch (error: Throwable) {
+            resolveFailure(ReconciliationLaunchFailure.REGISTRATION, error)
+        }
+        return true
+    }
+
+    private fun resolveCompletion(error: Throwable?) {
+        if (!claimResolution()) return
+        actions.cancelRecoveryWaitWatchdog()
+        if (!actions.isLaunchCurrent()) return
+        if (error == null) {
+            actions.launchEngine()
+        } else {
+            actions.finishFailure(ReconciliationLaunchFailure.RECONCILIATION, error)
+        }
+    }
+
+    private fun resolveTimeout() {
+        if (!claimResolution()) return
+        actions.cancelRecoveryWaitWatchdog()
+        if (actions.isLaunchCurrent()) actions.onRecoveryWaitTimeout()
+    }
+
+    private fun resolveFailure(
+        reason: ReconciliationLaunchFailure,
+        error: Throwable,
+    ) {
+        if (!claimResolution()) return
+        actions.cancelRecoveryWaitWatchdog()
+        if (actions.isLaunchCurrent()) actions.finishFailure(reason, error)
+    }
+
+    private fun claimResolution(): Boolean =
+        synchronized(lock) {
+            if (resolved) {
+                false
+            } else {
+                resolved = true
+                true
+            }
+        }
+}
+
+internal fun canLaunchAfterReconciliation(
+    serviceDestroyed: Boolean,
+    expectedContext: ActiveTaskContext,
+    activeContext: ActiveTaskContext?,
+    expectedGeneration: Long,
+    installedGeneration: Long,
+    reservation: TaskRuntimeSnapshot?,
+): Boolean =
+    !serviceDestroyed &&
+        activeContext === expectedContext &&
+        expectedContext.launchGeneration == expectedGeneration &&
+        installedGeneration == expectedGeneration &&
+        expectedContext.canLaunch(expectedGeneration) &&
+        reservation?.taskId == expectedContext.serviceTaskId &&
+        reservation.taskKind == expectedContext.taskKind &&
+        !reservation.isTerminal
+
 internal data class ServiceTerminalDirective(
     val outcome: ActiveTaskTerminalOutcome,
     val source: ActiveTaskFinishSource,
@@ -190,6 +389,7 @@ internal enum class ServiceTerminationResult {
 }
 
 internal data class ServiceTaskCleanupActions(
+    val cancelRecoveryWaitWatchdog: () -> Unit,
     val cancelUserWatchdog: () -> Unit,
     val removeRegistryObserver: () -> Unit,
     val releaseWakeLock: () -> Unit,
@@ -227,6 +427,7 @@ internal class ServiceTaskCleanup(
             if (released) return false
             released = true
         }
+        bestEffort("recovery wait watchdog", actions.cancelRecoveryWaitWatchdog)
         bestEffort("user cancellation watchdog", actions.cancelUserWatchdog)
         if (includeServiceSurface) {
             bestEffort("registry observer", actions.removeRegistryObserver)
@@ -260,6 +461,7 @@ internal data class ServiceTerminationPolicyActions(
     val cancelEngine: (EngineTaskRoute) -> Unit,
     val publishRegistryTerminal: (ServiceTerminalDirective) -> Unit,
     val scheduleTerminalWinner: ((() -> Unit) -> Unit),
+    val cancelRecoveryWaitWatchdog: () -> Unit,
     val cancelUserWatchdog: () -> Unit,
     val removeRegistryObserver: () -> Unit,
     val releaseWakeLock: () -> Unit,
@@ -291,6 +493,7 @@ internal class ServiceTerminationPolicy(
         ServiceTaskCleanup(
             actions =
                 ServiceTaskCleanupActions(
+                    cancelRecoveryWaitWatchdog = actions.cancelRecoveryWaitWatchdog,
                     cancelUserWatchdog = actions.cancelUserWatchdog,
                     removeRegistryObserver = actions.removeRegistryObserver,
                     releaseWakeLock = actions.releaseWakeLock,
@@ -327,6 +530,12 @@ internal class ServiceTerminationPolicy(
         terminateImmediately(
             cancellationSource = ActiveTaskCancellationSource.TIMEOUT,
             terminal = timeoutTerminal(),
+        )
+
+    fun onRecoveryWaitTimeout(): ServiceTerminationResult =
+        terminateImmediately(
+            cancellationSource = ActiveTaskCancellationSource.TIMEOUT,
+            terminal = recoveryWaitTimeoutTerminal(),
         )
 
     fun onDestroy(): ServiceTerminationResult {
@@ -488,6 +697,14 @@ internal class ServiceTerminationPolicy(
             source = ActiveTaskFinishSource.SERVICE_TIMEOUT,
             errorCode = EngineErrorCode.UNKNOWN.wireName,
             errorMessage = "系统已结束超时的媒体处理任务",
+        )
+
+    private fun recoveryWaitTimeoutTerminal(): ServiceTerminalDirective =
+        ServiceTerminalDirective(
+            outcome = ActiveTaskTerminalOutcome.FAILED,
+            source = ActiveTaskFinishSource.SERVICE_TIMEOUT,
+            errorCode = EngineErrorCode.UNKNOWN.wireName,
+            errorMessage = "启动恢复检查超时，请重试",
         )
 
     private fun destroyTerminal(): ServiceTerminalDirective =

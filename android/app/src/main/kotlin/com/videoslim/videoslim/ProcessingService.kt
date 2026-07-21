@@ -81,6 +81,7 @@ private data class ActiveServiceLaunch(
     val publicationOwner: ActiveTaskPublicationOwner,
     val transcodeEngine: TranscodeEngine,
     val audioExtractionEngine: AudioExtractionEngine,
+    val recoveryWaitWatchdog: RecoveryWaitWatchdog,
     val terminationPolicy: ServiceTerminationPolicy,
 )
 
@@ -129,10 +130,6 @@ internal class ProcessingService : Service() {
         mainHandler = Handler(Looper.getMainLooper())
         logDispatcher = (application as VideoSlimApplication).logDispatcher
         recoveryStore = TaskRecoveryStore(this, ::log)
-        runCatching { OrphanCleanup(this, recoveryStore, ::log).reconcile() }
-            .onFailure { error ->
-                log("service startup reconciliation failed ${error.stackTraceToString()}")
-            }
         ProcessingRuntime.registry.addObserver(registryObserver)
         registryObserverRegistered = true
         log("processing service created")
@@ -238,9 +235,58 @@ internal class ProcessingService : Service() {
             ProcessingRuntime.registry.addObserver(registryObserver)
             registryObserverRegistered = true
         }
+
+        val reconciliationCoordinator =
+            ServiceReconciliationLaunchCoordinator(
+                actions =
+                    ServiceReconciliationLaunchActions(
+                        startForeground = {
+                            startForegroundCompat(snapshot, cancelPendingIntent(taskId))
+                        },
+                        acquireWakeLock = {
+                            wakeLockGuard.acquire(taskId, MAX_WAKE_LOCK_MS)
+                        },
+                        armRecoveryWaitWatchdog = launch.recoveryWaitWatchdog::arm,
+                        cancelRecoveryWaitWatchdog = launch.recoveryWaitWatchdog::cancel,
+                        registerReconciliationCompletion = { callback ->
+                            ProcessingRuntime.reconciliationCompletion().whenComplete { _, error ->
+                                callback(error)
+                            }
+                        },
+                        postToServiceMain = { action ->
+                            check(mainHandler.post(action)) {
+                                "Unable to post reconciliation continuation to service main queue"
+                            }
+                        },
+                        isLaunchCurrent = {
+                            canLaunchAfterReconciliation(
+                                serviceDestroyed = serviceDestroyed,
+                                expectedContext = context,
+                                activeContext = activeLaunch?.context,
+                                expectedGeneration = generation,
+                                installedGeneration = launchGeneration,
+                                reservation = ProcessingRuntime.registry.snapshot(),
+                            )
+                        },
+                        launchEngine = {
+                            startEngineAfterReconciliation(launch, generation, intent)
+                        },
+                        finishFailure = { reason, error ->
+                            finishReconciliationFailure(launch, reason, error)
+                        },
+                        onRecoveryWaitTimeout = launch.terminationPolicy::onRecoveryWaitTimeout,
+                    ),
+            )
+        check(reconciliationCoordinator.start()) { "Reconciliation launch coordinator was already started" }
+    }
+
+    private fun startEngineAfterReconciliation(
+        launch: ActiveServiceLaunch,
+        generation: Long,
+        intent: Intent,
+    ) {
+        val context = launch.context
         try {
-            startForegroundCompat(snapshot, cancelPendingIntent(taskId))
-            wakeLockGuard.acquire(taskId, MAX_WAKE_LOCK_MS)
             if (!context.canLaunch(generation)) {
                 launch.terminationPolicy.finishCancellationBeforeEngine()
                 return
@@ -275,7 +321,7 @@ internal class ProcessingService : Service() {
                 "Publication owner rejected its launch engine route"
             }
             log(
-                "task=$taskId taskKind=${context.taskKind.wireName} " +
+                "task=${context.serviceTaskId} taskKind=${context.taskKind.wireName} " +
                     "engineTask=${route.engineTaskId} service processing started",
             )
         } catch (error: ProcessRequestException) {
@@ -287,6 +333,19 @@ internal class ProcessingService : Service() {
             log("processing launch failed: ${error.stackTraceToString()}")
             finishStartFailure(launch, failure.message, failure.code.wireName)
         }
+    }
+
+    private fun finishReconciliationFailure(
+        launch: ActiveServiceLaunch,
+        reason: ReconciliationLaunchFailure,
+        error: Throwable,
+    ) {
+        val failure = EngineErrorMapper.fromThrowable(error)
+        log(
+            "task=${launch.context.serviceTaskId} reconciliation launch failed " +
+                "reason=${reason.name.lowercase()}: ${error.stackTraceToString()}",
+        )
+        finishStartFailure(launch, failure.message, failure.code.wireName)
     }
 
     private fun handleCancel(taskId: String?) {
@@ -417,19 +476,25 @@ internal class ProcessingService : Service() {
                 recoveryStore = recoveryStore,
                 logger = ::log,
             )
+        val watchdogScheduler =
+            CancellationWatchdogScheduler { timeoutMillis, action ->
+                val runnable = Runnable(action)
+                check(mainHandler.postDelayed(runnable, timeoutMillis)) {
+                    "Unable to schedule service watchdog"
+                }
+                CancellationWatchdogRegistration {
+                    mainHandler.removeCallbacks(runnable)
+                }
+            }
         val cancellationWatchdog =
             UserCancellationWatchdog(
-                scheduler =
-                    CancellationWatchdogScheduler { timeoutMillis, action ->
-                        val runnable = Runnable(action)
-                        check(mainHandler.postDelayed(runnable, timeoutMillis)) {
-                            "Unable to schedule user cancellation watchdog"
-                        }
-                        CancellationWatchdogRegistration {
-                            mainHandler.removeCallbacks(runnable)
-                        }
-                    },
+                scheduler = watchdogScheduler,
                 timeoutMillis = USER_CANCELLATION_TIMEOUT_MS,
+            )
+        val recoveryWaitWatchdog =
+            RecoveryWaitWatchdog(
+                scheduler = watchdogScheduler,
+                timeoutMillis = RECOVERY_WAIT_TIMEOUT_MS,
             )
         val terminalNotifications =
             ServiceTerminalNotificationPolicy(
@@ -456,6 +521,7 @@ internal class ProcessingService : Service() {
                             publishTerminalDirective(context, terminal)
                         },
                         scheduleTerminalWinner = ::runTerminalWinnerOnMain,
+                        cancelRecoveryWaitWatchdog = recoveryWaitWatchdog::cancel,
                         cancelUserWatchdog = cancellationWatchdog::cancel,
                         removeRegistryObserver = {
                             if (registryObserverRegistered) {
@@ -493,6 +559,7 @@ internal class ProcessingService : Service() {
             publicationOwner = publicationOwner,
             transcodeEngine = transcodeEngine,
             audioExtractionEngine = audioExtractionEngine,
+            recoveryWaitWatchdog = recoveryWaitWatchdog,
             terminationPolicy = terminationPolicy,
         )
     }
@@ -714,6 +781,7 @@ internal class ProcessingService : Service() {
         const val EXTRA_TASK_KIND = "taskKind"
         const val EXTRA_ARGUMENTS = "arguments"
         private const val CANCEL_REQUEST_CODE = 2_004
+        private const val RECOVERY_WAIT_TIMEOUT_MS = 30_000L
         private const val USER_CANCELLATION_TIMEOUT_MS = 5_000L
         private const val MAX_WAKE_LOCK_MS = 21_900_000L
     }

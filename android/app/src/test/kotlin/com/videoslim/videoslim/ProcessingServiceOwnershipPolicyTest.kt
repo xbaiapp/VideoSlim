@@ -336,6 +336,7 @@ class ProcessingServiceOwnershipPolicyTest {
                         },
                         publishRegistryTerminal = {},
                         scheduleTerminalWinner = { action -> action() },
+                        cancelRecoveryWaitWatchdog = {},
                         cancelUserWatchdog = watchdog::cancel,
                         removeRegistryObserver = { observer.incrementAndGet() },
                         releaseWakeLock = { wakeLock.incrementAndGet() },
