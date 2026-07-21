@@ -851,6 +851,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     _flow.update(() {
+      if (reservedGeneration != null) _flow.completeInteraction();
       _flow.activateGeneration(generation);
       _flow.resetTerminalEvent();
       _flow.clearBufferedProgress();
@@ -862,7 +863,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _lastFailureCode = null;
       _lastProcessRequest = null;
       _lastAudioExtractRequest = request;
-      _flow.setLastAudioExtractRequest(request);
       _taskOutputLocationLabel = request.outputLocationLabel;
       _actualVideoEncodingMode = ActualVideoEncodingMode.unknown;
     });
@@ -1179,6 +1179,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final taskStartedAt = startedAt ?? _now();
     _flow.update(() {
+      if (reservedGeneration != null) _flow.completeInteraction();
       _flow.activateGeneration(generation);
       _flow.resetTerminalEvent();
       _flow.clearBufferedProgress();

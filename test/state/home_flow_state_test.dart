@@ -123,14 +123,63 @@ void main() {
 
   test('failed invariant at an atomic boundary rolls state back', () {
     state.completeRestoration();
-    state.beginTaskPreparation();
-    state.beginTaskProcessing();
-    state.beginCancellation();
+    state.setErrorText('before');
+    state.setPublishedOutput(uri: 'content://before', fileName: 'before.mp4');
+    state.setTiming(
+      elapsed: const Duration(seconds: 3),
+      remaining: const Duration(seconds: 7),
+      etaStalled: false,
+    );
+    state.startProcessStopwatch();
+    state.bufferProgress(
+      const ProgressEvent(
+        taskId: 'retained-task',
+        percent: 10,
+        state: TaskState.running,
+      ),
+      generation: 0,
+    );
+    final elapsedBeforeUpdate = state.processElapsed!;
     var notifications = 0;
     state.addListener(() => notifications += 1);
 
     expect(
-      () => state.update(state.completeTaskLifecycle),
+      () => state.update(() {
+        final generation = state.advanceGeneration();
+        state.activateGeneration(generation);
+        state.beginAwaitingTaskId();
+        state.markTerminalEventHandled();
+        state.bufferProgress(
+          const ProgressEvent(
+            taskId: 'rolled-back-task',
+            percent: 90,
+            state: TaskState.success,
+          ),
+          generation: generation,
+        );
+        state.markProgressStreamClosed();
+        state.markOutputPublished();
+        state.setSelectedUri('content://after');
+        state.setTaskId('rolled-back-task');
+        state.setErrorText('after');
+        state.setPublishedOutput(
+          uri: 'content://after-output',
+          fileName: 'after.mp4',
+        );
+        state.setSelectedFromGallery(true);
+        state.markSourceDeleted();
+        state.beginMediaAction();
+        state.beginCapabilitiesLoad();
+        state.setTiming(
+          elapsed: const Duration(seconds: 30),
+          remaining: const Duration(seconds: 70),
+          etaStalled: true,
+        );
+        state.stopProcessStopwatch();
+        state.resetProcessStopwatch();
+        state.beginTaskPreparation();
+        state.beginCancellation();
+      }),
       throwsA(
         isA<StateError>().having(
           (error) => error.message,
@@ -140,8 +189,64 @@ void main() {
       ),
     );
 
-    expect(state.taskLifecycle, HomeTaskLifecycle.processing);
-    expect(state.cancelling, isTrue);
+    expect(state.generation, 0);
+    expect(state.activeGeneration, isNull);
+    expect(state.awaitingTaskId, isFalse);
+    expect(state.terminalEventHandled, isFalse);
+    expect(state.progressStreamClosed, isFalse);
+    expect(state.outputPublished, isFalse);
+    expect(state.selectedUri, isNull);
+    expect(state.taskId, isNull);
+    expect(state.errorText, 'before');
+    expect(state.publishedOutputUri, 'content://before');
+    expect(state.publishedOutputFileName, 'before.mp4');
+    expect(state.selectedFromGallery, isFalse);
+    expect(state.sourceDeleted, isFalse);
+    expect(state.mediaActionBusy, isFalse);
+    expect(state.capabilitiesLoading, isFalse);
+    expect(state.elapsed, const Duration(seconds: 3));
+    expect(state.remaining, const Duration(seconds: 7));
+    expect(state.etaStalled, isFalse);
+    expect(state.processStopwatchRunning, isTrue);
+    expect(state.processElapsed, greaterThanOrEqualTo(elapsedBeforeUpdate));
+    expect(state.taskLifecycle, HomeTaskLifecycle.idle);
+    expect(state.cancelling, isFalse);
+    expect(state.bufferedProgress.length, 1);
+    final retainedProgress = state.drainBufferedProgress();
+    expect(retainedProgress, hasLength(1));
+    expect(retainedProgress.single.taskId, 'retained-task');
+    expect(notifications, 0);
+  });
+
+  test('closure failure rolls all mutations back without notification', () {
+    state.completeRestoration();
+    state.setErrorText('before');
+    state.bufferProgress(
+      const ProgressEvent(
+        taskId: 'retained-task',
+        percent: 10,
+        state: TaskState.running,
+      ),
+      generation: 0,
+    );
+    var notifications = 0;
+    state.addListener(() => notifications += 1);
+
+    expect(
+      () => state.update(() {
+        state.advanceGeneration();
+        state.markTerminalEventHandled();
+        state.clearBufferedProgress();
+        state.setErrorText('after');
+        throw ArgumentError('forced failure');
+      }),
+      throwsArgumentError,
+    );
+
+    expect(state.generation, 0);
+    expect(state.terminalEventHandled, isFalse);
+    expect(state.bufferedProgress.length, 1);
+    expect(state.errorText, 'before');
     expect(notifications, 0);
   });
 
@@ -161,6 +266,65 @@ void main() {
     expect(emptySnapshot.taskKeyCount, 0);
     expect(state.bufferedProgress.length, 1);
     expect(state.bufferedProgress.taskKeyCount, 1);
+  });
+
+  test('progress buffer mutations are non-reactive orchestration state', () {
+    var notifications = 0;
+    state.addListener(() => notifications += 1);
+
+    state.bufferProgress(
+      const ProgressEvent(
+        taskId: 'task-1',
+        percent: 10,
+        state: TaskState.running,
+      ),
+      generation: 1,
+    );
+    expect(state.bufferedProgress.length, 1);
+    expect(notifications, 0);
+
+    final drained = state.drainBufferedProgress();
+    expect(drained, hasLength(1));
+    expect(() => drained.add(drained.single), throwsUnsupportedError);
+    expect(state.bufferedProgress.length, 0);
+    expect(notifications, 0);
+
+    state.bufferProgress(
+      const ProgressEvent(
+        taskId: 'task-2',
+        percent: 20,
+        state: TaskState.running,
+      ),
+      generation: 1,
+    );
+    state.clearBufferedProgress();
+    expect(state.bufferedProgress.length, 0);
+    expect(notifications, 0);
+  });
+
+  test('interaction cannot start while task lifecycle is non-idle', () {
+    state.completeRestoration();
+    state.beginTaskPreparation();
+
+    for (final beginInteraction in <void Function()>[
+      state.beginPickingSource,
+      state.beginSelectingOutputLocation,
+      state.beginValidatingDestination,
+    ]) {
+      expect(beginInteraction, throwsStateError);
+      expect(state.interactionPhase, HomeInteractionPhase.idle);
+      expect(state.taskLifecycle, HomeTaskLifecycle.preparing);
+    }
+  });
+
+  test('task lifecycle cannot start while interaction is non-idle', () {
+    state.completeRestoration();
+    state.beginPickingSource();
+
+    expect(state.beginTaskPreparation, throwsStateError);
+    expect(state.restoreTaskProcessing, throwsStateError);
+    expect(state.interactionPhase, HomeInteractionPhase.pickingSource);
+    expect(state.taskLifecycle, HomeTaskLifecycle.idle);
   });
 
   test('process stopwatch exposes facts and named controls only', () {

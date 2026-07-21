@@ -28,6 +28,14 @@ final class PendingProgressBufferSnapshot {
 final class _PendingProgressBuffer {
   _PendingProgressBuffer({this.maxTaskKeys = 8}) : assert(maxTaskKeys > 0);
 
+  _PendingProgressBuffer.copy(_PendingProgressBuffer other)
+    : maxTaskKeys = other.maxTaskKeys,
+      _sequence = other._sequence {
+    for (final entry in other._buckets.entries) {
+      _buckets[entry.key] = _PendingProgressBucket.copy(entry.value);
+    }
+  }
+
   final int maxTaskKeys;
   final LinkedHashMap<String, _PendingProgressBucket> _buckets =
       LinkedHashMap<String, _PendingProgressBucket>();
@@ -87,6 +95,12 @@ final class _PendingProgressBuffer {
 }
 
 final class _PendingProgressBucket {
+  _PendingProgressBucket();
+
+  _PendingProgressBucket.copy(_PendingProgressBucket other)
+    : running = other.running,
+      terminal = other.terminal;
+
   _SequencedProgress? running;
   _SequencedProgress? terminal;
 }
@@ -96,6 +110,37 @@ final class _SequencedProgress {
 
   final int sequence;
   final ProgressEvent event;
+}
+
+/// Rollback-safe timing state measured against one monotonic owner clock.
+@immutable
+final class _ProcessTimingState {
+  const _ProcessTimingState._({
+    required this.elapsedBeforeStart,
+    required this.startedAt,
+  });
+
+  const _ProcessTimingState.stopped(Duration elapsed)
+    : this._(elapsedBeforeStart: elapsed, startedAt: null);
+
+  const _ProcessTimingState.running(Duration now)
+    : this._(elapsedBeforeStart: Duration.zero, startedAt: now);
+
+  final Duration elapsedBeforeStart;
+  final Duration? startedAt;
+
+  bool get isRunning => startedAt != null;
+
+  Duration elapsedAt(Duration now) =>
+      elapsedBeforeStart +
+      (startedAt == null ? Duration.zero : now - startedAt!);
+
+  _ProcessTimingState stopAt(Duration now) =>
+      _ProcessTimingState.stopped(elapsedAt(now));
+
+  _ProcessTimingState resetAt(Duration now) => isRunning
+      ? _ProcessTimingState.running(now)
+      : const _ProcessTimingState.stopped(Duration.zero);
 }
 
 /// Mutually exclusive interaction and preflight work owned by the home page.
@@ -120,7 +165,7 @@ final class HomeFlowState extends ChangeNotifier {
   int? _activeGeneration;
   bool _awaitingTaskId = false;
   bool _terminalEventHandled = false;
-  final _PendingProgressBuffer _bufferedProgress = _PendingProgressBuffer();
+  _PendingProgressBuffer _bufferedProgress = _PendingProgressBuffer();
 
   HomeInteractionPhase _interactionPhase = HomeInteractionPhase.idle;
   HomeTaskLifecycle _taskLifecycle = HomeTaskLifecycle.idle;
@@ -157,8 +202,8 @@ final class HomeFlowState extends ChangeNotifier {
   int _customAudioBitrate = 128000;
   AudioExtractMode _audioExtractMode = AudioExtractMode.copy;
   int _audioExtractBitrate = 128000;
-  AudioExtractRequest? _lastAudioExtractRequest;
-  Stopwatch? _processStopwatch;
+  final Stopwatch _processClock = Stopwatch()..start();
+  _ProcessTimingState? _processTiming;
 
   int get generation => _generation;
   int? get activeGeneration => _activeGeneration;
@@ -217,9 +262,9 @@ final class HomeFlowState extends ChangeNotifier {
   int get customAudioBitrate => _customAudioBitrate;
   AudioExtractMode get audioExtractMode => _audioExtractMode;
   int get audioExtractBitrate => _audioExtractBitrate;
-  AudioExtractRequest? get lastAudioExtractRequest => _lastAudioExtractRequest;
-  Duration? get processElapsed => _processStopwatch?.elapsed;
-  bool get processStopwatchRunning => _processStopwatch?.isRunning ?? false;
+  Duration? get processElapsed =>
+      _processTiming?.elapsedAt(_processClock.elapsed);
+  bool get processStopwatchRunning => _processTiming?.isRunning ?? false;
 
   bool get interactionLocked =>
       _restoringTask ||
@@ -237,13 +282,13 @@ final class HomeFlowState extends ChangeNotifier {
   void update(VoidCallback mutation) {
     if (_disposed) return;
     final isRoot = _updateDepth == 0;
-    final previous = isRoot ? _InvariantSnapshot.capture(this) : null;
+    final previous = _HomeFlowStateSnapshot.capture(this);
     _updateDepth += 1;
     try {
       mutation();
       if (isRoot) _validateInvariants();
     } catch (_) {
-      if (isRoot) previous!.restore(this);
+      previous.restore(this);
       rethrow;
     } finally {
       _updateDepth -= 1;
@@ -291,8 +336,8 @@ final class HomeFlowState extends ChangeNotifier {
         'Task preparation requires an idle lifecycle, not $_taskLifecycle.',
       );
     }
+    _requireIdleInteraction('Task preparation');
     _mutate(() {
-      _interactionPhase = HomeInteractionPhase.idle;
       _taskLifecycle = HomeTaskLifecycle.preparing;
       _cancelling = false;
       _percent = 0;
@@ -321,10 +366,8 @@ final class HomeFlowState extends ChangeNotifier {
 
   /// Binds a native snapshot that was already running before this UI existed.
   void restoreTaskProcessing() {
-    _mutate(() {
-      _interactionPhase = HomeInteractionPhase.idle;
-      _taskLifecycle = HomeTaskLifecycle.processing;
-    });
+    _requireIdleInteraction('Task restoration');
+    _mutate(() => _taskLifecycle = HomeTaskLifecycle.processing);
   }
 
   void beginTaskFinishing() {
@@ -404,7 +447,8 @@ final class HomeFlowState extends ChangeNotifier {
   }
 
   void bufferProgress(ProgressEvent event, {required int generation}) {
-    _mutate(() => _bufferedProgress.add(event, generation: generation));
+    if (_disposed) return;
+    _bufferedProgress.add(event, generation: generation);
   }
 
   List<ProgressEvent> drainBufferedProgress() {
@@ -413,7 +457,8 @@ final class HomeFlowState extends ChangeNotifier {
   }
 
   void clearBufferedProgress() {
-    _mutate(_bufferedProgress.clear);
+    if (_disposed) return;
+    _bufferedProgress.clear();
   }
 
   void markProgressStreamClosed() {
@@ -596,20 +641,28 @@ final class HomeFlowState extends ChangeNotifier {
     _mutate(() => _audioExtractBitrate = bitrate);
   }
 
-  void setLastAudioExtractRequest(AudioExtractRequest? request) {
-    _mutate(() => _lastAudioExtractRequest = request);
-  }
-
   void startProcessStopwatch() {
-    _mutate(() => _processStopwatch = Stopwatch()..start());
+    _mutate(
+      () => _processTiming = _ProcessTimingState.running(_processClock.elapsed),
+    );
   }
 
   void stopProcessStopwatch() {
-    _mutate(() => _processStopwatch?.stop());
+    _mutate(() {
+      final timing = _processTiming;
+      if (timing != null && timing.isRunning) {
+        _processTiming = timing.stopAt(_processClock.elapsed);
+      }
+    });
   }
 
   void resetProcessStopwatch() {
-    _mutate(() => _processStopwatch?.reset());
+    _mutate(() {
+      final timing = _processTiming;
+      if (timing != null) {
+        _processTiming = timing.resetAt(_processClock.elapsed);
+      }
+    });
   }
 
   void resetWorkflow() {
@@ -628,7 +681,6 @@ final class HomeFlowState extends ChangeNotifier {
       _activeTaskKind = TaskKind.videoCompression;
       _audioExtractMode = AudioExtractMode.copy;
       _audioExtractBitrate = 128000;
-      _lastAudioExtractRequest = null;
       _sourceInfo = null;
       _outputInfo = null;
       _outputAudioInfo = null;
@@ -648,12 +700,26 @@ final class HomeFlowState extends ChangeNotifier {
     HomeInteractionPhase next, {
     required Set<HomeInteractionPhase> allowedFrom,
   }) {
+    if (next != HomeInteractionPhase.idle &&
+        _taskLifecycle != HomeTaskLifecycle.idle) {
+      throw StateError(
+        'Interaction requires an idle task lifecycle, not $_taskLifecycle.',
+      );
+    }
     if (!allowedFrom.contains(_interactionPhase)) {
       throw StateError(
         'Cannot transition interaction from $_interactionPhase to $next.',
       );
     }
     _mutate(() => _interactionPhase = next);
+  }
+
+  void _requireIdleInteraction(String operation) {
+    if (_interactionPhase != HomeInteractionPhase.idle) {
+      throw StateError(
+        '$operation requires an idle interaction, not $_interactionPhase.',
+      );
+    }
   }
 
   void _mutate(VoidCallback mutation) {
@@ -666,6 +732,12 @@ final class HomeFlowState extends ChangeNotifier {
   }
 
   void _validateInvariants() {
+    if (_interactionPhase != HomeInteractionPhase.idle &&
+        _taskLifecycle != HomeTaskLifecycle.idle) {
+      throw StateError(
+        'Interaction and task lifecycle cannot both be non-idle.',
+      );
+    }
     if (_nativeOwnershipUncertain && !_restoringTask) {
       throw StateError(
         'Uncertain native ownership must retain the restoration overlay.',
@@ -680,38 +752,180 @@ final class HomeFlowState extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _bufferedProgress.clear();
+    _processClock.stop();
     super.dispose();
   }
 }
 
-final class _InvariantSnapshot {
-  const _InvariantSnapshot({
+final class _HomeFlowStateSnapshot {
+  const _HomeFlowStateSnapshot({
+    required this.generation,
+    required this.activeGeneration,
+    required this.awaitingTaskId,
+    required this.terminalEventHandled,
+    required this.bufferedProgress,
     required this.interactionPhase,
     required this.taskLifecycle,
     required this.restoringTask,
     required this.nativeOwnershipUncertain,
     required this.cancelling,
+    required this.progressStreamClosed,
+    required this.outputPublished,
+    required this.selectedFromGallery,
+    required this.sourceDeleted,
+    required this.mediaActionBusy,
+    required this.capabilitiesLoading,
+    required this.etaStalled,
+    required this.activeTaskKind,
+    required this.taskPhase,
+    required this.percent,
+    required this.elapsed,
+    required this.remaining,
+    required this.selectedUri,
+    required this.taskId,
+    required this.errorText,
+    required this.publishedOutputUri,
+    required this.publishedOutputFileName,
+    required this.sourceInfo,
+    required this.outputInfo,
+    required this.outputAudioInfo,
+    required this.capabilities,
+    required this.selectedPreset,
+    required this.customResolution,
+    required this.customCodec,
+    required this.customVideoBitrate,
+    required this.customAudioMode,
+    required this.customAudioBitrate,
+    required this.audioExtractMode,
+    required this.audioExtractBitrate,
+    required this.processTiming,
   });
 
-  factory _InvariantSnapshot.capture(HomeFlowState state) => _InvariantSnapshot(
-    interactionPhase: state._interactionPhase,
-    taskLifecycle: state._taskLifecycle,
-    restoringTask: state._restoringTask,
-    nativeOwnershipUncertain: state._nativeOwnershipUncertain,
-    cancelling: state._cancelling,
-  );
+  factory _HomeFlowStateSnapshot.capture(HomeFlowState state) =>
+      _HomeFlowStateSnapshot(
+        generation: state._generation,
+        activeGeneration: state._activeGeneration,
+        awaitingTaskId: state._awaitingTaskId,
+        terminalEventHandled: state._terminalEventHandled,
+        bufferedProgress: _PendingProgressBuffer.copy(state._bufferedProgress),
+        interactionPhase: state._interactionPhase,
+        taskLifecycle: state._taskLifecycle,
+        restoringTask: state._restoringTask,
+        nativeOwnershipUncertain: state._nativeOwnershipUncertain,
+        cancelling: state._cancelling,
+        progressStreamClosed: state._progressStreamClosed,
+        outputPublished: state._outputPublished,
+        selectedFromGallery: state._selectedFromGallery,
+        sourceDeleted: state._sourceDeleted,
+        mediaActionBusy: state._mediaActionBusy,
+        capabilitiesLoading: state._capabilitiesLoading,
+        etaStalled: state._etaStalled,
+        activeTaskKind: state._activeTaskKind,
+        taskPhase: state._taskPhase,
+        percent: state._percent,
+        elapsed: state._elapsed,
+        remaining: state._remaining,
+        selectedUri: state._selectedUri,
+        taskId: state._taskId,
+        errorText: state._errorText,
+        publishedOutputUri: state._publishedOutputUri,
+        publishedOutputFileName: state._publishedOutputFileName,
+        sourceInfo: state._sourceInfo,
+        outputInfo: state._outputInfo,
+        outputAudioInfo: state._outputAudioInfo,
+        capabilities: state._capabilities,
+        selectedPreset: state._selectedPreset,
+        customResolution: state._customResolution,
+        customCodec: state._customCodec,
+        customVideoBitrate: state._customVideoBitrate,
+        customAudioMode: state._customAudioMode,
+        customAudioBitrate: state._customAudioBitrate,
+        audioExtractMode: state._audioExtractMode,
+        audioExtractBitrate: state._audioExtractBitrate,
+        processTiming: state._processTiming,
+      );
 
+  final int generation;
+  final int? activeGeneration;
+  final bool awaitingTaskId;
+  final bool terminalEventHandled;
+  final _PendingProgressBuffer bufferedProgress;
   final HomeInteractionPhase interactionPhase;
   final HomeTaskLifecycle taskLifecycle;
   final bool restoringTask;
   final bool nativeOwnershipUncertain;
   final bool cancelling;
+  final bool progressStreamClosed;
+  final bool outputPublished;
+  final bool selectedFromGallery;
+  final bool sourceDeleted;
+  final bool mediaActionBusy;
+  final bool capabilitiesLoading;
+  final bool etaStalled;
+  final TaskKind activeTaskKind;
+  final TaskPhase taskPhase;
+  final double percent;
+  final Duration elapsed;
+  final Duration? remaining;
+  final String? selectedUri;
+  final String? taskId;
+  final String? errorText;
+  final String? publishedOutputUri;
+  final String? publishedOutputFileName;
+  final VideoInfo? sourceInfo;
+  final VideoInfo? outputInfo;
+  final AudioInfo? outputAudioInfo;
+  final DeviceCapabilities? capabilities;
+  final CompressionPreset? selectedPreset;
+  final CompressionResolution customResolution;
+  final VideoCodec customCodec;
+  final int customVideoBitrate;
+  final CompressionAudioMode customAudioMode;
+  final int customAudioBitrate;
+  final AudioExtractMode audioExtractMode;
+  final int audioExtractBitrate;
+  final _ProcessTimingState? processTiming;
 
   void restore(HomeFlowState state) {
+    state._generation = generation;
+    state._activeGeneration = activeGeneration;
+    state._awaitingTaskId = awaitingTaskId;
+    state._terminalEventHandled = terminalEventHandled;
+    state._bufferedProgress = _PendingProgressBuffer.copy(bufferedProgress);
     state._interactionPhase = interactionPhase;
     state._taskLifecycle = taskLifecycle;
     state._restoringTask = restoringTask;
     state._nativeOwnershipUncertain = nativeOwnershipUncertain;
     state._cancelling = cancelling;
+    state._progressStreamClosed = progressStreamClosed;
+    state._outputPublished = outputPublished;
+    state._selectedFromGallery = selectedFromGallery;
+    state._sourceDeleted = sourceDeleted;
+    state._mediaActionBusy = mediaActionBusy;
+    state._capabilitiesLoading = capabilitiesLoading;
+    state._etaStalled = etaStalled;
+    state._activeTaskKind = activeTaskKind;
+    state._taskPhase = taskPhase;
+    state._percent = percent;
+    state._elapsed = elapsed;
+    state._remaining = remaining;
+    state._selectedUri = selectedUri;
+    state._taskId = taskId;
+    state._errorText = errorText;
+    state._publishedOutputUri = publishedOutputUri;
+    state._publishedOutputFileName = publishedOutputFileName;
+    state._sourceInfo = sourceInfo;
+    state._outputInfo = outputInfo;
+    state._outputAudioInfo = outputAudioInfo;
+    state._capabilities = capabilities;
+    state._selectedPreset = selectedPreset;
+    state._customResolution = customResolution;
+    state._customCodec = customCodec;
+    state._customVideoBitrate = customVideoBitrate;
+    state._customAudioMode = customAudioMode;
+    state._customAudioBitrate = customAudioBitrate;
+    state._audioExtractMode = audioExtractMode;
+    state._audioExtractBitrate = audioExtractBitrate;
+    state._processTiming = processTiming;
   }
 }
