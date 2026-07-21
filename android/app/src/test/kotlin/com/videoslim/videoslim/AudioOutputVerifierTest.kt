@@ -222,6 +222,56 @@ class AudioOutputVerifierTest {
     }
 
     @Test
+    fun `indexed lossless payload requires exact source copy and output aggregates`() {
+        val source = validMetadata().copy(usesIndexedPhysicalSampleSizes = true)
+        val output = source.copy(sourceUri = "output.m4a", fileName = "output.m4a")
+        val copy = copyResult(source, usesIndexedPhysicalSampleSizes = true)
+
+        requireLosslessPayloadAggregateIntegrity(source, copy, output)
+
+        listOf(
+            copy.copy(sampleCount = copy.sampleCount - 1L),
+            copy.copy(totalBytes = copy.totalBytes - 1L),
+            copy.copy(usesIndexedPhysicalSampleSizes = false),
+        ).forEach { invalid ->
+            assertThrows(IOException::class.java) {
+                requireLosslessPayloadAggregateIntegrity(source, invalid, output)
+            }
+        }
+        assertThrows(IOException::class.java) {
+            requireLosslessPayloadAggregateIntegrity(
+                source,
+                copy,
+                output.copy(sampleBytes = output.sampleBytes - 1L),
+            )
+        }
+    }
+
+    @Test
+    fun `legacy lossless payload fails closed unless all sentinel bounded aggregates agree`() {
+        val source = validMetadata().copy(usesIndexedPhysicalSampleSizes = false)
+        val copy = copyResult(source, usesIndexedPhysicalSampleSizes = false)
+        val output = source.copy(sourceUri = "legacy-output.m4a", fileName = "legacy-output.m4a")
+
+        requireLosslessPayloadAggregateIntegrity(source, copy, output)
+
+        assertThrows(IOException::class.java) {
+            requireLosslessPayloadAggregateIntegrity(
+                source,
+                copy,
+                output.copy(sampleCount = output.sampleCount + 1L),
+            )
+        }
+        assertThrows(IOException::class.java) {
+            requireLosslessPayloadAggregateIntegrity(
+                source.copy(usesIndexedPhysicalSampleSizes = true),
+                copy,
+                output,
+            )
+        }
+    }
+
+    @Test
     fun `non AAC verification does not impose an AAC profile`() {
         val opus = validMetadata().copy(audioMime = "audio/opus", audioProfile = null)
 
@@ -230,6 +280,19 @@ class AudioOutputVerifierTest {
             AudioOutputVerifier.requireValid(opus, AudioOutputVerifier.AAC_MIME)
         }
     }
+
+    private fun copyResult(
+        metadata: AudioMetadata,
+        usesIndexedPhysicalSampleSizes: Boolean,
+    ) = EncodedAudioCopyResult(
+        sampleCount = metadata.sampleCount,
+        totalBytes = metadata.sampleBytes,
+        firstInputTimeUs = requireNotNull(metadata.firstSampleTimeUs),
+        lastInputTimeUs = requireNotNull(metadata.lastSampleTimeUs),
+        lastOutputTimeUs =
+            requireNotNull(metadata.lastSampleTimeUs) - requireNotNull(metadata.firstSampleTimeUs),
+        usesIndexedPhysicalSampleSizes = usesIndexedPhysicalSampleSizes,
+    )
 
     private fun shortValidMetadata() =
         AudioMetadata(

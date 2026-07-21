@@ -6,6 +6,8 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.net.Uri
+import android.os.Build
+import androidx.annotation.RequiresApi
 import java.io.File
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -77,7 +79,11 @@ internal class LosslessAudioExtractor(context: Context) {
             muxerStarted = true
             val copyResult =
                 copyEncodedAudioSamples(
-                    source = MediaExtractorSampleSource(extractor),
+                    source =
+                    MediaExtractorSampleSource(
+                        access = FrameworkMediaExtractorSampleAccess(extractor),
+                        supportsIndexedSampleSize = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P,
+                    ),
                     sink = MediaMuxerSampleSink(activeMuxer, outputTrack),
                     durationUs = durationUs,
                     requestedBufferBytes = bufferBytes,
@@ -119,18 +125,46 @@ internal class LosslessAudioExtractor(context: Context) {
 
 internal fun isSupportedLosslessCopyFormat(mime: String?, profile: Int?): Boolean =
     mime == AudioOutputVerifier.AAC_MIME && AudioOutputVerifier.isSupportedCopyProfile(profile)
+internal interface MediaExtractorSampleAccess {
+    val sampleTime: Long
+    val sampleFlags: Int
+    val sampleSize: Long
 
-private class MediaExtractorSampleSource(
+    fun readSampleData(buffer: ByteBuffer): Int
+
+    fun advance(): Boolean
+}
+
+private class FrameworkMediaExtractorSampleAccess(
     private val extractor: MediaExtractor,
-) : EncodedAudioSampleSource {
-    override val sampleTimeUs: Long
-        get() = extractor.sampleTime
-    override val sampleFlags: Int
-        get() = extractor.sampleFlags
+) : MediaExtractorSampleAccess {
+    override val sampleTime: Long get() = extractor.sampleTime
+    override val sampleFlags: Int get() = extractor.sampleFlags
+
+    @get:RequiresApi(Build.VERSION_CODES.P)
+    override val sampleSize: Long get() = extractor.sampleSize
 
     override fun readSampleData(buffer: ByteBuffer): Int = extractor.readSampleData(buffer, 0)
 
     override fun advance(): Boolean = extractor.advance()
+}
+
+internal class MediaExtractorSampleSource(
+    private val access: MediaExtractorSampleAccess,
+    private val supportsIndexedSampleSize: Boolean,
+) : EncodedAudioSampleSource {
+    override val sampleTimeUs: Long
+        get() = access.sampleTime
+
+    override val sampleFlags: Int
+        get() = access.sampleFlags
+
+    override val indexedSampleSize: Long?
+        get() = if (supportsIndexedSampleSize) access.sampleSize else null
+
+    override fun readSampleData(buffer: ByteBuffer): Int = access.readSampleData(buffer)
+
+    override fun advance(): Boolean = access.advance()
 }
 
 private class MediaMuxerSampleSink(

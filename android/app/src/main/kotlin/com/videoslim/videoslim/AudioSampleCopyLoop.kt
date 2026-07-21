@@ -11,6 +11,8 @@ internal const val MAX_AUDIO_SAMPLE_BUFFER_BYTES = 4 * 1024 * 1024
 internal interface EncodedAudioSampleSource {
     val sampleTimeUs: Long
     val sampleFlags: Int
+    /** Exact indexed sample size on API 28+, or null for the legacy sentinel path. */
+    val indexedSampleSize: Long?
 
     fun readSampleData(buffer: ByteBuffer): Int
 
@@ -37,6 +39,7 @@ internal data class EncodedAudioCopyResult(
     val firstInputTimeUs: Long,
     val lastInputTimeUs: Long,
     val lastOutputTimeUs: Long,
+    val usesIndexedPhysicalSampleSizes: Boolean,
 )
 
 internal fun boundedAudioSampleBufferSize(declaredMaxInputSize: Int?): Int {
@@ -61,7 +64,8 @@ internal fun copyEncodedAudioSamples(
     require(requestedBufferBytes in 1..MAX_AUDIO_SAMPLE_BUFFER_BYTES) {
         "Audio sample buffer must be positive and bounded"
     }
-    val buffer = ByteBuffer.allocate(requestedBufferBytes)
+    val buffer = ByteBuffer.allocate(requestedBufferBytes + 1)
+    var indexedSizeMode: Boolean? = null
     var firstInputTimeUs: Long? = null
     var lastOutputTimeUs = -1L
     var sampleCount = 0L
@@ -77,13 +81,28 @@ internal fun copyEncodedAudioSamples(
         if (lastInputTimeUs >= 0L && inputTimeUs <= lastInputTimeUs) {
             throw IOException("Source audio sample timestamps are not strictly monotonic")
         }
+        val indexedSampleSize = source.indexedSampleSize
+        val thisSampleUsesIndex = indexedSampleSize != null
+        if (indexedSizeMode != null && indexedSizeMode != thisSampleUsesIndex) {
+            throw IOException("Audio sample-size evidence changed during copy")
+        }
+        indexedSizeMode = thisSampleUsesIndex
+        if (
+            indexedSampleSize != null &&
+            (indexedSampleSize <= 0L || indexedSampleSize > requestedBufferBytes.toLong())
+        ) {
+            throw IOException("Indexed audio sample size is outside the bounded copy buffer")
+        }
         buffer.clear()
         val size = source.readSampleData(buffer)
-        if (size > buffer.capacity()) {
+        if (size > requestedBufferBytes) {
             throw IOException("Audio sample exceeds the bounded copy buffer")
         }
         if (size <= 0) {
             throw IOException("Source audio sample payload is unreadable")
+        }
+        if (indexedSampleSize != null && size.toLong() != indexedSampleSize) {
+            throw IOException("Physical audio sample read does not match indexed sample size")
         }
         if (shouldCancel() || Thread.currentThread().isInterrupted) {
             throw CancellationException("Audio extraction cancelled before sample write")
@@ -127,5 +146,6 @@ internal fun copyEncodedAudioSamples(
         firstInputTimeUs = firstInputTimeUs,
         lastInputTimeUs = lastInputTimeUs,
         lastOutputTimeUs = lastOutputTimeUs,
+        usesIndexedPhysicalSampleSizes = indexedSizeMode == true,
     )
 }

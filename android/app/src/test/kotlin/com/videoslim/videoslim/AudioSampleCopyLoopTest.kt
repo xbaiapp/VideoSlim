@@ -131,10 +131,78 @@ class AudioSampleCopyLoopTest {
         assertTrue(progress.isEmpty())
     }
 
+    @Test
+    fun `indexed copy rejects zero negative short over-index and over-cap physical reads`() {
+        fun rejects(sample: Sample, requestedBufferBytes: Int = 8) {
+            assertThrows(IOException::class.java) {
+                copyEncodedAudioSamples(
+                    source = FakeSource(listOf(sample)),
+                    sink = FakeSink(),
+                    durationUs = 1_000L,
+                    requestedBufferBytes = requestedBufferBytes,
+                    shouldCancel = { false },
+                )
+            }
+        }
+
+        rejects(Sample(byteArrayOf(1), 0L, 0, indexedSize = 0L))
+        rejects(Sample(byteArrayOf(1), 0L, 0, indexedSize = -1L))
+        rejects(Sample(byteArrayOf(), 0L, 0, indexedSize = 1L, readResult = 0))
+        rejects(Sample(byteArrayOf(), 0L, 0, indexedSize = 1L, readResult = -1))
+        rejects(Sample(byteArrayOf(1, 2), 0L, 0, indexedSize = 3L))
+        rejects(Sample(byteArrayOf(1, 2, 3), 0L, 0, indexedSize = 2L))
+        rejects(Sample(ByteArray(9), 0L, 0, indexedSize = 9L))
+    }
+
+    @Test
+    fun `legacy copy uses a sentinel byte and rejects over-bound buffer filling ambiguity`() {
+        assertThrows(IOException::class.java) {
+            copyEncodedAudioSamples(
+                source = FakeSource(listOf(Sample(ByteArray(9), 0L, 0, indexedSize = null))),
+                sink = FakeSink(),
+                durationUs = 1_000L,
+                requestedBufferBytes = 8,
+                shouldCancel = { false },
+            )
+        }
+
+        val accepted =
+            copyEncodedAudioSamples(
+                source = FakeSource(listOf(Sample(ByteArray(8), 0L, 0, indexedSize = null))),
+                sink = FakeSink(),
+                durationUs = 1_000L,
+                requestedBufferBytes = 8,
+                shouldCancel = { false },
+            )
+        assertEquals(8L, accepted.totalBytes)
+        assertEquals(false, accepted.usesIndexedPhysicalSampleSizes)
+    }
+
+    @Test
+    fun `copy rejects a stream that mixes indexed and legacy size evidence`() {
+        assertThrows(IOException::class.java) {
+            copyEncodedAudioSamples(
+                source =
+                    FakeSource(
+                        listOf(
+                            Sample(byteArrayOf(1), 0L, 0, indexedSize = 1L),
+                            Sample(byteArrayOf(2), 1_000L, 0, indexedSize = null),
+                        ),
+                    ),
+                sink = FakeSink(),
+                durationUs = 2_000L,
+                requestedBufferBytes = 8,
+                shouldCancel = { false },
+            )
+        }
+    }
+
     private data class Sample(
         val bytes: ByteArray,
         val presentationTimeUs: Long,
         val flags: Int,
+        val indexedSize: Long? = bytes.size.toLong(),
+        val readResult: Int = bytes.size,
     )
 
     private class FakeSource(
@@ -146,11 +214,13 @@ class AudioSampleCopyLoopTest {
             get() = samples.getOrNull(index)?.presentationTimeUs ?: -1L
         override val sampleFlags: Int
             get() = samples.getOrNull(index)?.flags ?: 0
+        override val indexedSampleSize: Long?
+            get() = samples.getOrNull(index)?.indexedSize
 
         override fun readSampleData(buffer: ByteBuffer): Int {
             val sample = samples.getOrNull(index) ?: return -1
-            buffer.put(sample.bytes)
-            return sample.bytes.size
+            if (sample.readResult > 0) buffer.put(sample.bytes)
+            return sample.readResult
         }
 
         override fun advance(): Boolean {

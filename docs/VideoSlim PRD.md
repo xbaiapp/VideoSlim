@@ -2,8 +2,8 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.6（M3 音频提取实现与验收契约冻结） |
-| 日期 | 2026-07-20 |
+| 文档版本 | v1.7（M3 发布恢复、无损 payload 与 Flutter 所有权契约冻结） |
+| 日期 | 2026-07-21 |
 | 状态 | M2 `ACCEPTED — private scope`；M3 非真机发布证据按精确 SHA 归档，Pixel/硬件验收在无连接设备时保持未认领 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
@@ -169,7 +169,8 @@
 **模式 A：AAC copy（默认）**
 - 只接受有明确 profile 证据的 AAC-LC、HE-AAC 或 HE-AAC-v2，Android 轨道 MIME 必须为 `audio/mp4a-latm`；其他音频编码稳定返回 `AUDIO_COPY_UNSUPPORTED`，提示用户显式改用 AAC 模式，不得静默降级。
 - 使用 `MediaExtractor` 选中第一音轨，逐 sample 写入 `MediaMuxer` 的 MPEG-4 容器形成 `.m4a`；这是纯 sample copy，**不创建音频 Decoder 或 Encoder**，零转码、零质量损失。
-- 保留 sample 相对时间戳并把第一条有效音频 sample 归零；源 PTS 必须严格单调，重复或回退立即失败，禁止用 clamp/递增改写掩盖坏源。发布前逐 sample 使用有界 `readSampleData` 证明索引 payload 可完整物理读取；有 `sampleSize` 时物理读数必须严格相等，并拒绝负数、零、短读、超读/超界读，确认 payload bytes 不超过物理文件 bytes。
+- 保留 sample 相对时间戳并把第一条有效音频 sample 归零；源 PTS 必须严格单调，重复或回退立即失败，禁止用 clamp/递增改写掩盖坏源。copy 当步逐 sample 使用有界 `readSampleData` 证明索引 payload 可完整物理读取：API 28+ 的物理读数必须与 `sampleSize` 严格相等；API 26–27 使用“上限 + 1 sentinel byte”，拒绝负数、零、短读、超索引、超上限及任何填满 sentinel 的歧义读数。单一 copy 不允许在 indexed 与 legacy 证据模式间切换。
+- 发布前把源文件物理预扫描、实际 copy 结果与输出文件物理复扫绑定为同一 payload 契约。三者 sample count 与 payload-byte aggregate 必须严格相等；API 28+ 同时要求 indexed-size 证据一致，API 26–27 只在三次独立 sentinel-bounded 物理扫描完全一致时通过。该检查是 profile、严格 PTS、完整 timeline、frame-aware 末帧覆盖和 sparse-gap 检查之外的附加门禁，不得替代或放宽它们。
 
 **模式 B：AAC 强制重编码**
 - 固定提供 AAC-LC `192 / 128 / 96 / 64 kbps` 四档，对应请求值 `192000 / 128000 / 96000 / 64000` bps；默认 128 kbps。
@@ -215,13 +216,14 @@
 - 进度来源：视频/AAC 转码使用 Media3 Transformer 进度，音频 copy 按已复制 sample 时间戳/源音轨 span 计算；统一经 EventChannel 推送至 Flutter，事件必须携带 `taskKind`；
 - **取消**：立即停止当前处理、删除临时文件与半成品输出；
 - **失败处理**：错误分类映射为用户可读文案（存储不足 / 编码器初始化失败 / 源文件损坏 / 未知错误+原始错误码），失败后清理临时文件；
-- **异常退出恢复清理（M2 必做）**：每个任务在应用私有持久化存储中维护最小任务日志，至少记录 `taskId`、阶段、私有临时文件标识、已分配的 MediaStore URI（如有）和开始时间；任何 API 路径（含 Android 8～9 legacy）在公共 URI 分配后必须先同步持久化该 URI，再查询/记录丰富 target 字段、复制 bytes 或执行后续发布工作；任务成功完成且临时文件已删除后再清除该记录；
+- **异常退出恢复清理（M2 必做）**：每个任务在应用私有持久化存储中维护最小任务日志，至少记录 `taskId`、阶段、私有临时文件标识、已分配的 MediaStore URI（如有）和开始时间；任何 API 路径（含 Android 8～9 legacy）在公共 URI 分配后必须先同步持久化该 URI，再查询/记录丰富 target 字段、复制 bytes 或执行后续发布工作。URI-only callback 合法地把 `TRANSFORMING` 推进到 `ALLOCATED`；随后的完整 target callback 只能以同一 URI、media kind、实际文件名及 canonical legacy path 单调 enrich 为 `PUBLISHING`，冲突 URI/名称/路径必须失败。任务成功完成且临时文件已删除后再清除该记录；
 - App/处理服务启动时先与实际活动任务对账。若任务日志存在但已无对应活动任务，可删除由私有目录边界证明所有权的临时文件；公共输出只有在**当前对象**所有权可被不可变证据证明时才允许删除。`ALLOCATED` 阶段、相同 SAF URI、相同 legacy MediaStore URI/名称/路径都不单独授予删除权。Android 8～9 无法区分原半成品与同 URI/路径被替换写入的新对象，因此所有未发布 legacy 记录一律进入 durable quarantine、释放 active journal 槽但不删除公共对象；`PUBLISHED` 只保留输出并清理过期日志；
 - 启动对账后扫描**仅限 App 自有**的 `cache/transcode/`：删除未被当前活动任务引用的孤儿文件；清理为 best-effort，失败写入 F19 日志但不得阻塞启动或覆盖业务结果；严禁扫描或删除用户其他目录、无日志归属的公共媒体以及已经成功发布的输出；
 - 同一时间只允许一个媒体处理任务（视频压缩或音频提取，P0 阶段），新任务需等待或取消当前任务。
-- Flutter 的 snapshot/源 metadata 恢复、初始音频/视频目的地预检、音频普通/AAC 重试和视频普通/兼容重试都属于同一全局 interaction lock；每次 `await` 后必须重新证明 generation、EventChannel、源、目的地 revision 与发布状态所有权。EventChannel 在 native task 尚未提交时关闭也必须使预检 generation 失效并释放锁，禁止随后提交捕获的旧请求。
+- Flutter 的 snapshot/源 metadata 恢复、初始音频/视频目的地预检、音频普通/AAC 重试和视频普通/兼容重试都属于同一全局 interaction lock；每次 `await` 后必须重新证明 generation、EventChannel、源、目的地 revision 与发布状态所有权。恢复 snapshot 查询失败时，native 任务存在性未知，必须保守保持全局锁，直到原生明确返回 no-task、接受取消或应用重启重新对账；仅源 metadata 恢复失败不能丢弃已证明的 native task。EventChannel 在 native task 尚未提交时**关闭**仍使预检 generation 失效并释放锁；但 task 已保留后收到可恢复/格式错误必须 snapshot reconcile/rebind 或保持 uncertain lock，不得调用 `_failGeneration` 遗忘仍可能运行的 native task，迟到的 MethodChannel task ID/结果仍须按 generation 关联。并发 reconcile 以最新 query epoch 为准，匹配 task/kind 的进度是 native liveness 证据，可使迟到的 null/error snapshot 失效。
+- task ID 或恢复 metadata 未确定期间的进度暂存必须按 generation/task/kind 有界 coalesce：每个保留 key 最多保存最新 running 与首个 terminal，terminal 后忽略 running 回退；全局 key 数有固定上限。恢复后按接收序回放，并以 snapshot 的 task/kind/phase/percent 判定新旧，禁止无界 `List` 随事件量增长。
 
-**验收标准**：M2 已按 Pixel 当前私有使用场景接受；进度、正常失败/取消清理、任务恢复和发布所有权边界保持为产品契约。接近 6 小时、接近 50 GB、持续后台至完成、转码/发布强杀、连续 10 次异常中断、多 Provider 与多 SoC 的组合矩阵保留为 non-blocking hardening：未实际执行不得标为 PASS，补证前不得据此扩大生产支持范围，但不阻止 M3。
+**验收标准**：M2 已按 Pixel 当前私有使用场景接受；进度、正常失败/取消清理、任务恢复和发布所有权边界保持为产品契约。M3 当前服务器门禁只能证明源码、host JVM/Flutter 行为与 APK 可组装，不能替代 API 26–28/Pixel/GrapheneOS 的物理设备验收。接近 6 小时、接近 50 GB、持续后台至完成、转码/发布强杀、连续 10 次异常中断、多 Provider 与多 SoC 的组合矩阵保留为 non-blocking hardening：未实际执行不得标为 PASS，补证前不得据此扩大生产支持范围，但不阻止 M3 候选准备。
 
 ### F7 输出与结果
 

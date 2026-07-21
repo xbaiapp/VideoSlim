@@ -33,6 +33,22 @@ data class TaskRecoveryRecord(
     val journalVersion: Int = 2,
 )
 
+internal interface PublicationRecoveryJournal {
+    fun recordPublicationAllocation(taskId: String, publicationUri: String): TaskRecoveryRecord
+
+    fun recordPublicationTarget(
+        taskId: String,
+        actualOutputDisplayName: String,
+        mediaStoreUri: String,
+        canonicalLegacyOutputPath: String? = null,
+        mediaKind: OutputMediaKind = OutputMediaKind.VIDEO_MP4,
+    ): TaskRecoveryRecord
+
+    fun markPublished(taskId: String): TaskRecoveryRecord
+
+    fun markDiscarding(taskId: String): TaskRecoveryRecord
+}
+
 sealed interface TaskRecoveryDecodeResult {
     data class Success(val record: TaskRecoveryRecord) : TaskRecoveryDecodeResult
 
@@ -256,6 +272,64 @@ private fun validateRecoveryRecord(
     return null
 }
 
+internal fun withPublicationAllocation(
+    current: TaskRecoveryRecord,
+    publicationUri: String,
+): TaskRecoveryRecord {
+    if (current.stage == RecoveryStage.ALLOCATED) {
+        if (current.mediaStoreUri == publicationUri) return current
+        throw IllegalStateException("A different publication allocation is already recorded")
+    }
+    if (current.stage != RecoveryStage.TRANSFORMING) {
+        throw IllegalStateException("Publication allocation cannot be recorded in ${current.stage}")
+    }
+    return current.copy(
+        stage = RecoveryStage.ALLOCATED,
+        mediaStoreUri = publicationUri,
+    ).also { updated ->
+        validateRecoveryRecord(updated)?.let { throw IllegalArgumentException(it) }
+    }
+}
+
+internal fun withPublicationTarget(
+    current: TaskRecoveryRecord,
+    actualOutputDisplayName: String,
+    mediaStoreUri: String,
+    canonicalLegacyOutputPath: String?,
+    mediaKind: OutputMediaKind,
+): TaskRecoveryRecord {
+    if (current.mediaKind != mediaKind) {
+        throw IllegalStateException("Publication target media kind does not match recovery record")
+    }
+    if (current.stage == RecoveryStage.PUBLISHING) {
+        if (
+            current.actualOutputDisplayName == actualOutputDisplayName &&
+            current.mediaStoreUri == mediaStoreUri &&
+            current.legacyOutputPath == canonicalLegacyOutputPath
+        ) {
+            return current
+        }
+        throw IllegalStateException("A different publication target is already recorded")
+    }
+    if (
+        current.stage != RecoveryStage.TRANSFORMING &&
+        current.stage != RecoveryStage.ALLOCATED
+    ) {
+        throw IllegalStateException("Publication target cannot be recorded in ${current.stage}")
+    }
+    if (current.stage == RecoveryStage.ALLOCATED && current.mediaStoreUri != mediaStoreUri) {
+        throw IllegalStateException("Verified publication target does not match its allocation")
+    }
+    return current.copy(
+        stage = RecoveryStage.PUBLISHING,
+        actualOutputDisplayName = actualOutputDisplayName,
+        mediaStoreUri = mediaStoreUri,
+        legacyOutputPath = canonicalLegacyOutputPath,
+    ).also { updated ->
+        validateRecoveryRecord(updated)?.let { throw IllegalArgumentException(it) }
+    }
+}
+
 private fun isSafeRecoveryOutputName(
     name: String,
     mediaKind: OutputMediaKind,
@@ -287,7 +361,7 @@ private fun isSafeJournalText(value: String, maxLength: Int): Boolean =
 class TaskRecoveryStore(
     context: Context,
     private val logger: (String) -> Unit = {},
-) {
+) : PublicationRecoveryJournal {
     private val preferences: SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     private val quarantineDirectory =
@@ -336,76 +410,37 @@ class TaskRecoveryStore(
     }
 
     @Throws(IOException::class)
-    fun recordPublicationTarget(
+    override fun recordPublicationTarget(
         taskId: String,
         actualOutputDisplayName: String,
         mediaStoreUri: String,
-        canonicalLegacyOutputPath: String? = null,
-        mediaKind: OutputMediaKind = OutputMediaKind.VIDEO_MP4,
+        canonicalLegacyOutputPath: String?,
+        mediaKind: OutputMediaKind,
     ): TaskRecoveryRecord = synchronized(TRANSACTION_LOCK) {
-        val current = loadForMutation(taskId)
-        if (current.mediaKind != mediaKind) {
-            throw IllegalStateException("Publication target media kind does not match recovery record")
-        }
-        if (current.stage == RecoveryStage.PUBLISHING) {
-            if (
-                current.actualOutputDisplayName == actualOutputDisplayName &&
-                current.mediaStoreUri == mediaStoreUri &&
-                current.legacyOutputPath == canonicalLegacyOutputPath
-            ) {
-                return@synchronized current
-            }
-            throw IllegalStateException("A different publication target is already recorded")
-        }
-        if (
-            current.stage != RecoveryStage.TRANSFORMING &&
-            current.stage != RecoveryStage.ALLOCATED
-        ) {
-            throw IllegalStateException("Publication target cannot be recorded in ${current.stage}")
-        }
-        if (
-            current.stage == RecoveryStage.ALLOCATED &&
-            (current.mediaStoreUri != mediaStoreUri || canonicalLegacyOutputPath != null)
-        ) {
-            throw IllegalStateException("Verified publication target does not match its allocation")
-        }
         val updated =
-            current.copy(
-                stage = RecoveryStage.PUBLISHING,
+            withPublicationTarget(
+                current = loadForMutation(taskId),
                 actualOutputDisplayName = actualOutputDisplayName,
                 mediaStoreUri = mediaStoreUri,
-                legacyOutputPath = canonicalLegacyOutputPath,
+                canonicalLegacyOutputPath = canonicalLegacyOutputPath,
+                mediaKind = mediaKind,
             )
-        validateRecoveryRecord(updated)?.let { throw IllegalArgumentException(it) }
         persist(updated, "publication-target")
         updated
     }
 
     @Throws(IOException::class)
-    fun recordPublicationAllocation(
+    override fun recordPublicationAllocation(
         taskId: String,
         publicationUri: String,
     ): TaskRecoveryRecord = synchronized(TRANSACTION_LOCK) {
-        val current = loadForMutation(taskId)
-        if (current.stage == RecoveryStage.ALLOCATED) {
-            if (current.mediaStoreUri == publicationUri) return@synchronized current
-            throw IllegalStateException("A different publication allocation is already recorded")
-        }
-        if (current.stage != RecoveryStage.TRANSFORMING) {
-            throw IllegalStateException("Publication allocation cannot be recorded in ${current.stage}")
-        }
-        val updated =
-            current.copy(
-                stage = RecoveryStage.ALLOCATED,
-                mediaStoreUri = publicationUri,
-            )
-        validateRecoveryRecord(updated)?.let { throw IllegalArgumentException(it) }
+        val updated = withPublicationAllocation(loadForMutation(taskId), publicationUri)
         persist(updated, "publication-allocation")
         updated
     }
 
     @Throws(IOException::class)
-    fun markPublished(taskId: String): TaskRecoveryRecord = synchronized(TRANSACTION_LOCK) {
+    override fun markPublished(taskId: String): TaskRecoveryRecord = synchronized(TRANSACTION_LOCK) {
         val current = loadForMutation(taskId)
         if (current.stage == RecoveryStage.PUBLISHED) return@synchronized current
         if (
@@ -419,7 +454,7 @@ class TaskRecoveryStore(
     }
 
     @Throws(IOException::class)
-    fun markDiscarding(taskId: String): TaskRecoveryRecord = synchronized(TRANSACTION_LOCK) {
+    override fun markDiscarding(taskId: String): TaskRecoveryRecord = synchronized(TRANSACTION_LOCK) {
         val current = loadForMutation(taskId)
         if (current.stage == RecoveryStage.DISCARDING) return@synchronized current
         if (!isAllowedRecoveryTransition(current.stage, RecoveryStage.DISCARDING)) {

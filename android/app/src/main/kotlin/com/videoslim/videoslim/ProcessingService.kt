@@ -19,6 +19,57 @@ internal fun validatedStartTaskKind(
     return taskKind
 }
 
+internal class RecoveryPublicationObserver(
+    private val journal: PublicationRecoveryJournal,
+    private val taskId: () -> String?,
+    private val cancellationRequested: () -> Boolean,
+    private val onOutputFileName: (String) -> Unit = {},
+    private val logger: (String) -> Unit = {},
+) : PublicationObserver {
+    override fun onPublicationUriAllocated(publicationUri: String) {
+        val internalTaskId =
+            taskId() ?: throw IllegalStateException("Publication allocated without an engine task")
+        journal.recordPublicationAllocation(internalTaskId, publicationUri)
+        logger("task=$internalTaskId publication allocated uri=$publicationUri")
+    }
+
+    override fun onPublicationTargetAllocated(target: PublicationTarget) {
+        val internalTaskId =
+            taskId() ?: throw IllegalStateException("Publication started without an engine task")
+        journal.recordPublicationTarget(
+            taskId = internalTaskId,
+            actualOutputDisplayName = target.actualDisplayName,
+            mediaStoreUri = target.mediaStoreUri,
+            canonicalLegacyOutputPath = target.canonicalLegacyOutputPath,
+            mediaKind = target.mediaKind,
+        )
+        if (cancellationRequested()) journal.markDiscarding(internalTaskId)
+        logger(
+            "task=$internalTaskId publication target kind=${target.mediaKind.name} " +
+                "actualName=${target.actualDisplayName} uri=${target.mediaStoreUri}",
+        )
+        onOutputFileName(target.actualDisplayName)
+    }
+
+    override fun onPublicationCompleted(target: PublicationTarget) {
+        val internalTaskId =
+            taskId() ?: throw IllegalStateException("Publication completed without an engine task")
+        when (publicationCompletionRecoveryStage(cancellationRequested())) {
+            RecoveryStage.PUBLISHED -> journal.markPublished(internalTaskId)
+            RecoveryStage.DISCARDING -> journal.markDiscarding(internalTaskId)
+            else -> error("Unexpected publication completion stage")
+        }
+        logger("task=$internalTaskId publication completed uri=${target.mediaStoreUri}")
+    }
+
+    override fun onPublicationDiscarding(target: PublicationTarget) {
+        val internalTaskId =
+            taskId() ?: throw IllegalStateException("Publication discarded without an engine task")
+        journal.markDiscarding(internalTaskId)
+        logger("task=$internalTaskId publication discarding uri=${target.mediaStoreUri}")
+    }
+}
+
 internal class ProcessingService : Service() {
     private lateinit var notificationFactory: ProcessingNotificationFactory
     private lateinit var wakeLockGuard: WakeLockGuard
@@ -59,61 +110,20 @@ internal class ProcessingService : Service() {
                 log("service startup reconciliation failed ${error.stackTraceToString()}")
             }
         val publicationObserver =
-            object : PublicationObserver {
-                override fun onPublicationUriAllocated(publicationUri: String) {
-                    val internalTaskId =
-                        engineTaskId
-                            ?: throw IllegalStateException("Publication allocated without an engine task")
-                    recoveryStore.recordPublicationAllocation(internalTaskId, publicationUri)
-                    log("task=$internalTaskId publication allocated uri=$publicationUri")
-                }
-
-                override fun onPublicationTargetAllocated(target: PublicationTarget) {
-                    val internalTaskId =
-                        engineTaskId
-                            ?: throw IllegalStateException("Publication started without an engine task")
-                    recoveryStore.recordPublicationTarget(
-                        taskId = internalTaskId,
-                        actualOutputDisplayName = target.actualDisplayName,
-                        mediaStoreUri = target.mediaStoreUri,
-                        canonicalLegacyOutputPath = target.canonicalLegacyOutputPath,
-                        mediaKind = target.mediaKind,
-                    )
-                    if (cancelRequested || timeoutRequested) {
-                        recoveryStore.markDiscarding(internalTaskId)
-                    }
-                    log(
-                        "task=$internalTaskId publication target kind=${target.mediaKind.name} " +
-                            "actualName=${target.actualDisplayName} uri=${target.mediaStoreUri}",
-                    )
+            RecoveryPublicationObserver(
+                journal = recoveryStore,
+                taskId = { engineTaskId },
+                cancellationRequested = { cancelRequested || timeoutRequested },
+                onOutputFileName = { actualDisplayName ->
                     activeTaskId?.let { publicTaskId ->
                         ProcessingRuntime.registry.updateOutputFileName(
                             publicTaskId,
-                            target.actualDisplayName,
+                            actualDisplayName,
                         )
                     }
-                }
-
-                override fun onPublicationCompleted(target: PublicationTarget) {
-                    val internalTaskId =
-                        engineTaskId
-                            ?: throw IllegalStateException("Publication completed without an engine task")
-                    when (publicationCompletionRecoveryStage(cancelRequested || timeoutRequested)) {
-                        RecoveryStage.PUBLISHED -> recoveryStore.markPublished(internalTaskId)
-                        RecoveryStage.DISCARDING -> recoveryStore.markDiscarding(internalTaskId)
-                        else -> error("Unexpected publication completion stage")
-                    }
-                    log("task=$internalTaskId publication completed uri=${target.mediaStoreUri}")
-                }
-
-                override fun onPublicationDiscarding(target: PublicationTarget) {
-                    val internalTaskId =
-                        engineTaskId
-                            ?: throw IllegalStateException("Publication discarded without an engine task")
-                    recoveryStore.markDiscarding(internalTaskId)
-                    log("task=$internalTaskId publication discarding uri=${target.mediaStoreUri}")
-                }
-            }
+                },
+                logger = ::log,
+            )
         val mediaStoreSaver = MediaStoreSaver(this, publicationObserver)
         transcodeEngine =
             TranscodeEngine(

@@ -53,6 +53,7 @@ enum _ImportSource { gallery, files }
 class _HomeScreenState extends State<HomeScreen> {
   late final StreamSubscription<ProgressEvent> _progressSubscription;
   late final HomeFlowState _flow;
+  int _snapshotQueryEpoch = 0;
   final CompressionPlanner _planner = const CompressionPlanner();
   EtaEstimator? _etaEstimator;
   Timer? _timingTimer;
@@ -76,7 +77,11 @@ class _HomeScreenState extends State<HomeScreen> {
   set _awaitingTaskId(bool value) => _flow.awaitingTaskId = value;
   bool get _terminalEventHandled => _flow.terminalEventHandled;
   set _terminalEventHandled(bool value) => _flow.terminalEventHandled = value;
-  List<ProgressEvent> get _bufferedProgress => _flow.bufferedProgress;
+  PendingProgressBuffer get _bufferedProgress => _flow.bufferedProgress;
+
+  bool get _nativeOwnershipUncertain => _flow.nativeOwnershipUncertain;
+  set _nativeOwnershipUncertain(bool value) =>
+      _flow.nativeOwnershipUncertain = value;
 
   bool get _picking => _flow.picking;
   set _picking(bool value) => _flow.picking = value;
@@ -279,6 +284,7 @@ class _HomeScreenState extends State<HomeScreen> {
       mounted &&
       _isCurrent(generation) &&
       _validatingDestination &&
+      !_nativeOwnershipUncertain &&
       !_progressStreamClosed;
 
   void _releaseDestinationValidation(int generation) {
@@ -358,102 +364,157 @@ class _HomeScreenState extends State<HomeScreen> {
     _awaitingTaskId = true;
     _terminalEventHandled = false;
     _bufferedProgress.clear();
+    _nativeOwnershipUncertain = false;
+    final queryEpoch = ++_snapshotQueryEpoch;
+    await _queryAndBindTaskSnapshot(
+      generation,
+      queryEpoch: queryEpoch,
+      initialRestore: true,
+    );
+  }
+
+  Future<void> _reconcileNativeOwnership(int generation) async {
+    if (!_isCurrent(generation) || _terminalEventHandled) return;
+    final queryEpoch = ++_snapshotQueryEpoch;
+    _flow.update(() {
+      _nativeOwnershipUncertain = true;
+      _restoringTask = true;
+      _errorText = '正在重新确认处理任务，请勿开始其他操作。';
+    });
+    await _queryAndBindTaskSnapshot(
+      generation,
+      queryEpoch: queryEpoch,
+      initialRestore: false,
+    );
+  }
+
+  void _confirmNativeOwnershipFromProgress() {
+    if (!_nativeOwnershipUncertain && !_restoringTask) return;
+    // A matching event is direct native liveness evidence. Invalidate any older
+    // snapshot request so a delayed null/error cannot abandon this task.
+    _snapshotQueryEpoch += 1;
+    _flow.update(() {
+      _nativeOwnershipUncertain = false;
+      _restoringTask = false;
+      _errorText = null;
+    });
+  }
+
+  Future<void> _queryAndBindTaskSnapshot(
+    int generation, {
+    required int queryEpoch,
+    required bool initialRestore,
+  }) async {
     try {
       final snapshot = await widget.engine.getTaskSnapshot();
-      if (!_isCurrent(generation)) return;
+      if (!_isCurrent(generation) || queryEpoch != _snapshotQueryEpoch) return;
       if (snapshot == null) {
-        _flow.update(() {
-          _restoringTask = false;
-          _activeGeneration = null;
-          _awaitingTaskId = false;
-          _bufferedProgress.clear();
-        });
+        if (!initialRestore && _awaitingTaskId && _preparing) {
+          _flow.update(() {
+            _nativeOwnershipUncertain = true;
+            _restoringTask = true;
+            _errorText = '任务仍在创建，正在等待原生任务编号。';
+          });
+          return;
+        }
+        if (initialRestore) {
+          _flow.update(() {
+            _nativeOwnershipUncertain = false;
+            _restoringTask = false;
+            _activeGeneration = null;
+            _awaitingTaskId = false;
+            _bufferedProgress.clear();
+          });
+        } else {
+          _nativeOwnershipUncertain = false;
+          _failGeneration(generation, '原生已确认当前没有活动任务，请重新开始。');
+        }
         return;
       }
-
-      VideoInfo? sourceInfo;
-      try {
-        sourceInfo = await widget.engine.getVideoInfo(snapshot.sourceUri);
-      } catch (error, stackTrace) {
-        _logError(
-          '恢复任务时无法读取源视频信息',
-          error,
-          stackTrace,
-          details: snapshot.toMap(),
-        );
-      }
-      if (!_isCurrent(generation)) return;
-
-      final buffered = List<ProgressEvent>.of(_bufferedProgress);
-      _bufferedProgress.clear();
-      _awaitingTaskId = false;
-      _processStopwatch = Stopwatch()..start();
-      _flow.update(() {
-        _restoringTask = false;
-        _selectedUri = snapshot.sourceUri;
-        _activeTaskKind = snapshot.taskKind;
-        _sourceInfo = sourceInfo;
-        _taskId = snapshot.taskId;
-        _publishedOutputUri = snapshot.outputUri;
-        _publishedOutputFileName = snapshot.outputFileName;
-        _percent = snapshot.percent;
-        _taskPhase = snapshot.phase;
-        _taskOutputLocationLabel = snapshot.outputLocationLabel;
-        _lastVideoDecoderMode = snapshot.videoDecoderMode;
-        _lastProcessRequest = snapshot.retryRequest;
-        _lastAudioExtractRequest = snapshot.audioRetryRequest;
-        final audioRetry = snapshot.audioRetryRequest;
-        if (audioRetry != null) {
-          _audioExtractMode = audioRetry.mode;
-          _audioExtractBitrate = audioRetry.bitrate ?? 128000;
-        }
-        _actualVideoEncodingMode = snapshot.actualVideoEncodingMode;
-        _preparing = false;
-        _processing = true;
-        _finishing = false;
-        _selectedFromGallery = false;
-        _sourceDeleted = false;
-        _errorText = null;
-      });
-      _startTiming(snapshot.startedAt);
-      if (sourceInfo != null &&
-          snapshot.taskKind == TaskKind.videoCompression) {
-        unawaited(_loadCapabilities(generation));
-      }
-      _consumeProgress(
-        ProgressEvent(
-          taskKind: snapshot.taskKind,
-          taskId: snapshot.taskId,
-          percent: snapshot.percent,
-          state: snapshot.state,
-          phase: snapshot.phase,
-          videoDecoderMode: snapshot.videoDecoderMode,
-          actualVideoEncodingMode: snapshot.actualVideoEncodingMode,
-          outputUri: snapshot.outputUri,
-          outputFileName: snapshot.outputFileName,
-          outputLocationLabel: snapshot.outputLocationLabel,
-          errorCode: snapshot.errorCode,
-          errorMessage: snapshot.errorMessage,
-        ),
-        generation,
-      );
-      for (final event in buffered) {
-        if (!_isCurrent(generation) || _terminalEventHandled) break;
-        if (_isNewerThanSnapshot(event, snapshot)) {
-          _consumeProgress(event, generation);
-        }
-      }
-      _logFlow('已从原生任务快照恢复界面', details: snapshot.toMap());
+      await _bindTaskSnapshot(snapshot, generation, queryEpoch);
     } catch (error, stackTrace) {
-      if (!_isCurrent(generation)) return;
+      if (!_isCurrent(generation) || queryEpoch != _snapshotQueryEpoch) return;
       _flow.update(() {
-        _restoringTask = false;
-        _activeGeneration = null;
-        _awaitingTaskId = false;
-        _bufferedProgress.clear();
+        _nativeOwnershipUncertain = true;
+        _restoringTask = true;
+        _errorText = '无法确认是否有任务正在运行。为避免重复任务，请重启应用后再继续。';
       });
-      _logError('查询原生任务快照失败', error, stackTrace);
+      _logError('查询原生任务快照失败；保守保留任务所有权', error, stackTrace);
     }
+  }
+
+  Future<void> _bindTaskSnapshot(
+    TaskSnapshot snapshot,
+    int generation,
+    int queryEpoch,
+  ) async {
+    VideoInfo? sourceInfo;
+    try {
+      sourceInfo = await widget.engine.getVideoInfo(snapshot.sourceUri);
+    } catch (error, stackTrace) {
+      _logError('恢复任务时无法读取源视频信息', error, stackTrace, details: snapshot.toMap());
+    }
+    if (!_isCurrent(generation) || queryEpoch != _snapshotQueryEpoch) return;
+
+    final buffered = _bufferedProgress.drain();
+    _awaitingTaskId = false;
+    _processStopwatch = Stopwatch()..start();
+    _flow.update(() {
+      _nativeOwnershipUncertain = false;
+      _restoringTask = false;
+      _selectedUri = snapshot.sourceUri;
+      _activeTaskKind = snapshot.taskKind;
+      _sourceInfo = sourceInfo;
+      _taskId = snapshot.taskId;
+      _publishedOutputUri = snapshot.outputUri;
+      _publishedOutputFileName = snapshot.outputFileName;
+      _percent = snapshot.percent;
+      _taskPhase = snapshot.phase;
+      _taskOutputLocationLabel = snapshot.outputLocationLabel;
+      _lastVideoDecoderMode = snapshot.videoDecoderMode;
+      _lastProcessRequest = snapshot.retryRequest;
+      _lastAudioExtractRequest = snapshot.audioRetryRequest;
+      final audioRetry = snapshot.audioRetryRequest;
+      if (audioRetry != null) {
+        _audioExtractMode = audioRetry.mode;
+        _audioExtractBitrate = audioRetry.bitrate ?? 128000;
+      }
+      _actualVideoEncodingMode = snapshot.actualVideoEncodingMode;
+      _preparing = false;
+      _processing = true;
+      _finishing = false;
+      _selectedFromGallery = false;
+      _sourceDeleted = false;
+      _errorText = null;
+    });
+    _startTiming(snapshot.startedAt);
+    if (sourceInfo != null && snapshot.taskKind == TaskKind.videoCompression) {
+      unawaited(_loadCapabilities(generation));
+    }
+    _consumeProgress(
+      ProgressEvent(
+        taskKind: snapshot.taskKind,
+        taskId: snapshot.taskId,
+        percent: snapshot.percent,
+        state: snapshot.state,
+        phase: snapshot.phase,
+        videoDecoderMode: snapshot.videoDecoderMode,
+        actualVideoEncodingMode: snapshot.actualVideoEncodingMode,
+        outputUri: snapshot.outputUri,
+        outputFileName: snapshot.outputFileName,
+        outputLocationLabel: snapshot.outputLocationLabel,
+        errorCode: snapshot.errorCode,
+        errorMessage: snapshot.errorMessage,
+      ),
+      generation,
+    );
+    for (final event in buffered) {
+      if (!_isCurrent(generation) || _terminalEventHandled) break;
+      if (_isNewerThanSnapshot(event, snapshot)) {
+        _consumeProgress(event, generation);
+      }
+    }
+    _logFlow('已从原生任务快照恢复界面', details: snapshot.toMap());
   }
 
   Future<void> _loadCapabilities(int generation) async {
@@ -890,8 +951,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!_isCurrent(generation)) return;
       _awaitingTaskId = false;
       _taskId = taskId;
-      final buffered = List<ProgressEvent>.of(_bufferedProgress);
-      _bufferedProgress.clear();
+      final buffered = _bufferedProgress.drain();
       _flow.update(() {
         _preparing = false;
         _processing = true;
@@ -899,12 +959,25 @@ class _HomeScreenState extends State<HomeScreen> {
       for (final event in buffered) {
         if (event.taskId == taskId &&
             event.taskKind == TaskKind.audioExtraction) {
+          _confirmNativeOwnershipFromProgress();
           _consumeProgress(event, generation);
         }
+      }
+      if (_nativeOwnershipUncertain) {
+        unawaited(_reconcileNativeOwnership(generation));
       }
     } catch (error, stackTrace) {
       if (!_isCurrent(generation)) return;
       _awaitingTaskId = false;
+      if (_nativeOwnershipUncertain) {
+        _flow.update(() {
+          _restoringTask = true;
+          _errorText = '任务启动结果不确定，正在重新确认原生任务。';
+        });
+        unawaited(_reconcileNativeOwnership(generation));
+        _logError('M3 音频提取返回错误；保留所有权等待快照确认', error, stackTrace);
+        return;
+      }
       _bufferedProgress.clear();
       final failureCode = error is VideoEngineException
           ? _stableCode(error.code)
@@ -1223,8 +1296,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!_isCurrent(generation)) return;
       _awaitingTaskId = false;
       _taskId = taskId;
-      final buffered = List<ProgressEvent>.of(_bufferedProgress);
-      _bufferedProgress.clear();
+      final buffered = _bufferedProgress.drain();
       _flow.update(() {
         _preparing = false;
         _processing = true;
@@ -1241,6 +1313,7 @@ class _HomeScreenState extends State<HomeScreen> {
       for (final event in buffered) {
         if (event.taskId == taskId &&
             event.taskKind == TaskKind.videoCompression) {
+          _confirmNativeOwnershipFromProgress();
           _consumeProgress(event, generation);
         } else {
           _logFlow(
@@ -1252,9 +1325,26 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         }
       }
+      if (_nativeOwnershipUncertain) {
+        unawaited(_reconcileNativeOwnership(generation));
+      }
     } catch (error, stackTrace) {
       if (!_isCurrent(generation)) return;
       _awaitingTaskId = false;
+      if (_nativeOwnershipUncertain) {
+        _flow.update(() {
+          _restoringTask = true;
+          _errorText = '任务启动结果不确定，正在重新确认原生任务。';
+        });
+        unawaited(_reconcileNativeOwnership(generation));
+        _logError(
+          'M2 压缩返回错误；保留所有权等待快照确认',
+          error,
+          stackTrace,
+          details: <String, Object?>{'uri': request.uri},
+        );
+        return;
+      }
       _bufferedProgress.clear();
       final failureCode = error is VideoEngineException
           ? _stableCode(error.code)
@@ -1325,7 +1415,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (_awaitingTaskId) {
-      _bufferedProgress.add(event);
+      _bufferedProgress.add(event, generation: generation);
       _logFlow(
         '任务编号或恢复快照确定前暂存进度事件',
         details: <String, Object?>{
@@ -1356,6 +1446,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       return;
     }
+    _confirmNativeOwnershipFromProgress();
     _consumeProgress(event, generation);
   }
 
@@ -1566,13 +1657,14 @@ class _HomeScreenState extends State<HomeScreen> {
       _logError('非活动状态收到进度流错误', error, stackTrace);
       return;
     }
-    _terminalEventHandled = true;
-    _failGeneration(
-      generation,
-      _errorTextFor(error, fallback: '无法继续获取处理状态，请重新尝试。'),
-    );
+    _flow.update(() {
+      _nativeOwnershipUncertain = true;
+      _restoringTask = true;
+      _errorText = '处理状态暂时中断，正在重新确认原生任务。';
+    });
+    unawaited(_reconcileNativeOwnership(generation));
     _logError(
-      '压缩进度流错误',
+      '进度事件错误；保留原生任务所有权并开始重连',
       error,
       stackTrace,
       details: <String, Object?>{'taskId': _taskId},
@@ -1619,6 +1711,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _processStopwatch?.stop();
     _flow.update(() {
       _validatingDestination = false;
+      _nativeOwnershipUncertain = false;
       _restoringTask = false;
       _preparing = false;
       _processing = false;

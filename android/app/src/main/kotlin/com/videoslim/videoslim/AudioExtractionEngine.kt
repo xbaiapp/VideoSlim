@@ -229,6 +229,7 @@ internal class AudioExtractionEngine(
                         shouldCancel = { task.cancelRequested || disposed },
                         onProgress = progressDispatcher::update,
                     )
+                task.encodedCopyResult = result.copyResult
                 log(
                     "taskKind=audio_extraction task=${task.id} mode=copy decoder=none encoder=none " +
                         "firstInputPtsUs=${result.copyResult.firstInputTimeUs} " +
@@ -373,6 +374,17 @@ internal class AudioExtractionEngine(
             metadataReader.read(task.tempFile) {
                 task.cancelRequested || disposed || Thread.currentThread().isInterrupted
             }
+        if (task.request.mode == AudioExtractMode.COPY) {
+            requireLosslessPayloadAggregateIntegrity(
+                source =
+                    task.sourceMetadata
+                        ?: throw IOException("Source metadata is unavailable for lossless verification"),
+                copy =
+                    task.encodedCopyResult
+                        ?: throw IOException("Lossless copy result is unavailable for verification"),
+                output = outputMetadata,
+            )
+        }
         AudioOutputVerifier.requireValid(
             outputMetadata,
             AudioOutputVerifier.AAC_MIME,
@@ -673,6 +685,7 @@ internal class AudioExtractionEngine(
         @Volatile var ioOperationRunning = false
         var transformer: Transformer? = null
         var sourceMetadata: AudioMetadata? = null
+        var encodedCopyResult: EncodedAudioCopyResult? = null
         var sourceAccessAtStart: SourceAccessProbeResult? = null
         @Volatile var stage = AudioStage.PREPARING
         var lastPercent = 0.0
@@ -696,6 +709,47 @@ private fun AudioMetadata.sampleSpanMs(): Long {
     val first = firstSampleTimeUs ?: return durationMs
     val last = lastSampleTimeUs ?: return durationMs
     return ((last - first).coerceAtLeast(0L) / 1_000L).takeIf { it > 0L } ?: durationMs
+}
+
+@Throws(IOException::class)
+internal fun requireLosslessPayloadAggregateIntegrity(
+    source: AudioMetadata,
+    copy: EncodedAudioCopyResult,
+    output: AudioMetadata,
+) {
+    if (
+        source.sampleCount <= 0L ||
+        source.sampleBytes <= 0L ||
+        copy.sampleCount <= 0L ||
+        copy.totalBytes <= 0L ||
+        output.sampleCount <= 0L ||
+        output.sampleBytes <= 0L
+    ) {
+        throw IOException("Lossless payload aggregate is empty or invalid")
+    }
+    if (
+        source.usesIndexedPhysicalSampleSizes != copy.usesIndexedPhysicalSampleSizes ||
+        source.usesIndexedPhysicalSampleSizes != output.usesIndexedPhysicalSampleSizes
+    ) {
+        throw IOException("Lossless payload sample-size evidence is inconsistent")
+    }
+    if (
+        source.sampleCount != copy.sampleCount ||
+        source.sampleCount != output.sampleCount ||
+        source.sampleBytes != copy.totalBytes ||
+        source.sampleBytes != output.sampleBytes
+    ) {
+        throw IOException("Lossless payload sample count or byte aggregate changed")
+    }
+    if (!source.usesIndexedPhysicalSampleSizes) {
+        // API 26-27 has no indexed sample size. Fail closed unless all three
+        // independently physical, sentinel-bounded passes agree exactly.
+        val boundedMaximum =
+            Math.multiplyExact(source.sampleCount, MAX_AUDIO_SAMPLE_BUFFER_BYTES.toLong())
+        if (source.sampleBytes > boundedMaximum) {
+            throw IOException("Legacy lossless payload exceeds its bounded sentinel invariant")
+        }
+    }
 }
 
 internal fun mapAudioPipelineFailure(

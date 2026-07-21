@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:flutter/foundation.dart';
 
 import '../models/audio_extract_request.dart';
@@ -7,6 +9,82 @@ import '../models/device_capabilities.dart';
 import '../models/progress_event.dart';
 import '../models/task_kind.dart';
 import '../models/video_info.dart';
+
+/// A bounded task-aware staging area used while a native task ID or restored
+/// snapshot is unresolved. Each generation/task/kind retains only the latest
+/// running update and one terminal event.
+final class PendingProgressBuffer {
+  PendingProgressBuffer({this.maxTaskKeys = 8}) : assert(maxTaskKeys > 0);
+
+  final int maxTaskKeys;
+  final LinkedHashMap<String, _PendingProgressBucket> _buckets =
+      LinkedHashMap<String, _PendingProgressBucket>();
+  int _sequence = 0;
+
+  int get length => _buckets.values.fold<int>(
+    0,
+    (count, bucket) =>
+        count +
+        (bucket.running == null ? 0 : 1) +
+        (bucket.terminal == null ? 0 : 1),
+  );
+
+  int get taskKeyCount => _buckets.length;
+
+  void add(ProgressEvent event, {required int generation}) {
+    final key =
+        '$generation\u0000${event.taskKind.wireName}\u0000${event.taskId}';
+    var bucket = _buckets.remove(key);
+    if (bucket == null) {
+      _evictForNewKey();
+      bucket = _PendingProgressBucket();
+    }
+    _buckets[key] = bucket;
+    final retained = _SequencedProgress(++_sequence, event);
+    if (event.state == TaskState.running) {
+      if (bucket.terminal == null) bucket.running = retained;
+    } else {
+      bucket.terminal ??= retained;
+    }
+  }
+
+  List<ProgressEvent> drain() {
+    final retained = <_SequencedProgress>[
+      for (final bucket in _buckets.values)
+        if (bucket.running != null) bucket.running!,
+      for (final bucket in _buckets.values)
+        if (bucket.terminal != null) bucket.terminal!,
+    ]..sort((left, right) => left.sequence.compareTo(right.sequence));
+    clear();
+    return retained.map((item) => item.event).toList(growable: false);
+  }
+
+  void clear() {
+    _buckets.clear();
+    _sequence = 0;
+  }
+
+  void _evictForNewKey() {
+    if (_buckets.length < maxTaskKeys) return;
+    final nonTerminal = _buckets.entries
+        .where((entry) => entry.value.terminal == null)
+        .map((entry) => entry.key)
+        .firstOrNull;
+    _buckets.remove(nonTerminal ?? _buckets.keys.first);
+  }
+}
+
+final class _PendingProgressBucket {
+  _SequencedProgress? running;
+  _SequencedProgress? terminal;
+}
+
+final class _SequencedProgress {
+  const _SequencedProgress(this.sequence, this.event);
+
+  final int sequence;
+  final ProgressEvent event;
+}
 
 /// Provider-backed user-visible snapshot for the complete M2 workflow.
 ///
@@ -18,7 +96,7 @@ final class HomeFlowState extends ChangeNotifier {
   int? activeGeneration;
   bool awaitingTaskId = false;
   bool terminalEventHandled = false;
-  final List<ProgressEvent> bufferedProgress = <ProgressEvent>[];
+  final PendingProgressBuffer bufferedProgress = PendingProgressBuffer();
 
   bool picking = false;
   bool readingMetadata = false;
@@ -28,6 +106,7 @@ final class HomeFlowState extends ChangeNotifier {
   bool processing = false;
   bool finishing = false;
   bool restoringTask = true;
+  bool nativeOwnershipUncertain = false;
   bool cancelling = false;
   bool progressStreamClosed = false;
   bool outputPublished = false;
@@ -64,6 +143,7 @@ final class HomeFlowState extends ChangeNotifier {
 
   bool get interactionLocked =>
       restoringTask ||
+      nativeOwnershipUncertain ||
       picking ||
       readingMetadata ||
       selectingOutputLocation ||
@@ -75,9 +155,7 @@ final class HomeFlowState extends ChangeNotifier {
   bool _disposed = false;
 
   void update(VoidCallback mutation) {
-    if (_disposed) {
-      return;
-    }
+    if (_disposed) return;
     mutation();
     notifyListeners();
   }

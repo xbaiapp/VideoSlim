@@ -1188,35 +1188,235 @@ void main() {
     },
   );
 
-  testWidgets('stream error invalidates a pending process future', (
+  testWidgets(
+    'video stream error before task ID rebinds without losing ownership',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine()..processCompleter = Completer<String>();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      await _tapCompression(tester);
+      expect(engine.lastRequest, isNotNull);
+      engine.snapshot = TaskSnapshot(
+        taskId: 'task-1',
+        state: TaskState.running,
+        percent: 12,
+        sourceUri: _sourceUri,
+        outputFileName: 'output.mp4',
+        retryRequest: engine.lastRequest,
+        startedAtEpochMs: DateTime(2026, 7, 21).millisecondsSinceEpoch,
+      );
+
+      engine.progress.addError(
+        const VideoEngineException(code: 'UNKNOWN', message: '进度事件格式暂时异常'),
+        StackTrace.fromString('recoverable progress event error'),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      engine.processCompleter!.complete('task-1');
+      await tester.pump();
+      await tester.pump();
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'task-1',
+          percent: 47,
+          state: TaskState.running,
+        ),
+      );
+      await tester.pump();
+
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      );
+      expect(flow.taskId, 'task-1');
+      expect(flow.processing, isTrue);
+      expect(flow.nativeOwnershipUncertain, isFalse);
+      expect(find.text('47%'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'audio stream error before task ID rebinds and accepts method result',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine()..audioProcessCompleter = Completer<String>();
+      final picker = _FakePicker();
+      addTearDown(engine.close);
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(_MemoryBackend())),
+      );
+      await _selectGallery(tester, engine, picker);
+      await _tapAudioExtraction(tester);
+      engine.snapshot = TaskSnapshot(
+        taskKind: TaskKind.audioExtraction,
+        taskId: 'task-1',
+        state: TaskState.running,
+        percent: 9,
+        sourceUri: _sourceUri,
+        outputFileName: 'audio.m4a',
+        audioRetryRequest: engine.lastAudioRequest,
+        startedAtEpochMs: DateTime(2026, 7, 21).millisecondsSinceEpoch,
+      );
+
+      engine.progress.addError(StateError('malformed audio progress'));
+      await tester.pump();
+      await tester.pump();
+      engine.audioProcessCompleter!.complete('task-1');
+      await tester.pump();
+      await tester.pump();
+      engine.progress.add(
+        const ProgressEvent(
+          taskKind: TaskKind.audioExtraction,
+          taskId: 'task-1',
+          percent: 33,
+          state: TaskState.running,
+        ),
+      );
+      await tester.pump();
+
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      );
+      expect(flow.activeTaskKind, TaskKind.audioExtraction);
+      expect(flow.taskId, 'task-1');
+      expect(flow.processing, isTrue);
+      expect(flow.nativeOwnershipUncertain, isFalse);
+      expect(find.text('33%'), findsOneWidget);
+    },
+  );
+
+  testWidgets('video stream error after task ID rebinds and keeps processing', (
     WidgetTester tester,
   ) async {
-    final engine = _FakeEngine()..processCompleter = Completer<String>();
+    final engine = _FakeEngine();
     final picker = _FakePicker();
-    final backend = _MemoryBackend();
     addTearDown(engine.close);
-
     await tester.pumpWidget(
-      _app(engine: engine, picker: picker, logger: _logger(backend)),
+      _app(engine: engine, picker: picker, logger: _logger(_MemoryBackend())),
     );
     await _selectGallery(tester, engine, picker);
     await _tapCompression(tester);
-    expect(engine.lastRequest, isNotNull);
+    engine.snapshot = TaskSnapshot(
+      taskId: 'task-1',
+      state: TaskState.running,
+      percent: 22,
+      sourceUri: _sourceUri,
+      outputFileName: 'video.mp4',
+      retryRequest: engine.lastRequest,
+      startedAtEpochMs: DateTime(2026, 7, 21).millisecondsSinceEpoch,
+    );
 
-    engine.progress.addError(
-      const VideoEngineException(code: 'UNKNOWN', message: '进度通道暂时不可用'),
-      StackTrace.fromString('progress stream failure'),
+    engine.progress.addError(StateError('recoverable video event error'));
+    await tester.pump();
+    await tester.pump();
+    engine.progress.add(
+      const ProgressEvent(
+        taskId: 'task-1',
+        percent: 58,
+        state: TaskState.running,
+      ),
     );
     await tester.pump();
-    expect(find.text('无法继续获取处理状态，请重新尝试。'), findsOneWidget);
 
-    engine.processCompleter!.complete('task-1');
-    await tester.pump();
-    await tester.pump();
-
-    expect(find.text('无法继续获取处理状态，请重新尝试。'), findsOneWidget);
-    expect(find.text('正在压缩'), findsNothing);
+    final flow = Provider.of<HomeFlowState>(
+      tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+      listen: false,
+    );
+    expect(flow.processing, isTrue);
+    expect(flow.nativeOwnershipUncertain, isFalse);
+    expect(find.text('58%'), findsOneWidget);
   });
+
+  testWidgets('audio stream error after task ID rebinds and keeps processing', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    addTearDown(engine.close);
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(_MemoryBackend())),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapAudioExtraction(tester);
+    engine.snapshot = TaskSnapshot(
+      taskKind: TaskKind.audioExtraction,
+      taskId: 'task-1',
+      state: TaskState.running,
+      percent: 18,
+      sourceUri: _sourceUri,
+      outputFileName: 'audio.m4a',
+      audioRetryRequest: engine.lastAudioRequest,
+      startedAtEpochMs: DateTime(2026, 7, 21).millisecondsSinceEpoch,
+    );
+
+    engine.progress.addError(StateError('recoverable audio event error'));
+    await tester.pump();
+    await tester.pump();
+    engine.progress.add(
+      const ProgressEvent(
+        taskKind: TaskKind.audioExtraction,
+        taskId: 'task-1',
+        percent: 61,
+        state: TaskState.running,
+      ),
+    );
+    await tester.pump();
+
+    final flow = Provider.of<HomeFlowState>(
+      tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+      listen: false,
+    );
+    expect(flow.activeTaskKind, TaskKind.audioExtraction);
+    expect(flow.processing, isTrue);
+    expect(flow.nativeOwnershipUncertain, isFalse);
+    expect(find.text('61%'), findsOneWidget);
+  });
+
+  testWidgets(
+    'matching progress invalidates a delayed null reconciliation snapshot',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine();
+      final picker = _FakePicker();
+      addTearDown(engine.close);
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(_MemoryBackend())),
+      );
+      await _selectGallery(tester, engine, picker);
+      await _tapCompression(tester);
+
+      final delayedSnapshot = Completer<TaskSnapshot?>();
+      engine.snapshotCompleter = delayedSnapshot;
+      engine.progress.addError(StateError('recoverable delayed query error'));
+      await tester.pump();
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'task-1',
+          percent: 63,
+          state: TaskState.running,
+        ),
+      );
+      await tester.pump();
+      delayedSnapshot.complete(null);
+      await tester.pump();
+      await tester.pump();
+
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      );
+      expect(flow.processing, isTrue);
+      expect(flow.taskId, 'task-1');
+      expect(flow.nativeOwnershipUncertain, isFalse);
+      expect(find.text('63%'), findsOneWidget);
+    },
+  );
 
   testWidgets('post-success stream errors cannot replace a published result', (
     WidgetTester tester,
@@ -3135,37 +3335,143 @@ void main() {
     },
   );
 
-  testWidgets('restore failure releases the global interaction lock', (
-    WidgetTester tester,
-  ) async {
-    final snapshot = Completer<TaskSnapshot?>();
-    final engine = _FakeEngine()..snapshotCompleter = snapshot;
-    final picker = _FakePicker();
-    final backend = _MemoryBackend();
-    addTearDown(engine.close);
-    await tester.pumpWidget(
-      _app(engine: engine, picker: picker, logger: _logger(backend)),
-    );
-    await tester.pump();
-    snapshot.completeError(StateError('snapshot unavailable'));
-    await tester.pump();
-    await tester.pump();
+  testWidgets(
+    'restore snapshot failure keeps global ownership conservatively locked',
+    (WidgetTester tester) async {
+      final snapshot = Completer<TaskSnapshot?>();
+      final engine = _FakeEngine()..snapshotCompleter = snapshot;
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await tester.pump();
+      snapshot.completeError(StateError('snapshot unavailable'));
+      await tester.pump();
+      await tester.pump();
 
-    final flow = Provider.of<HomeFlowState>(
-      tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
-      listen: false,
-    );
-    expect(flow.restoringTask, isFalse);
-    expect(flow.interactionLocked, isFalse);
-    expect(
-      tester
-          .widget<FilledButton>(
-            find.byKey(const ValueKey<String>('pick-gallery')),
-          )
-          .onPressed,
-      isNotNull,
-    );
-  });
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      );
+      expect(flow.restoringTask, isTrue);
+      expect(flow.nativeOwnershipUncertain, isTrue);
+      expect(flow.interactionLocked, isTrue);
+      expect(find.textContaining('无法确认是否有任务正在运行'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey<String>('pick-gallery')),
+            )
+            .onPressed,
+        isNull,
+      );
+    },
+  );
+
+  testWidgets(
+    'restored metadata failure keeps the rebound native task locked',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine()
+        ..snapshot = TaskSnapshot(
+          taskId: 'restored-task',
+          state: TaskState.running,
+          percent: 15,
+          sourceUri: _sourceUri,
+          outputFileName: 'restored.mp4',
+          startedAtEpochMs: DateTime(2026, 7, 21).millisecondsSinceEpoch,
+        )
+        ..metadataErrors[_sourceUri] = StateError('metadata unavailable');
+      addTearDown(engine.close);
+      await tester.pumpWidget(
+        _app(
+          engine: engine,
+          picker: _FakePicker(),
+          logger: _logger(_MemoryBackend()),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      );
+      expect(flow.restoringTask, isFalse);
+      expect(flow.nativeOwnershipUncertain, isFalse);
+      expect(flow.processing, isTrue);
+      expect(flow.taskId, 'restored-task');
+      expect(flow.interactionLocked, isTrue);
+    },
+  );
+
+  testWidgets(
+    'high volume delayed restore stays bounded and delivers terminal event',
+    (WidgetTester tester) async {
+      final snapshot = Completer<TaskSnapshot?>();
+      final metadata = Completer<VideoInfo>();
+      final engine = _FakeEngine()
+        ..snapshotCompleter = snapshot
+        ..metadataCompleters[_sourceUri] = metadata;
+      addTearDown(engine.close);
+      await tester.pumpWidget(
+        _app(
+          engine: engine,
+          picker: _FakePicker(),
+          logger: _logger(_MemoryBackend()),
+        ),
+      );
+      snapshot.complete(
+        TaskSnapshot(
+          taskId: 'buffered-restore-task',
+          state: TaskState.running,
+          percent: 1,
+          sourceUri: _sourceUri,
+          outputFileName: 'restored.mp4',
+          startedAtEpochMs: DateTime(2026, 7, 21).millisecondsSinceEpoch,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      for (var index = 0; index < 10000; index += 1) {
+        engine.progress.add(
+          ProgressEvent(
+            taskId: 'buffered-restore-task',
+            percent: (index % 99).toDouble(),
+            state: TaskState.running,
+          ),
+        );
+      }
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'buffered-restore-task',
+          percent: 99,
+          state: TaskState.failed,
+          errorCode: 'UNKNOWN',
+          errorMessage: 'bounded terminal delivered',
+        ),
+      );
+      await tester.pump();
+
+      final flow = Provider.of<HomeFlowState>(
+        tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+        listen: false,
+      );
+      expect(flow.bufferedProgress.taskKeyCount, 1);
+      expect(flow.bufferedProgress.length, 2);
+      expect(flow.interactionLocked, isTrue);
+
+      metadata.complete(_videoInfo());
+      await tester.pump();
+      await tester.pump();
+      expect(flow.bufferedProgress.length, 0);
+      expect(flow.processing, isFalse);
+      expect(flow.terminalEventHandled, isTrue);
+      expect(flow.errorText, '视频压缩失败，请稍后重试。');
+    },
+  );
 
   testWidgets('F19 corner entry opens the shared debug log screen', (
     WidgetTester tester,
