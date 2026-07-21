@@ -7,6 +7,7 @@ import 'app.dart';
 import 'engine/method_channel_video_engine.dart';
 import 'engine/media_actions.dart';
 import 'logging/app_logger.dart';
+import 'startup_error_policy.dart';
 
 export 'app.dart';
 
@@ -45,6 +46,10 @@ void main() {
 /// Installs Flutter-framework and platform-dispatcher error capture using the
 /// same logger that is passed to the engine, picker, and UI.
 void installStartupErrorHooks(AppLogger logger) {
+  const startupErrorPolicy = StartupErrorPolicy(
+    canHandleRecoveredErrors: kReleaseMode,
+  );
+
   FlutterError.onError = (FlutterErrorDetails details) {
     final stackTrace = details.stack ?? StackTrace.current;
     bestEffortLog(
@@ -72,24 +77,17 @@ void installStartupErrorHooks(AppLogger logger) {
   };
 
   PlatformDispatcher.instance.onError = (Object error, StackTrace stackTrace) {
-    bestEffortLog(
-      () => logger.exception(
+    return startupErrorPolicy.report(
+      error: error,
+      stackTrace: stackTrace,
+      // Dispatcher errors are unknown at this boundary. A future recovery
+      // owner must classify one explicitly before fallback may be suppressed.
+      disposition: StartupErrorDisposition.unrecovered,
+      log: (Object error, StackTrace stackTrace) => logger.exception(
         error,
         stackTrace,
         message: 'Unhandled platform-dispatcher exception',
       ),
     );
-    return true;
   };
-}
-
-/// Runs logging without awaiting it and contains both synchronous and
-/// asynchronous logger failures. Diagnostics must never alter application flow.
-@visibleForTesting
-void bestEffortLog(Future<void> Function() operation) {
-  try {
-    unawaited(operation().catchError((Object _, StackTrace _) {}));
-  } catch (_) {
-    // Logging is intentionally semantically inert.
-  }
 }
