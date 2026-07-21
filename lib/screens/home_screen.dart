@@ -114,7 +114,7 @@ class _HomeScreenState extends State<HomeScreen> {
   VideoInfo? get _sourceInfo => _flow.sourceInfo;
   VideoInfo? get _outputInfo => _flow.outputInfo;
   AudioInfo? get _outputAudioInfo => _flow.outputAudioInfo;
-  Stopwatch? get _processStopwatch => _flow.processStopwatch;
+  Duration? get _processElapsed => _flow.processElapsed;
 
   bool get _interactionLocked => _flow.interactionLocked;
 
@@ -193,7 +193,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         _flow.setErrorText(_errorTextFor(error, fallback: '无法恢复默认保存位置。'));
       }
-      _logError('恢复默认保存文件夹失败', error, stackTrace);
+      _logError('恢复默认保存位置失败', error, stackTrace);
     } finally {
       if (mounted) _flow.completeInteraction();
     }
@@ -1487,7 +1487,7 @@ class _HomeScreenState extends State<HomeScreen> {
           'outputUri': outputUri,
           'originalBytes': _sourceInfo?.fileSizeBytes,
           'outputBytes': outputInfo.fileSizeBytes,
-          'elapsedMs': _processStopwatch?.elapsedMilliseconds,
+          'elapsedMs': _processElapsed?.inMilliseconds,
         },
       );
     } catch (error, stackTrace) {
@@ -1530,7 +1530,7 @@ class _HomeScreenState extends State<HomeScreen> {
           'taskId': _taskId,
           'outputUri': outputUri,
           'outputBytes': outputInfo.fileSizeBytes,
-          'elapsedMs': _processStopwatch?.elapsedMilliseconds,
+          'elapsedMs': _processElapsed?.inMilliseconds,
         },
       );
     } catch (error, stackTrace) {

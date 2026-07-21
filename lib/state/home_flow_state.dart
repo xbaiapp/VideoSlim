@@ -10,11 +10,23 @@ import '../models/progress_event.dart';
 import '../models/task_kind.dart';
 import '../models/video_info.dart';
 
+/// Read-only counters for progress currently staged by [HomeFlowState].
+@immutable
+final class PendingProgressBufferSnapshot {
+  const PendingProgressBufferSnapshot({
+    required this.length,
+    required this.taskKeyCount,
+  });
+
+  final int length;
+  final int taskKeyCount;
+}
+
 /// A bounded task-aware staging area used while a native task ID or restored
 /// snapshot is unresolved. Each generation/task/kind retains only the latest
 /// running update and one terminal event.
-final class PendingProgressBuffer {
-  PendingProgressBuffer({this.maxTaskKeys = 8}) : assert(maxTaskKeys > 0);
+final class _PendingProgressBuffer {
+  _PendingProgressBuffer({this.maxTaskKeys = 8}) : assert(maxTaskKeys > 0);
 
   final int maxTaskKeys;
   final LinkedHashMap<String, _PendingProgressBucket> _buckets =
@@ -56,7 +68,7 @@ final class PendingProgressBuffer {
         if (bucket.terminal != null) bucket.terminal!,
     ]..sort((left, right) => left.sequence.compareTo(right.sequence));
     clear();
-    return retained.map((item) => item.event).toList(growable: false);
+    return List<ProgressEvent>.unmodifiable(retained.map((item) => item.event));
   }
 
   void clear() {
@@ -108,7 +120,7 @@ final class HomeFlowState extends ChangeNotifier {
   int? _activeGeneration;
   bool _awaitingTaskId = false;
   bool _terminalEventHandled = false;
-  final PendingProgressBuffer _bufferedProgress = PendingProgressBuffer();
+  final _PendingProgressBuffer _bufferedProgress = _PendingProgressBuffer();
 
   HomeInteractionPhase _interactionPhase = HomeInteractionPhase.idle;
   HomeTaskLifecycle _taskLifecycle = HomeTaskLifecycle.idle;
@@ -152,7 +164,11 @@ final class HomeFlowState extends ChangeNotifier {
   int? get activeGeneration => _activeGeneration;
   bool get awaitingTaskId => _awaitingTaskId;
   bool get terminalEventHandled => _terminalEventHandled;
-  PendingProgressBuffer get bufferedProgress => _bufferedProgress;
+  PendingProgressBufferSnapshot get bufferedProgress =>
+      PendingProgressBufferSnapshot(
+        length: _bufferedProgress.length,
+        taskKeyCount: _bufferedProgress.taskKeyCount,
+      );
 
   HomeInteractionPhase get interactionPhase => _interactionPhase;
   HomeTaskLifecycle get taskLifecycle => _taskLifecycle;
@@ -202,7 +218,8 @@ final class HomeFlowState extends ChangeNotifier {
   AudioExtractMode get audioExtractMode => _audioExtractMode;
   int get audioExtractBitrate => _audioExtractBitrate;
   AudioExtractRequest? get lastAudioExtractRequest => _lastAudioExtractRequest;
-  Stopwatch? get processStopwatch => _processStopwatch;
+  Duration? get processElapsed => _processStopwatch?.elapsed;
+  bool get processStopwatchRunning => _processStopwatch?.isRunning ?? false;
 
   bool get interactionLocked =>
       _restoringTask ||
@@ -588,7 +605,11 @@ final class HomeFlowState extends ChangeNotifier {
   }
 
   void stopProcessStopwatch() {
-    _processStopwatch?.stop();
+    _mutate(() => _processStopwatch?.stop());
+  }
+
+  void resetProcessStopwatch() {
+    _mutate(() => _processStopwatch?.reset());
   }
 
   void resetWorkflow() {

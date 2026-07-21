@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:videoslim/models/progress_event.dart';
 import 'package:videoslim/state/home_flow_state.dart';
 
 void main() {
@@ -118,6 +119,62 @@ void main() {
     );
     expect(state.taskLifecycle, HomeTaskLifecycle.idle);
     expect(state.cancelling, isFalse);
+  });
+
+  test('failed invariant at an atomic boundary rolls state back', () {
+    state.completeRestoration();
+    state.beginTaskPreparation();
+    state.beginTaskProcessing();
+    state.beginCancellation();
+    var notifications = 0;
+    state.addListener(() => notifications += 1);
+
+    expect(
+      () => state.update(state.completeTaskLifecycle),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          'Cancellation can only overlay a processing task.',
+        ),
+      ),
+    );
+
+    expect(state.taskLifecycle, HomeTaskLifecycle.processing);
+    expect(state.cancelling, isTrue);
+    expect(notifications, 0);
+  });
+
+  test('buffer progress exposure is a read-only snapshot', () {
+    final emptySnapshot = state.bufferedProgress;
+
+    state.bufferProgress(
+      const ProgressEvent(
+        taskId: 'task-1',
+        percent: 10,
+        state: TaskState.running,
+      ),
+      generation: 1,
+    );
+
+    expect(emptySnapshot.length, 0);
+    expect(emptySnapshot.taskKeyCount, 0);
+    expect(state.bufferedProgress.length, 1);
+    expect(state.bufferedProgress.taskKeyCount, 1);
+  });
+
+  test('process stopwatch exposes facts and named controls only', () {
+    expect(state.processElapsed, isNull);
+    expect(state.processStopwatchRunning, isFalse);
+
+    state.startProcessStopwatch();
+    expect(state.processElapsed, isNotNull);
+    expect(state.processStopwatchRunning, isTrue);
+
+    state.stopProcessStopwatch();
+    expect(state.processStopwatchRunning, isFalse);
+    state.resetProcessStopwatch();
+    expect(state.processElapsed, Duration.zero);
   });
 
   test('interactionLocked is derived only from locking dimensions', () {
