@@ -254,8 +254,14 @@ internal class ProcessingService : Service() {
                             }
                         },
                         postToServiceMain = { action ->
-                            check(mainHandler.post(action)) {
-                                "Unable to post reconciliation continuation to service main queue"
+                            if (mainHandler.post(action)) {
+                                ServiceMainDispatchResult.Accepted
+                            } else {
+                                ServiceMainDispatchResult.Rejected(
+                                    IllegalStateException(
+                                        "Unable to post reconciliation continuation to service main queue",
+                                    ),
+                                )
                             }
                         },
                         revalidateLaunch = {
@@ -274,7 +280,18 @@ internal class ProcessingService : Service() {
                         finishFailure = { reason, error ->
                             finishReconciliationFailure(launch, reason, error)
                         },
+                        finishNoEngineFailure = { reason, error ->
+                            finishReconciliationNoEngineFailure(launch, reason, error)
+                        },
                         onRecoveryWaitTimeout = launch.terminationPolicy::onRecoveryWaitTimeout,
+                        onFailure = { operation, error ->
+                            runCatching {
+                                log(
+                                    "task=${context.serviceTaskId} $operation failed: " +
+                                        error.stackTraceToString(),
+                                )
+                            }
+                        },
                     ),
             )
         check(reconciliationCoordinator.start()) { "Reconciliation launch coordinator was already started" }
@@ -346,6 +363,28 @@ internal class ProcessingService : Service() {
                 "reason=${reason.name.lowercase()}: ${error.stackTraceToString()}",
         )
         finishStartFailure(launch, failure.message, failure.code.wireName)
+    }
+
+    private fun finishReconciliationNoEngineFailure(
+        launch: ActiveServiceLaunch,
+        reason: ReconciliationLaunchFailure,
+        error: Throwable,
+    ) {
+        val failure = EngineErrorMapper.fromThrowable(error)
+        runCatching {
+            log(
+                "task=${launch.context.serviceTaskId} reconciliation no-engine fallback " +
+                    "reason=${reason.name.lowercase()}: ${error.stackTraceToString()}",
+            )
+        }
+        launch.terminationPolicy.finishNoEngineFailure(
+            ServiceTerminalDirective(
+                outcome = ActiveTaskTerminalOutcome.FAILED,
+                source = ActiveTaskFinishSource.START_EXCEPTION,
+                errorCode = failure.code.wireName,
+                errorMessage = failure.message,
+            ),
+        )
     }
 
     private fun handleCancel(taskId: String?) {
@@ -495,6 +534,14 @@ internal class ProcessingService : Service() {
             RecoveryWaitWatchdog(
                 scheduler = watchdogScheduler,
                 timeoutMillis = RECOVERY_WAIT_TIMEOUT_MS,
+                onFailure = { operation, error ->
+                    runCatching {
+                        log(
+                            "task=${context.serviceTaskId} $operation failed: " +
+                                error.stackTraceToString(),
+                        )
+                    }
+                },
             )
         val terminalNotifications =
             ServiceTerminalNotificationPolicy(
@@ -531,12 +578,15 @@ internal class ProcessingService : Service() {
                         },
                         releaseWakeLock = { wakeLockGuard.release(context.serviceTaskId) },
                         removeForeground = ::removeForegroundNotification,
+                        removeForegroundForNoEngineFallback =
+                            ::removeForegroundNotificationAfterDispatchFailure,
                         publishTerminalNotification = { terminal ->
                             check(Looper.myLooper() == Looper.getMainLooper()) {
                                 "Terminal notifications must be delivered on service main"
                             }
                             terminalNotifications.attempt(terminal)
                         },
+                        publishTerminalNotificationForNoEngineFallback = terminalNotifications::attempt,
                         disposeTranscodeEngine = transcodeEngine::dispose,
                         disposeAudioExtractionEngine = audioExtractionEngine::dispose,
                         ownsServiceSurface = {
@@ -716,6 +766,15 @@ internal class ProcessingService : Service() {
         check(Looper.myLooper() == Looper.getMainLooper()) {
             "Foreground notification removal must run on service main"
         }
+        removeForegroundNotificationAfterDispatchFailure()
+    }
+
+    /**
+     * Last-resort no-engine cleanup when the service main queue rejects reconciliation delivery.
+     * Service/NotificationManager binder operations are safe from the completion thread; Media3
+     * engines are intentionally not touched by this path.
+     */
+    private fun removeForegroundNotificationAfterDispatchFailure() {
         try {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } finally {

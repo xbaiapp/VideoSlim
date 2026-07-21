@@ -190,6 +190,7 @@ internal sealed interface RecoveryWaitWatchdogArmResult {
 internal class RecoveryWaitWatchdog(
     private val scheduler: CancellationWatchdogScheduler,
     private val timeoutMillis: Long,
+    private val onFailure: (String, Throwable) -> Unit,
 ) {
     private val lock = Any()
     private var armed = false
@@ -235,7 +236,7 @@ internal class RecoveryWaitWatchdog(
                     false
                 }
             }
-        if (cancelImmediately) runCatching { scheduled.cancel() }
+        if (cancelImmediately) cancelRegistration(scheduled)
         return RecoveryWaitWatchdogArmResult.Armed
     }
 
@@ -246,7 +247,15 @@ internal class RecoveryWaitWatchdog(
                 armed = false
                 registration.also { registration = null }
             }
-        scheduled?.cancel()
+        scheduled?.let(::cancelRegistration)
+    }
+
+    private fun cancelRegistration(scheduled: CancellationWatchdogRegistration) {
+        try {
+            scheduled.cancel()
+        } catch (error: Throwable) {
+            runCatching { onFailure("recovery wait watchdog cancellation", error) }
+        }
     }
 }
 
@@ -254,6 +263,7 @@ internal enum class ReconciliationLaunchFailure {
     SETUP,
     WATCHDOG,
     REGISTRATION,
+    MAIN_DISPATCH,
     RECONCILIATION,
     OWNERSHIP,
 }
@@ -267,17 +277,27 @@ internal enum class ReconciliationLaunchDisposition {
 internal const val RECONCILIATION_LAUNCH_OWNERSHIP_FAILURE_MESSAGE =
     "Reconciled launch no longer owns a valid reservation"
 
+internal sealed interface ServiceMainDispatchResult {
+    data object Accepted : ServiceMainDispatchResult
+
+    data class Rejected(
+        val error: Throwable,
+    ) : ServiceMainDispatchResult
+}
+
 internal data class ServiceReconciliationLaunchActions(
     val startForeground: () -> Unit,
     val acquireWakeLock: () -> Unit,
     val armRecoveryWaitWatchdog: ((() -> Unit) -> RecoveryWaitWatchdogArmResult),
     val cancelRecoveryWaitWatchdog: () -> Unit,
     val registerReconciliationCompletion: ((Throwable?) -> Unit) -> Unit,
-    val postToServiceMain: (() -> Unit) -> Unit,
+    val postToServiceMain: (() -> Unit) -> ServiceMainDispatchResult,
     val revalidateLaunch: () -> ReconciliationLaunchDisposition,
     val launchEngine: () -> Unit,
     val finishFailure: (ReconciliationLaunchFailure, Throwable) -> Unit,
+    val finishNoEngineFailure: (ReconciliationLaunchFailure, Throwable) -> Unit,
     val onRecoveryWaitTimeout: () -> Unit,
+    val onFailure: (String, Throwable) -> Unit,
 )
 
 /**
@@ -311,7 +331,7 @@ internal class ServiceReconciliationLaunchCoordinator(
         val armResult =
             try {
                 actions.armRecoveryWaitWatchdog {
-                    actions.postToServiceMain(::resolveTimeout)
+                    dispatchToServiceMain("recovery wait timeout", ::resolveTimeout)
                 }
             } catch (error: Throwable) {
                 RecoveryWaitWatchdogArmResult.Rejected(error)
@@ -323,7 +343,15 @@ internal class ServiceReconciliationLaunchCoordinator(
 
         try {
             actions.registerReconciliationCompletion { error ->
-                actions.postToServiceMain { resolveCompletion(error) }
+                // CompletionStage turns a thrown callback into a failed dependent stage. There is
+                // intentionally no owner for that dependent stage, so this callback must contain
+                // both thrown and explicit dispatch rejection itself.
+                try {
+                    dispatchToServiceMain("reconciliation completion") { resolveCompletion(error) }
+                } catch (callbackError: Throwable) {
+                    reportFailure("reconciliation completion callback", callbackError)
+                    resolveNoEngineDispatchFailure(callbackError)
+                }
             }
         } catch (error: Throwable) {
             resolveFailure(ReconciliationLaunchFailure.REGISTRATION, error)
@@ -352,9 +380,59 @@ internal class ServiceReconciliationLaunchCoordinator(
         resolveCurrentLaunch { actions.finishFailure(reason, error) }
     }
 
+    private fun dispatchToServiceMain(
+        operation: String,
+        action: () -> Unit,
+    ) {
+        val result =
+            try {
+                actions.postToServiceMain(action)
+            } catch (error: Throwable) {
+                ServiceMainDispatchResult.Rejected(error)
+            }
+        if (result is ServiceMainDispatchResult.Rejected) {
+            reportFailure("$operation main dispatch", result.error)
+            resolveNoEngineDispatchFailure(result.error)
+        }
+    }
+
+    private fun resolveNoEngineDispatchFailure(error: Throwable) {
+        if (!claimResolution()) return
+        cancelRecoveryWaitWatchdogBestEffort()
+        val disposition =
+            try {
+                actions.revalidateLaunch()
+            } catch (revalidationError: Throwable) {
+                reportFailure("reconciliation dispatch fallback revalidation", revalidationError)
+                runNoEngineFailure(ReconciliationLaunchFailure.MAIN_DISPATCH, error)
+                return
+            }
+        when (disposition) {
+            ReconciliationLaunchDisposition.LAUNCH ->
+                runNoEngineFailure(ReconciliationLaunchFailure.MAIN_DISPATCH, error)
+            ReconciliationLaunchDisposition.IGNORE_STALE -> Unit
+            ReconciliationLaunchDisposition.FAIL_CURRENT ->
+                runNoEngineFailure(
+                    ReconciliationLaunchFailure.OWNERSHIP,
+                    IllegalStateException(RECONCILIATION_LAUNCH_OWNERSHIP_FAILURE_MESSAGE),
+                )
+        }
+    }
+
+    private fun runNoEngineFailure(
+        reason: ReconciliationLaunchFailure,
+        error: Throwable,
+    ) {
+        try {
+            actions.finishNoEngineFailure(reason, error)
+        } catch (fallbackError: Throwable) {
+            reportFailure("reconciliation no-engine terminal fallback", fallbackError)
+        }
+    }
+
     private fun resolveCurrentLaunch(onLaunch: () -> Unit) {
         if (!claimResolution()) return
-        actions.cancelRecoveryWaitWatchdog()
+        cancelRecoveryWaitWatchdogBestEffort()
         when (actions.revalidateLaunch()) {
             ReconciliationLaunchDisposition.LAUNCH -> onLaunch()
             ReconciliationLaunchDisposition.IGNORE_STALE -> Unit
@@ -364,6 +442,21 @@ internal class ServiceReconciliationLaunchCoordinator(
                     IllegalStateException(RECONCILIATION_LAUNCH_OWNERSHIP_FAILURE_MESSAGE),
                 )
         }
+    }
+
+    private fun cancelRecoveryWaitWatchdogBestEffort() {
+        try {
+            actions.cancelRecoveryWaitWatchdog()
+        } catch (error: Throwable) {
+            reportFailure("recovery wait watchdog cancellation", error)
+        }
+    }
+
+    private fun reportFailure(
+        operation: String,
+        error: Throwable,
+    ) {
+        runCatching { actions.onFailure(operation, error) }
     }
 
     private fun claimResolution(): Boolean =
@@ -435,7 +528,9 @@ internal data class ServiceTaskCleanupActions(
     val removeRegistryObserver: () -> Unit,
     val releaseWakeLock: () -> Unit,
     val removeForeground: () -> Unit,
+    val removeForegroundForNoEngineFallback: () -> Unit,
     val publishTerminalNotification: (ServiceTerminalDirective) -> Unit,
+    val publishTerminalNotificationForNoEngineFallback: (ServiceTerminalDirective) -> Unit,
     val disposeTranscodeEngine: () -> Unit,
     val disposeAudioExtractionEngine: () -> Unit,
 )
@@ -460,9 +555,15 @@ internal class ServiceTaskCleanup(
     fun releaseForServiceDestroy(terminal: ServiceTerminalDirective): Boolean =
         release(includeServiceSurface = true, terminal = terminal)
 
+    fun releaseForNoEngineFallback(
+        includeServiceSurface: Boolean,
+        terminal: ServiceTerminalDirective,
+    ): Boolean = release(includeServiceSurface, terminal, noEngineFallback = true)
+
     private fun release(
         includeServiceSurface: Boolean,
         terminal: ServiceTerminalDirective,
+        noEngineFallback: Boolean = false,
     ): Boolean {
         synchronized(lock) {
             if (released) return false
@@ -475,13 +576,27 @@ internal class ServiceTaskCleanup(
         }
         bestEffort("wake lock", actions.releaseWakeLock)
         if (includeServiceSurface) {
-            bestEffort("foreground", actions.removeForeground)
+            bestEffort("foreground") {
+                if (noEngineFallback) {
+                    actions.removeForegroundForNoEngineFallback()
+                } else {
+                    actions.removeForeground()
+                }
+            }
         }
         // The registry is a mirror, not a gate. The winner always attempts its terminal
         // notification, including when this launch no longer owns the foreground surface.
-        bestEffort("terminal notification") { actions.publishTerminalNotification(terminal) }
-        bestEffort("transcode engine", actions.disposeTranscodeEngine)
-        bestEffort("audio extraction engine", actions.disposeAudioExtractionEngine)
+        bestEffort("terminal notification") {
+            if (noEngineFallback) {
+                actions.publishTerminalNotificationForNoEngineFallback(terminal)
+            } else {
+                actions.publishTerminalNotification(terminal)
+            }
+        }
+        if (!noEngineFallback) {
+            bestEffort("transcode engine", actions.disposeTranscodeEngine)
+            bestEffort("audio extraction engine", actions.disposeAudioExtractionEngine)
+        }
         return true
     }
 
@@ -507,7 +622,9 @@ internal data class ServiceTerminationPolicyActions(
     val removeRegistryObserver: () -> Unit,
     val releaseWakeLock: () -> Unit,
     val removeForeground: () -> Unit,
+    val removeForegroundForNoEngineFallback: () -> Unit,
     val publishTerminalNotification: (ServiceTerminalDirective) -> Unit,
+    val publishTerminalNotificationForNoEngineFallback: (ServiceTerminalDirective) -> Unit,
     val disposeTranscodeEngine: () -> Unit,
     val disposeAudioExtractionEngine: () -> Unit,
     val ownsServiceSurface: () -> Boolean,
@@ -539,7 +656,10 @@ internal class ServiceTerminationPolicy(
                     removeRegistryObserver = actions.removeRegistryObserver,
                     releaseWakeLock = actions.releaseWakeLock,
                     removeForeground = actions.removeForeground,
+                    removeForegroundForNoEngineFallback = actions.removeForegroundForNoEngineFallback,
                     publishTerminalNotification = actions.publishTerminalNotification,
+                    publishTerminalNotificationForNoEngineFallback =
+                        actions.publishTerminalNotificationForNoEngineFallback,
                     disposeTranscodeEngine = actions.disposeTranscodeEngine,
                     disposeAudioExtractionEngine = actions.disposeAudioExtractionEngine,
                 ),
@@ -623,6 +743,33 @@ internal class ServiceTerminationPolicy(
             },
         )
 
+    /**
+     * Terminal fallback for a launch whose reconciliation continuation could not reach service
+     * main. The coordinator calls this only while no engine route exists. It completes directly on
+     * the callback thread and deliberately omits every engine/Media3 action.
+     */
+    fun finishNoEngineFailure(terminal: ServiceTerminalDirective): ActiveTaskFinishDecision {
+        if (context.engineRoute != null) {
+            reportFailure(
+                "reconciliation no-engine fallback invariant",
+                IllegalStateException("No-engine fallback received an assigned engine route"),
+            )
+        }
+        return context.finishOnce(
+            generation = context.launchGeneration,
+            outcome = terminal.outcome,
+            source = terminal.source,
+            publishTerminal = {
+                bestEffort("registry terminal publication") {
+                    actions.publishRegistryTerminal(terminal)
+                }
+            },
+            releaseResources = {
+                releaseForNoEngineFallback(terminal)
+            },
+        )
+    }
+
     fun cancelLateStartedEngine(route: EngineTaskRoute) {
         bestEffort("publication discard boundary") { actions.markPublicationDiscarding(route) }
         bestEffort("engine cancellation") { actions.cancelEngine(route) }
@@ -701,6 +848,14 @@ internal class ServiceTerminationPolicy(
     private fun releaseForServiceDestroy(terminal: ServiceTerminalDirective) {
         if (!cleanup.releaseForServiceDestroy(terminal)) return
         bestEffort("active launch clear", actions.clearActiveLaunch)
+    }
+
+    private fun releaseForNoEngineFallback(terminal: ServiceTerminalDirective) {
+        val ownsSurface = ownsServiceSurfaceFailClosed()
+        val released = cleanup.releaseForNoEngineFallback(ownsSurface, terminal)
+        if (!released || !ownsSurface) return
+        bestEffort("active launch clear", actions.clearActiveLaunch)
+        bestEffort("service stop", actions.stopService)
     }
 
     private fun ownsServiceSurfaceFailClosed(): Boolean =

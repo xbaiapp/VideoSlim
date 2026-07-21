@@ -294,7 +294,13 @@ class ProcessingServiceTerminationPolicyTest {
                             removeRegistryObserver = resource("observer"),
                             releaseWakeLock = resource("wake-lock"),
                             removeForeground = resource("foreground"),
+                            removeForegroundForNoEngineFallback = resource("foreground"),
                             publishTerminalNotification = { terminal ->
+                                notificationAttempts.incrementAndGet()
+                                resource("notification").invoke()
+                                terminalNotification?.invoke(terminal)
+                            },
+                            publishTerminalNotificationForNoEngineFallback = { terminal ->
                                 notificationAttempts.incrementAndGet()
                                 resource("notification").invoke()
                                 terminalNotification?.invoke(terminal)

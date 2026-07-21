@@ -21,9 +21,10 @@ internal class ProcessReconciliationGate(
 ) {
     private val started = AtomicBoolean(false)
     private val sharedCompletion = CompletableFuture<Unit>()
+    private val observationalCompletion = sharedCompletion.minimalCompletionStage()
 
     fun startOnce(action: () -> Unit): CompletionStage<Unit> {
-        if (!started.compareAndSet(false, true)) return sharedCompletion
+        if (!started.compareAndSet(false, true)) return observationalCompletion
 
         var submitted = false
         try {
@@ -43,10 +44,10 @@ internal class ProcessReconciliationGate(
         } finally {
             if (!submitted) executor.shutdown()
         }
-        return sharedCompletion
+        return observationalCompletion
     }
 
-    fun completion(): CompletionStage<Unit> = sharedCompletion
+    fun completion(): CompletionStage<Unit> = observationalCompletion
 
     private companion object {
         const val RECONCILIATION_THREAD_NAME = "videoslim-reconciliation"

@@ -2,6 +2,7 @@ package com.videoslim.videoslim
 
 import java.util.Collections
 import java.util.concurrent.AbstractExecutorService
+import java.util.concurrent.CompletionException
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -91,6 +92,44 @@ class RecoveryIoCoordinatorTest {
     }
 
     @Test
+    fun `early callers cannot complete or cancel shared reconciliation`() {
+        val executor = ManualExecutorService()
+        val gate = ProcessReconciliationGate(executor)
+        val actions = AtomicInteger()
+        val firstView = gate.startOnce { actions.incrementAndGet() }
+        val secondView = gate.completion()
+
+        assertTrue(
+            firstView
+                .toCompletableFuture()
+                .completeExceptionally(IllegalStateException("caller-forced failure")),
+        )
+        assertTrue(secondView.toCompletableFuture().cancel(false))
+        assertFalse(gate.completion().toCompletableFuture().isDone)
+
+        executor.runNext()
+
+        assertEquals(1, actions.get())
+        assertTrue(gate.completion().toCompletableFuture().isDone)
+        assertFalse(gate.completion().toCompletableFuture().isCompletedExceptionally)
+    }
+
+    @Test
+    fun `late caller mutation cannot rewrite shared reconciliation result`() {
+        val executor = ManualExecutorService()
+        val gate = ProcessReconciliationGate(executor)
+        gate.startOnce {}
+        executor.runNext()
+
+        val callerCopy = gate.completion().toCompletableFuture()
+        callerCopy.obtrudeException(IllegalStateException("caller rewrote its copy"))
+
+        assertTrue(callerCopy.isCompletedExceptionally)
+        assertTrue(gate.startOnce { error("must not execute") }.toCompletableFuture().isDone)
+        assertFalse(gate.completion().toCompletableFuture().isCompletedExceptionally)
+    }
+
+    @Test
     fun `action failure fans out to every listener and still shuts down`() {
         val executor = ManualExecutorService()
         val gate = ProcessReconciliationGate(executor)
@@ -104,7 +143,7 @@ class RecoveryIoCoordinatorTest {
         gate.startOnce { error("must not execute") }.whenComplete { _, failure -> failures += failure }
 
         assertEquals(3, failures.size)
-        failures.forEach { assertSame(expected, it) }
+        failures.forEach { assertSame(expected, it.completionCause()) }
         assertTrue(stage.toCompletableFuture().isCompletedExceptionally)
         assertEquals(1, executor.shutdownCalls.get())
     }
@@ -123,9 +162,12 @@ class RecoveryIoCoordinatorTest {
         assertSame(first, second)
         assertTrue(first.toCompletableFuture().isCompletedExceptionally)
         assertEquals(2, failures.size)
-        failures.forEach { assertTrue(it is RejectedExecutionException) }
+        failures.forEach { assertTrue(it.completionCause() is RejectedExecutionException) }
         assertEquals(1, executor.shutdownCalls.get())
     }
+
+    private fun Throwable?.completionCause(): Throwable? =
+        if (this is CompletionException) cause else this
 
     private class ManualExecutorService(
         private val rejectExecution: Boolean = false,

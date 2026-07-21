@@ -35,6 +35,90 @@ class ProcessingServiceReconciliationPolicyTest {
     }
 
     @Test
+    fun `explicit completion post rejection claims no-engine fallback and releases service`() {
+        val expected = IllegalStateException("main queue rejected completion")
+        val harness = LaunchHarness()
+        harness.coordinator.start()
+        harness.rejectNextMainPost(expected)
+
+        harness.completeReconciliation()
+
+        assertEquals(0, harness.launchCount)
+        assertEquals(listOf(ReconciliationLaunchFailure.MAIN_DISPATCH to expected), harness.failures)
+        assertTrue(harness.reports.any { it.second === expected })
+        harness.assertTerminalCleanupExactlyOnce(
+            ActiveTaskFinishSource.START_EXCEPTION,
+            expectEngineDisposal = false,
+        )
+    }
+
+    @Test
+    fun `thrown completion post is contained by no-engine fallback`() {
+        val expected = AssertionError("main queue post threw")
+        val harness = LaunchHarness()
+        harness.coordinator.start()
+        harness.rejectNextMainPost(expected, throwInstead = true)
+
+        harness.completeReconciliation()
+
+        assertEquals(0, harness.launchCount)
+        assertEquals(listOf(ReconciliationLaunchFailure.MAIN_DISPATCH to expected), harness.failures)
+        assertTrue(harness.reports.any { it.second === expected })
+        harness.assertTerminalCleanupExactlyOnce(
+            ActiveTaskFinishSource.START_EXCEPTION,
+            expectEngineDisposal = false,
+        )
+    }
+
+    @Test
+    fun `completion post rejection wins queued watchdog exactly once`() {
+        val expected = IllegalStateException("completion dispatch rejected")
+        val harness = LaunchHarness()
+        harness.coordinator.start()
+        harness.fireRecoveryTimeout()
+        harness.rejectNextMainPost(expected)
+
+        harness.completeReconciliation()
+        harness.runMainActions()
+
+        assertEquals(0, harness.timeoutCount)
+        assertEquals(0, harness.launchCount)
+        assertEquals(listOf(ReconciliationLaunchFailure.MAIN_DISPATCH to expected), harness.failures)
+        harness.assertTerminalCleanupExactlyOnce(
+            ActiveTaskFinishSource.START_EXCEPTION,
+            expectEngineDisposal = false,
+        )
+    }
+
+    @Test
+    fun `watchdog cancellation throw cannot block claimed launch or termination`() {
+        val launchCancelFailure = IllegalStateException("launch watchdog cancel failed")
+        val launchHarness = LaunchHarness(recoveryWatchdogCancelFailure = launchCancelFailure)
+        launchHarness.coordinator.start()
+        launchHarness.completeReconciliation()
+        launchHarness.runMainActions()
+
+        assertEquals(1, launchHarness.launchCount)
+        assertTrue(launchHarness.failures.isEmpty())
+        assertTrue(launchHarness.reports.any { it.second === launchCancelFailure })
+
+        val terminalCancelFailure = IllegalStateException("terminal watchdog cancel failed")
+        val terminalHarness = LaunchHarness(recoveryWatchdogCancelFailure = terminalCancelFailure)
+        val reconciliationFailure = IllegalStateException("reconciliation failed")
+        terminalHarness.coordinator.start()
+        terminalHarness.completeReconciliation(reconciliationFailure)
+        terminalHarness.runMainActions()
+
+        assertEquals(0, terminalHarness.launchCount)
+        assertEquals(
+            listOf(ReconciliationLaunchFailure.RECONCILIATION to reconciliationFailure),
+            terminalHarness.failures,
+        )
+        assertTrue(terminalHarness.reports.any { it.second === terminalCancelFailure })
+        terminalHarness.assertTerminalCleanupExactlyOnce(ActiveTaskFinishSource.START_EXCEPTION)
+    }
+
+    @Test
     fun `reconciliation failure finishes exactly once without launching an engine`() {
         val harness = LaunchHarness()
         val expected = IllegalStateException("recovery unavailable")
@@ -241,6 +325,7 @@ class ProcessingServiceReconciliationPolicyTest {
     private class LaunchHarness(
         private val watchdogRejection: Throwable? = null,
         private val deferTerminalWinner: Boolean = false,
+        private val recoveryWatchdogCancelFailure: Throwable? = null,
     ) {
         val context = awaitingContext(SERVICE_TASK_ID, GENERATION)
         var destroyed = false
@@ -249,6 +334,7 @@ class ProcessingServiceReconciliationPolicyTest {
         var reservation: TaskRuntimeSnapshot? = runningSnapshot(SERVICE_TASK_ID)
         val events = mutableListOf<String>()
         val failures = mutableListOf<Pair<ReconciliationLaunchFailure, Throwable>>()
+        val reports = mutableListOf<Pair<String, Throwable>>()
         val postedMainActions = ArrayDeque<() -> Unit>()
         var registrationCount = 0
         var launchCount = 0
@@ -258,12 +344,16 @@ class ProcessingServiceReconciliationPolicyTest {
         private var completion: ((Throwable?) -> Unit)? = null
         private var recoveryTimeout: (() -> Unit)? = null
         private var terminalWinner: (() -> Unit)? = null
+        private var nextMainPostFailure: Throwable? = null
+        private var nextMainPostThrows = false
         private var registryTerminalCount = 0
         private var userWatchdogCancelCount = 0
         private var observerReleaseCount = 0
         private var wakeReleaseCount = 0
         private var foregroundReleaseCount = 0
+        private var noEngineForegroundReleaseCount = 0
         private var notificationCount = 0
+        private var noEngineNotificationCount = 0
         private var transcodeDisposeCount = 0
         private var audioDisposeCount = 0
         private var clearActiveCount = 0
@@ -273,6 +363,7 @@ class ProcessingServiceReconciliationPolicyTest {
             if (recoveryWatchdogArmed) {
                 recoveryWatchdogArmed = false
                 watchdogCancelCount += 1
+                recoveryWatchdogCancelFailure?.let { throw it }
             }
         }
 
@@ -302,7 +393,15 @@ class ProcessingServiceReconciliationPolicyTest {
                         removeRegistryObserver = { observerReleaseCount += 1 },
                         releaseWakeLock = { wakeReleaseCount += 1 },
                         removeForeground = { foregroundReleaseCount += 1 },
+                        removeForegroundForNoEngineFallback = {
+                            foregroundReleaseCount += 1
+                            noEngineForegroundReleaseCount += 1
+                        },
                         publishTerminalNotification = { notificationCount += 1 },
+                        publishTerminalNotificationForNoEngineFallback = {
+                            notificationCount += 1
+                            noEngineNotificationCount += 1
+                        },
                         disposeTranscodeEngine = { transcodeDisposeCount += 1 },
                         disposeAudioExtractionEngine = { audioDisposeCount += 1 },
                         ownsServiceSurface = {
@@ -337,6 +436,19 @@ class ProcessingServiceReconciliationPolicyTest {
                             registrationCount += 1
                             completion = callback
                         },
+                        postToServiceMain = { action ->
+                            val failure = nextMainPostFailure
+                            nextMainPostFailure = null
+                            if (failure == null) {
+                                postedMainActions += action
+                                ServiceMainDispatchResult.Accepted
+                            } else if (nextMainPostThrows) {
+                                nextMainPostThrows = false
+                                throw failure
+                            } else {
+                                ServiceMainDispatchResult.Rejected(failure)
+                            }
+                        },
                         revalidateLaunch = {
                             reconciliationLaunchDisposition(
                                 serviceDestroyed = destroyed,
@@ -347,7 +459,6 @@ class ProcessingServiceReconciliationPolicyTest {
                                 reservation = reservation,
                             )
                         },
-                        postToServiceMain = { action -> postedMainActions += action },
                         launchEngine = {
                             events += "launch"
                             launchCount += 1
@@ -363,10 +474,22 @@ class ProcessingServiceReconciliationPolicyTest {
                                 ),
                             )
                         },
+                        finishNoEngineFailure = { reason, error ->
+                            failures += reason to error
+                            terminationPolicy.finishNoEngineFailure(
+                                ServiceTerminalDirective(
+                                    outcome = ActiveTaskTerminalOutcome.FAILED,
+                                    source = ActiveTaskFinishSource.START_EXCEPTION,
+                                    errorCode = EngineErrorCode.UNKNOWN.wireName,
+                                    errorMessage = EngineErrorCode.UNKNOWN.defaultMessage,
+                                ),
+                            )
+                        },
                         onRecoveryWaitTimeout = {
                             timeoutCount += 1
                             terminationPolicy.onRecoveryWaitTimeout()
                         },
+                        onFailure = { operation, error -> reports += operation to error },
                     ),
             )
 
@@ -376,6 +499,15 @@ class ProcessingServiceReconciliationPolicyTest {
 
         fun fireRecoveryTimeout() {
             checkNotNull(recoveryTimeout).invoke()
+        }
+
+        fun rejectNextMainPost(
+            error: Throwable,
+            throwInstead: Boolean = false,
+        ) {
+            check(nextMainPostFailure == null)
+            nextMainPostFailure = error
+            nextMainPostThrows = throwInstead
         }
 
         fun finishExistingTerminal() {
@@ -421,6 +553,7 @@ class ProcessingServiceReconciliationPolicyTest {
             expectStop: Boolean = true,
             expectedOutcome: ActiveTaskTerminalOutcome = ActiveTaskTerminalOutcome.FAILED,
             expectRecoveryWatchdogCancellation: Boolean = true,
+            expectEngineDisposal: Boolean = true,
         ) {
             assertEquals(
                 ActiveTaskTerminalOwnership(expectedOutcome, expectedSource),
@@ -436,13 +569,15 @@ class ProcessingServiceReconciliationPolicyTest {
                     1,
                     1,
                     1,
-                    1,
-                    1,
+                    if (expectEngineDisposal) 1 else 0,
+                    if (expectEngineDisposal) 1 else 0,
                     1,
                     if (expectStop) 1 else 0,
                 ),
                 terminalAttemptSnapshot(),
             )
+            assertEquals(if (expectEngineDisposal) 0 else 1, noEngineForegroundReleaseCount)
+            assertEquals(if (expectEngineDisposal) 0 else 1, noEngineNotificationCount)
         }
     }
 
