@@ -21,7 +21,8 @@ internal class ProcessReconciliationGate(
 ) {
     private val started = AtomicBoolean(false)
     private val sharedCompletion = CompletableFuture<Unit>()
-    private val observationalCompletion = sharedCompletion.minimalCompletionStage()
+    private val observationalCompletion: CompletionStage<Unit> =
+        ObservationalCompletionStage(sharedCompletion)
 
     fun startOnce(action: () -> Unit): CompletionStage<Unit> {
         if (!started.compareAndSet(false, true)) return observationalCompletion

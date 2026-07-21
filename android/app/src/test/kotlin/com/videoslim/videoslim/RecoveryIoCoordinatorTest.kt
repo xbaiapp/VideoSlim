@@ -1,7 +1,9 @@
 package com.videoslim.videoslim
 
+import java.io.File
 import java.util.Collections
 import java.util.concurrent.AbstractExecutorService
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
@@ -11,11 +13,25 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RecoveryIoCoordinatorTest {
+    @Test
+    fun `API 26 policy excludes post-floor CompletableFuture views`() {
+        productionSourceRoot()
+            .walkTopDown()
+            .filter { it.isFile && it.extension in setOf("java", "kt") }
+            .forEach { source ->
+                assertFalse(
+                    "${source.path} must use only future APIs available on Android API 26",
+                    source.readText().contains("minimalCompletionStage"),
+                )
+            }
+    }
+
     @Test
     fun `completion access never starts reconciliation`() {
         val executor = ManualExecutorService()
@@ -98,18 +114,25 @@ class RecoveryIoCoordinatorTest {
         val actions = AtomicInteger()
         val firstView = gate.startOnce { actions.incrementAndGet() }
         val secondView = gate.completion()
+        val forcedFailure = firstView.toCompletableFuture()
+        val cancelled = secondView.toCompletableFuture()
+        val untouchedEarlyCopy = firstView.toCompletableFuture()
 
-        assertTrue(
-            firstView
-                .toCompletableFuture()
-                .completeExceptionally(IllegalStateException("caller-forced failure")),
-        )
-        assertTrue(secondView.toCompletableFuture().cancel(false))
+        assertFalse(firstView is CompletableFuture<*>)
+        assertFalse(secondView is CompletableFuture<*>)
+        assertNotSame(forcedFailure, untouchedEarlyCopy)
+        assertTrue(forcedFailure.completeExceptionally(IllegalStateException("caller-forced failure")))
+        assertTrue(cancelled.cancel(false))
+        assertFalse(untouchedEarlyCopy.isDone)
         assertFalse(gate.completion().toCompletableFuture().isDone)
 
         executor.runNext()
 
         assertEquals(1, actions.get())
+        assertTrue(forcedFailure.isCompletedExceptionally)
+        assertTrue(cancelled.isCancelled)
+        assertTrue(untouchedEarlyCopy.isDone)
+        assertFalse(untouchedEarlyCopy.isCompletedExceptionally)
         assertTrue(gate.completion().toCompletableFuture().isDone)
         assertFalse(gate.completion().toCompletableFuture().isCompletedExceptionally)
     }
@@ -122,11 +145,39 @@ class RecoveryIoCoordinatorTest {
         executor.runNext()
 
         val callerCopy = gate.completion().toCompletableFuture()
+        val otherLateCopy = gate.startOnce { error("must not execute") }.toCompletableFuture()
+        assertNotSame(callerCopy, otherLateCopy)
         callerCopy.obtrudeException(IllegalStateException("caller rewrote its copy"))
 
         assertTrue(callerCopy.isCompletedExceptionally)
-        assertTrue(gate.startOnce { error("must not execute") }.toCompletableFuture().isDone)
+        assertFalse(callerCopy.cancel(false))
+        assertTrue(otherLateCopy.isDone)
+        assertFalse(otherLateCopy.isCompletedExceptionally)
         assertFalse(gate.completion().toCompletableFuture().isCompletedExceptionally)
+    }
+
+    @Test
+    fun `caller mutation and cancellation cannot rewrite failed reconciliation`() {
+        val executor = ManualExecutorService()
+        val gate = ProcessReconciliationGate(executor)
+        val expected = IllegalStateException("reconciliation failed")
+        val earlyForcedSuccess = gate.startOnce { throw expected }.toCompletableFuture()
+        val earlyCancelled = gate.completion().toCompletableFuture()
+        val untouchedEarlyCopy = gate.completion().toCompletableFuture()
+
+        assertTrue(earlyForcedSuccess.complete(Unit))
+        assertTrue(earlyCancelled.cancel(false))
+        executor.runNext()
+
+        assertSame(expected, untouchedEarlyCopy.failureCause())
+        val mutatedLateCopy = gate.completion().toCompletableFuture()
+        val untouchedLateCopy = gate.startOnce { error("must not execute") }.toCompletableFuture()
+        mutatedLateCopy.obtrudeValue(Unit)
+
+        assertFalse(mutatedLateCopy.isCompletedExceptionally)
+        assertFalse(mutatedLateCopy.cancel(false))
+        assertSame(expected, untouchedLateCopy.failureCause())
+        assertSame(expected, gate.completion().toCompletableFuture().failureCause())
     }
 
     @Test
@@ -168,6 +219,21 @@ class RecoveryIoCoordinatorTest {
 
     private fun Throwable?.completionCause(): Throwable? =
         if (this is CompletionException) cause else this
+
+    private fun CompletableFuture<Unit>.failureCause(): Throwable? =
+        try {
+            join()
+            null
+        } catch (error: CompletionException) {
+            error.cause
+        }
+
+    private fun productionSourceRoot(): File {
+        val relativePath = "src/main"
+        return listOf(File(relativePath), File("app", relativePath), File("android/app", relativePath))
+            .firstOrNull(File::isDirectory)
+            ?: error("Cannot locate $relativePath from ${File(".").absolutePath}")
+    }
 
     private class ManualExecutorService(
         private val rejectExecution: Boolean = false,
