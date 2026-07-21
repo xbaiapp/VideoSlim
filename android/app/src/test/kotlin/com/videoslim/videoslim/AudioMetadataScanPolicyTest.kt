@@ -7,10 +7,51 @@ import java.nio.ByteBuffer
 import java.util.concurrent.CancellationException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class AudioMetadataScanPolicyTest {
+    @Test
+    fun `selected audio track seeks to stream start when framework exposes no current sample`() {
+        var selected = false
+        var sought = false
+
+        positionSelectedTrackAtStart(
+            selectTrack = { selected = true },
+            currentSampleTimeUs = { if (selected && sought) 0L else -1L },
+            seekToStart = { sought = true },
+        )
+
+        assertTrue(selected)
+        assertTrue(sought)
+    }
+
+    @Test
+    fun `selected audio track keeps framework cursor when first sample is already exposed`() {
+        var seekCount = 0
+
+        positionSelectedTrackAtStart(
+            selectTrack = {},
+            currentSampleTimeUs = { 23_000L },
+            seekToStart = { seekCount += 1 },
+        )
+
+        assertEquals(0, seekCount)
+    }
+
+    @Test
+    fun `empty selected track reports the dedicated unreadable-samples failure`() {
+        assertThrows(NoReadableAudioSamplesException::class.java) {
+            scanAudioSampleMetadata(
+                sampleTimeUs = { -1L },
+                samplePayloadBytes = { error("payload must not be read") },
+                advance = { false },
+                shouldCancel = { false },
+            )
+        }
+    }
+
     @Test
     fun `sample scan collects physically read timing evidence and detects regression`() {
         val times = listOf(1_000L, 2_000L, 1_500L)

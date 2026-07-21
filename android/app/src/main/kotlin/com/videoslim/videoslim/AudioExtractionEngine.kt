@@ -565,15 +565,7 @@ internal class AudioExtractionEngine(
     private fun mapPreparationFailure(error: Throwable): EngineFailure =
         when (error) {
             is EngineOperationException -> error.failure
-            is AudioMetadataException ->
-                when (error.code) {
-                    AudioMetadataException.NO_AUDIO_TRACK -> EngineFailure(EngineErrorCode.AUDIO_TRACK_MISSING)
-                    AudioMetadataException.SOURCE_PERMISSION_LOST ->
-                        EngineFailure(EngineErrorCode.SOURCE_PERMISSION_LOST, error.message)
-                    AudioMetadataException.SOURCE_CORRUPTED ->
-                        EngineFailure(EngineErrorCode.SOURCE_CORRUPTED, error.message)
-                    else -> EngineFailure(EngineErrorCode.SOURCE_PROVIDER_FAILED, error.message)
-                }
+            is AudioMetadataException -> mapAudioMetadataPreparationFailure(error)
             is CancellationException -> EngineFailure(EngineErrorCode.CANCELLED)
             else -> EngineErrorMapper.fromThrowable(error)
         }
@@ -772,6 +764,7 @@ internal fun mapAudioPipelineFailure(
     when (error) {
         is EngineOperationException -> return error.failure
         is CancellationException -> return EngineFailure(EngineErrorCode.CANCELLED)
+        is NoReadableAudioSamplesException -> return EngineFailure(EngineErrorCode.AUDIO_DECODING_FAILED)
         is AudioMetadataException -> return EngineFailure(EngineErrorCode.AUDIO_OUTPUT_INVALID)
         is ExportException -> return mapAudioExportFailure(error.errorCode)
     }
@@ -785,6 +778,17 @@ internal fun mapAudioPipelineFailure(
         },
     )
 }
+
+internal fun mapAudioMetadataPreparationFailure(error: AudioMetadataException): EngineFailure =
+    when (error.code) {
+        AudioMetadataException.NO_AUDIO_TRACK -> EngineFailure(EngineErrorCode.AUDIO_TRACK_MISSING)
+        AudioMetadataException.NO_READABLE_SAMPLES -> EngineFailure(EngineErrorCode.AUDIO_DECODING_FAILED)
+        AudioMetadataException.SOURCE_PERMISSION_LOST ->
+            EngineFailure(EngineErrorCode.SOURCE_PERMISSION_LOST, error.message)
+        AudioMetadataException.SOURCE_CORRUPTED ->
+            EngineFailure(EngineErrorCode.SOURCE_CORRUPTED, error.message)
+        else -> EngineFailure(EngineErrorCode.SOURCE_PROVIDER_FAILED, error.message)
+    }
 
 internal fun mapAudioExportFailure(errorCode: Int): EngineFailure =
     when (errorCode) {

@@ -85,6 +85,27 @@ class AudioExtractionPolicyTest {
     }
 
     @Test
+    fun `readable source whose audio samples are not exposed maps to audio read failure`() {
+        val preparation =
+            mapAudioMetadataPreparationFailure(
+                AudioMetadataException(
+                    AudioMetadataException.NO_READABLE_SAMPLES,
+                    "无法读取音轨样本",
+                ),
+            )
+        val copy =
+            mapAudioPipelineFailure(
+                NoReadableAudioSamplesException(),
+                encoding = false,
+            )
+
+        assertEquals(EngineErrorCode.AUDIO_DECODING_FAILED, preparation.code)
+        assertEquals(EngineErrorCode.AUDIO_DECODING_FAILED.defaultMessage, preparation.message)
+        assertEquals(EngineErrorCode.AUDIO_DECODING_FAILED, copy.code)
+        assertEquals(EngineErrorCode.AUDIO_DECODING_FAILED.defaultMessage, copy.message)
+    }
+
+    @Test
     fun `lossless extractor boundary requires supported AAC profile evidence`() {
         assertTrue(
             isSupportedLosslessCopyFormat(

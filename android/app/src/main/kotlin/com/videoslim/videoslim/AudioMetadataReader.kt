@@ -56,6 +56,7 @@ internal class AudioMetadataException(
 ) : Exception(message, cause) {
     companion object {
         const val NO_AUDIO_TRACK = "NO_AUDIO_TRACK"
+        const val NO_READABLE_SAMPLES = "NO_READABLE_SAMPLES"
         const val SOURCE_CORRUPTED = "SOURCE_CORRUPTED"
         const val SOURCE_PERMISSION_LOST = "SOURCE_PERMISSION_LOST"
         const val UNKNOWN = "UNKNOWN"
@@ -205,6 +206,12 @@ internal class AudioMetadataReader(context: Context) {
             throw error
         } catch (error: SecurityException) {
             throw audioSourcePermissionException(error)
+        } catch (error: NoReadableAudioSamplesException) {
+            throw AudioMetadataException(
+                AudioMetadataException.NO_READABLE_SAMPLES,
+                "无法读取音轨样本",
+                error,
+            )
         } catch (error: IOException) {
             throw AudioMetadataException(AudioMetadataException.UNKNOWN, "无法读取音频文件", error)
         } catch (error: RuntimeException) {
@@ -225,7 +232,11 @@ internal class AudioMetadataReader(context: Context) {
         format: MediaFormat,
         shouldCancel: () -> Boolean,
     ): AudioSampleTiming {
-        extractor.selectTrack(trackIndex)
+        positionSelectedTrackAtStart(
+            selectTrack = { extractor.selectTrack(trackIndex) },
+            currentSampleTimeUs = { extractor.sampleTime },
+            seekToStart = { extractor.seekTo(0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC) },
+        )
         // Keep one bounded buffer and physically read every indexed sample on
         // every supported API. The extra byte makes an over-cap legacy sample
         // observable instead of accepting a possibly truncated cap-sized read.
@@ -324,6 +335,23 @@ internal data class AudioSampleTiming(
     val maxSampleDeltaUs: Long?,
 )
 
+/**
+ * Some framework/provider combinations expose track metadata but no current sample immediately
+ * after selectTrack(). Retry once from stream start before concluding that the selected track
+ * contains no physical samples.
+ */
+internal fun positionSelectedTrackAtStart(
+    selectTrack: () -> Unit,
+    currentSampleTimeUs: () -> Long,
+    seekToStart: () -> Unit,
+) {
+    selectTrack()
+    if (currentSampleTimeUs() < 0L) seekToStart()
+}
+
+internal class NoReadableAudioSamplesException :
+    IOException("Audio track contains no readable samples")
+
 internal typealias VerifiedPayloadConsumer = (ByteBuffer, Int, Int) -> Unit
 
 internal fun scanAudioSampleMetadata(
@@ -378,7 +406,7 @@ internal fun scanAudioSampleMetadata(
         if (!advance()) break
     }
     checkAudioMetadataCancellation(shouldCancel)
-    if (count <= 0L) throw IOException("Audio track contains no readable samples")
+    if (count <= 0L) throw NoReadableAudioSamplesException()
     return AudioSampleTiming(
         firstSampleTimeUs = first,
         lastSampleTimeUs = last,

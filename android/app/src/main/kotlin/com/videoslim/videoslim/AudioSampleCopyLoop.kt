@@ -227,7 +227,7 @@ internal fun copyEncodedAudioSamples(
         throw CancellationException("Audio extraction cancelled after sample copy")
     }
     if (sampleCount <= 0L || firstInputTimeUs == null) {
-        throw IOException("Audio track contains no readable samples")
+        throw NoReadableAudioSamplesException()
     }
     onProgress(1.0)
     return EncodedAudioCopyResult(

@@ -71,7 +71,11 @@ internal class LosslessAudioExtractor(context: Context) {
             val durationUs = format.long(MediaFormat.KEY_DURATION)?.coerceAtLeast(0L) ?: 0L
             val bufferBytes = boundedAudioSampleBufferSize(format.integer(MediaFormat.KEY_MAX_INPUT_SIZE))
 
-            extractor.selectTrack(track.index)
+            positionSelectedTrackAtStart(
+                selectTrack = { extractor.selectTrack(track.index) },
+                currentSampleTimeUs = { extractor.sampleTime },
+                seekToStart = { extractor.seekTo(0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC) },
+            )
             val activeMuxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             muxer = activeMuxer
             val outputTrack = activeMuxer.addTrack(format)
