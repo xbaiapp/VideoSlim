@@ -149,6 +149,37 @@ class ProcessingServiceTerminationPolicyTest {
     }
 
     @Test
+    fun `worker terminal winner defers foreground removal and terminal notification to main dispatcher`() {
+        val mainQueue = ArrayDeque<() -> Unit>()
+        val harness =
+            PolicyHarness(
+                terminalWinnerScheduler = { completion -> mainQueue.addLast(completion) },
+            )
+
+        val decision =
+            harness.policy.finish(
+                ServiceTerminalDirective(
+                    outcome = ActiveTaskTerminalOutcome.FAILED,
+                    source = ActiveTaskFinishSource.ENGINE_TERMINAL,
+                    errorCode = EngineErrorCode.UNKNOWN.wireName,
+                    errorMessage = "failed",
+                ),
+            )
+
+        assertTrue(decision is ActiveTaskFinishDecision.Won)
+        assertEquals(ActiveTaskLifecycle.FINISHING, harness.context.lifecycle)
+        assertTrue(harness.events.isEmpty())
+        assertEquals(0, harness.notificationAttempts.get())
+
+        mainQueue.removeFirst().invoke()
+
+        assertEquals(ActiveTaskLifecycle.RELEASED, harness.context.lifecycle)
+        assertTrue(harness.events.indexOf("foreground") < harness.events.indexOf("notification"))
+        assertEquals(1, harness.notificationAttempts.get())
+        harness.assertEveryResourceAttemptedOnce()
+    }
+
+    @Test
     fun `terminal notification policy always supplies winner fallback and attempts exactly once`() {
         val mirrors =
             listOf(
@@ -204,6 +235,7 @@ class ProcessingServiceTerminationPolicyTest {
         private val registryFailure: Throwable? = null,
         private val failingResources: Set<String> = emptySet(),
         terminalNotification: ((ServiceTerminalDirective) -> Unit)? = null,
+        terminalWinnerScheduler: ((() -> Unit) -> Unit) = { action -> action() },
     ) {
         val events = mutableListOf<String>()
         val failures = mutableListOf<Pair<String, Throwable>>()
@@ -232,6 +264,7 @@ class ProcessingServiceTerminationPolicyTest {
                                 events += "registry"
                                 registryFailure?.let { throw it }
                             },
+                            scheduleTerminalWinner = terminalWinnerScheduler,
                             cancelUserWatchdog = {
                                 events += "watchdog-cancel"
                                 watchdog.cancel()

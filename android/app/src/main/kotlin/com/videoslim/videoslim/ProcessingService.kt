@@ -93,27 +93,37 @@ internal class ProcessingService : Service() {
     @Volatile private var activeLaunch: ActiveServiceLaunch? = null
     @Volatile private var latestLaunch: ActiveServiceLaunch? = null
     @Volatile private var registryObserverRegistered = false
+    @Volatile private var serviceDestroyed = false
     @Volatile private var launchGeneration = 0L
     private var lastStartId = 0
 
-    private val registryObserver: (TaskRuntimeSnapshot) -> Unit = { snapshot ->
-        val context = activeLaunch?.context
-        if (
-            context != null &&
-            context.owns(snapshot.taskId, launchGeneration) &&
-            snapshot.state == TaskRuntimeSnapshot.STATE_RUNNING
-        ) {
+    private val registryObserver: (TaskRuntimeSnapshot) -> Unit = registryObserver@{ snapshot ->
+        if (snapshot.isTerminal) return@registryObserver
+        val context = activeLaunch?.context ?: return@registryObserver
+        val candidate =
+            ForegroundNotificationDeliveryCandidate(
+                context = context,
+                launchGeneration = context.launchGeneration,
+                taskId = context.serviceTaskId,
+                snapshot = snapshot,
+            )
+        val posted =
             runCatching {
-                notificationFactory.notifyForeground(
-                    snapshot,
-                    cancelPendingIntent(snapshot.taskId),
-                )
-            }.onFailure { error -> log("notification update failed: ${error.stackTraceToString()}") }
+                mainHandler.post {
+                    deliverForegroundCandidate(candidate)
+                }
+            }.getOrElse { error ->
+                log("foreground notification dispatch failed: ${error.stackTraceToString()}")
+                false
+            }
+        if (!posted) {
+            log("foreground notification dispatch rejected for task=${candidate.taskId}")
         }
     }
 
     override fun onCreate() {
         super.onCreate()
+        serviceDestroyed = false
         notificationFactory = ProcessingNotificationFactory(this)
         wakeLockGuard = WakeLockGuard(AndroidPartialWakeLock(this))
         mainHandler = Handler(Looper.getMainLooper())
@@ -156,6 +166,7 @@ internal class ProcessingService : Service() {
     }
 
     override fun onDestroy() {
+        serviceDestroyed = true
         try {
             latestLaunch?.terminationPolicy?.onDestroy()
             latestLaunch = null
@@ -444,6 +455,7 @@ internal class ProcessingService : Service() {
                         publishRegistryTerminal = { terminal ->
                             publishTerminalDirective(context, terminal)
                         },
+                        scheduleTerminalWinner = ::runTerminalWinnerOnMain,
                         cancelUserWatchdog = cancellationWatchdog::cancel,
                         removeRegistryObserver = {
                             if (registryObserverRegistered) {
@@ -452,8 +464,13 @@ internal class ProcessingService : Service() {
                             }
                         },
                         releaseWakeLock = { wakeLockGuard.release(context.serviceTaskId) },
-                        removeForeground = { stopForeground(STOP_FOREGROUND_REMOVE) },
-                        publishTerminalNotification = terminalNotifications::attempt,
+                        removeForeground = ::removeForegroundNotification,
+                        publishTerminalNotification = { terminal ->
+                            check(Looper.myLooper() == Looper.getMainLooper()) {
+                                "Terminal notifications must be delivered on service main"
+                            }
+                            terminalNotifications.attempt(terminal)
+                        },
                         disposeTranscodeEngine = transcodeEngine::dispose,
                         disposeAudioExtractionEngine = audioExtractionEngine::dispose,
                         ownsServiceSurface = {
@@ -583,6 +600,61 @@ internal class ProcessingService : Service() {
             action()
         } catch (error: Throwable) {
             runCatching { log("$description failed: ${error.stackTraceToString()}") }
+        }
+    }
+
+    private fun deliverForegroundCandidate(candidate: ForegroundNotificationDeliveryCandidate) {
+        check(Looper.myLooper() == Looper.getMainLooper()) {
+            "Foreground notifications must be delivered on the service main thread"
+        }
+        if (
+            !ForegroundNotificationDeliveryPolicy.shouldDeliver(
+                candidate = candidate,
+                activeContext = activeLaunch?.context,
+                registrySnapshot = ProcessingRuntime.registry.snapshot(),
+                serviceDestroyed = serviceDestroyed,
+            )
+        ) {
+            return
+        }
+        runCatching {
+            notificationFactory.notifyForeground(
+                candidate.snapshot,
+                cancelPendingIntent(candidate.taskId),
+            )
+        }.onFailure { error ->
+            log("notification update failed: ${error.stackTraceToString()}")
+        }
+    }
+
+    private fun runTerminalWinnerOnMain(action: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action()
+            return
+        }
+        val posted =
+            runCatching { mainHandler.post(Runnable(action)) }
+                .getOrElse { error ->
+                    log("terminal service cleanup dispatch failed: ${error.stackTraceToString()}")
+                    false
+                }
+        if (!posted) {
+            // Never let ActiveTaskContext's scheduler-failure fallback execute Android cleanup on
+            // this worker. A quitting main looper means process/lifecycle teardown remains owner.
+            log("terminal service cleanup dispatch rejected by main looper")
+        }
+    }
+
+    private fun removeForegroundNotification() {
+        check(Looper.myLooper() == Looper.getMainLooper()) {
+            "Foreground notification removal must run on service main"
+        }
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } finally {
+            // Terminal notifications use a different ID. Explicit cancellation ensures the old
+            // ongoing ID cannot survive or be mistaken for the terminal surface.
+            notificationFactory.cancelForeground()
         }
     }
 

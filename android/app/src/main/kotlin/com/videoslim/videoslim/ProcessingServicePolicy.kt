@@ -6,6 +6,53 @@ internal data class PublicationLaunchIdentity(
     val engineTaskId: String,
 )
 
+internal data class ForegroundNotificationDeliveryCandidate(
+    val context: ActiveTaskContext,
+    val launchGeneration: Long,
+    val taskId: String,
+    val snapshot: TaskRuntimeSnapshot,
+)
+
+/** Side-effect-free final gate for one foreground-notification delivery queued on service main. */
+internal object ForegroundNotificationDeliveryPolicy {
+    fun shouldDeliver(
+        candidate: ForegroundNotificationDeliveryCandidate,
+        activeContext: ActiveTaskContext?,
+        registrySnapshot: TaskRuntimeSnapshot?,
+        serviceDestroyed: Boolean,
+    ): Boolean {
+        if (serviceDestroyed) return false
+        if (
+            candidate.snapshot.taskId != candidate.taskId ||
+            candidate.snapshot.taskKind != candidate.context.taskKind ||
+            candidate.snapshot.isTerminal
+        ) {
+            return false
+        }
+        val currentContext = activeContext ?: return false
+        if (currentContext !== candidate.context) return false
+        if (
+            currentContext.launchGeneration != candidate.launchGeneration ||
+            !currentContext.owns(candidate.taskId, candidate.launchGeneration)
+        ) {
+            return false
+        }
+        when (currentContext.lifecycle) {
+            ActiveTaskLifecycle.AWAITING_ENGINE,
+            ActiveTaskLifecycle.ENGINE_ASSIGNED,
+            -> Unit
+            ActiveTaskLifecycle.FINISHING,
+            ActiveTaskLifecycle.RELEASED,
+            -> return false
+        }
+        if (currentContext.terminalOwnership != null) return false
+        val currentSnapshot = registrySnapshot ?: return false
+        return currentSnapshot == candidate.snapshot &&
+            currentSnapshot.taskId == candidate.taskId &&
+            !currentSnapshot.isTerminal
+    }
+}
+
 /**
  * Persistent publication identity for one service launch.
  *
@@ -212,6 +259,7 @@ internal data class ServiceTerminationPolicyActions(
     val markPublicationDiscarding: (EngineTaskRoute) -> Unit,
     val cancelEngine: (EngineTaskRoute) -> Unit,
     val publishRegistryTerminal: (ServiceTerminalDirective) -> Unit,
+    val scheduleTerminalWinner: ((() -> Unit) -> Unit),
     val cancelUserWatchdog: () -> Unit,
     val removeRegistryObserver: () -> Unit,
     val releaseWakeLock: () -> Unit,
@@ -314,6 +362,7 @@ internal class ServiceTerminationPolicy(
             generation = context.launchGeneration,
             outcome = terminal.outcome,
             source = terminal.source,
+            onWinner = actions.scheduleTerminalWinner,
             publishTerminal = {
                 bestEffort("registry terminal publication") {
                     publishRegistryTerminal?.invoke() ?: actions.publishRegistryTerminal(terminal)

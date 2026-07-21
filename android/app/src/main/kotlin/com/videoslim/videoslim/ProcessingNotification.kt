@@ -362,6 +362,10 @@ internal class ProcessingNotificationFactory(context: Context) {
         )
     }
 
+    fun cancelForeground() {
+        notificationManager.cancel(FOREGROUND_NOTIFICATION_ID)
+    }
+
     fun notifyTerminal(snapshot: TaskRuntimeSnapshot) {
         notificationManager.notify(TERMINAL_NOTIFICATION_ID, terminal(snapshot))
     }
