@@ -50,6 +50,13 @@ jobs:
       - name: Fetch dependencies
         run: flutter pub get
 
+      - name: Configure Android checkout paths
+        shell: bash
+        run: |
+          flutter_sdk="$(dirname "$(dirname "$(command -v flutter)")")"
+          printf 'flutter.sdk=%s\nsdk.dir=%s\n' \
+            "$flutter_sdk" "$ANDROID_HOME" > android/local.properties
+
       - name: Check formatting
         run: dart format --output=none --set-exit-if-changed .
 
