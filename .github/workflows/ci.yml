@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: android-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     name: Flutter and Android checks
@@ -85,3 +89,84 @@ jobs:
       - name: Assemble Android release
         working-directory: android
         run: $GRADLE_COMMAND assembleRelease --no-daemon
+
+  instrumentation:
+    name: Android API 35 x86_64 instrumentation
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.6
+          cache: true
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle fallback
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 9.1.0
+
+      - name: Install pinned Android build SDK
+        shell: bash
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
+
+      - name: Select Android Gradle launcher
+        shell: bash
+        run: |
+          if git ls-files --error-unmatch android/gradlew >/dev/null 2>&1; then
+            chmod +x android/gradlew
+            echo 'GRADLE_COMMAND=./gradlew' >> "$GITHUB_ENV"
+          else
+            echo 'GRADLE_COMMAND=gradle' >> "$GITHUB_ENV"
+          fi
+
+      - name: Fetch dependencies
+        run: flutter pub get
+
+      - name: Configure Android checkout paths
+        shell: bash
+        run: |
+          flutter_sdk="$(dirname "$(dirname "$(command -v flutter)")")"
+          printf 'flutter.sdk=%s\nsdk.dir=%s\n' \
+            "$flutter_sdk" "$ANDROID_HOME" > android/local.properties
+
+      - name: Assemble debug app and instrumentation APKs
+        working-directory: android
+        run: $GRADLE_COMMAND assembleDebug assembleDebugAndroidTest --no-daemon
+
+      - name: Enable KVM access
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run instrumentation on API 35 x86_64
+        # ReactiveCircus/android-emulator-runner v2, pinned to the resolved commit.
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          cores: 2
+          ram-size: 4096M
+          disable-animations: true
+          emulator-options: >-
+            -no-window -gpu swiftshader_indirect -no-snapshot -noaudio
+            -no-boot-anim -wipe-data -camera-back none -camera-front none
+          script: cd android && $GRADLE_COMMAND connectedDebugAndroidTest --no-daemon --stacktrace

@@ -23,12 +23,22 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
-            abiFilters += "arm64-v8a"
+            // The Flutter plugin seeds every supported ABI before this DSL is evaluated.
+            abiFilters.clear()
+            abiFilters += setOf("arm64-v8a")
         }
     }
 
     buildTypes {
+        debug {
+            // x86_64 is an emulator/test ABI only. Release continues to inherit arm64-v8a above.
+            ndk {
+                abiFilters.clear()
+                abiFilters += setOf("arm64-v8a", "x86_64")
+            }
+        }
         release {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
@@ -56,4 +66,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-transformer:$media3Version")
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:core-ktx:1.7.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit-ktx:1.3.0")
 }
