@@ -12,11 +12,8 @@ import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONObject
-import java.time.Instant
-import java.util.concurrent.atomic.AtomicLong
 
 class MainActivity : FlutterFragmentActivity() {
-    private var logStore: AppLogStore? = null
     private var logChannel: LogChannel? = null
     private var pickerChannel: VideoPickerChannel? = null
     private var engineChannel: EngineChannel? = null
@@ -24,7 +21,6 @@ class MainActivity : FlutterFragmentActivity() {
     private var pendingLegacyPermission: ((Boolean) -> Unit)? = null
     private var pendingNotificationPermission: ((Boolean) -> Unit)? = null
     private var pendingDeleteConsent: ((Boolean) -> Unit)? = null
-    private val nativeLogSequence = AtomicLong()
 
     private val legacyWritePermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -50,9 +46,8 @@ class MainActivity : FlutterFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val messenger = flutterEngine.dartExecutor.binaryMessenger
-        val store = AppLogStore(this)
-        logStore = store
-        logChannel = LogChannel(this, messenger, store)
+        val app = application as VideoSlimApplication
+        logChannel = LogChannel(this, messenger, app.logDispatcher)
         pickerChannel = VideoPickerChannel(this, messenger, ::appendNativeLog)
         val metadataReader = VideoMetadataReader(this)
         val transcodeEngine =
@@ -71,6 +66,7 @@ class MainActivity : FlutterFragmentActivity() {
                 requestLegacyWritePermission = ::requestLegacyWritePermission,
                 requestNotificationPermission = ::requestNotificationPermission,
                 logger = ::appendNativeLog,
+                progressLogger = app::logProgress,
             )
         mediaActionsChannel =
             MediaActionsChannel(
@@ -100,7 +96,6 @@ class MainActivity : FlutterFragmentActivity() {
         logChannel?.dispose()
         logChannel = null
         appendNativeLog("Flutter engine channels disposed")
-        logStore = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 
@@ -163,12 +158,6 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     private fun appendNativeLog(message: String) {
-        val store = logStore ?: return
-        runCatching {
-            val eventId = "native-${nativeLogSequence.incrementAndGet()}"
-            store.append(
-                "${Instant.now()} [INFO] [native] [event:$eventId] $message",
-            )
-        }
+        (application as VideoSlimApplication).logNative(message)
     }
 }

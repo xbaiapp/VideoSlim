@@ -6,8 +6,6 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import java.time.Instant
-import java.util.concurrent.atomic.AtomicLong
 
 internal fun validatedStartTaskKind(
     snapshot: TaskRuntimeSnapshot,
@@ -76,8 +74,7 @@ internal class ProcessingService : Service() {
     private lateinit var transcodeEngine: TranscodeEngine
     private lateinit var audioExtractionEngine: AudioExtractionEngine
     private lateinit var recoveryStore: TaskRecoveryStore
-    private lateinit var logStore: AppLogStore
-    private val logSequence = AtomicLong()
+    private lateinit var logDispatcher: AppLogDispatcher
     @Volatile private var activeTaskId: String? = null
     @Volatile private var engineTaskId: String? = null
     @Volatile private var terminalHandled = false
@@ -103,7 +100,7 @@ internal class ProcessingService : Service() {
         super.onCreate()
         notificationFactory = ProcessingNotificationFactory(this)
         wakeLockGuard = WakeLockGuard(AndroidPartialWakeLock(this))
-        logStore = AppLogStore(this)
+        logDispatcher = (application as VideoSlimApplication).logDispatcher
         recoveryStore = TaskRecoveryStore(this, ::log)
         runCatching { OrphanCleanup(this, recoveryStore, ::log).reconcile() }
             .onFailure { error ->
@@ -439,9 +436,10 @@ internal class ProcessingService : Service() {
     private fun readArguments(intent: Intent): Any? = intent.getSerializableExtra(EXTRA_ARGUMENTS)
 
     private fun log(message: String) {
-        runCatching {
-            val eventId = "service-${logSequence.incrementAndGet()}"
-            logStore.append("${Instant.now()} [INFO] [native] [event:$eventId] $message")
+        logDispatcher.native(message) { outcome ->
+            outcome.exceptionOrNull()?.let {
+                (application as VideoSlimApplication).logNativeFailure(message, it)
+            }
         }
     }
 

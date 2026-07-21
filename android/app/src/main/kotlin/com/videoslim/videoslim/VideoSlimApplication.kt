@@ -1,20 +1,65 @@
 package com.videoslim.videoslim
 
 import android.app.Application
+import android.util.Log
 
 /** Application entry point used by the integrated M2 manifest. Cleanup is always best-effort. */
 class VideoSlimApplication : Application() {
+    internal lateinit var logDispatcher: AppLogDispatcher
+        private set
+
     override fun onCreate() {
         super.onCreate()
-        val appLogStore = AppLogStore(this)
-        val recoveryLogger: (String) -> Unit = { message ->
-            runCatching { appLogStore.append("F19 recovery $message") }
-        }
+        logDispatcher = AppLogDispatcher(AppLogStore(this))
+        val recoveryLogger: (String) -> Unit = { message -> logNative("F19 recovery $message") }
         try {
             val recoveryStore = TaskRecoveryStore(this, recoveryLogger)
             OrphanCleanup(this, recoveryStore, recoveryLogger).reconcile()
         } catch (error: Throwable) {
             recoveryLogger("startup reconciliation failed ${error.stackTraceToString()}")
         }
+    }
+
+    /**
+     * Protected native logging adapter shared by every lifecycle owner.
+     *
+     * A finite dispatcher can reject under protected-only saturation, and storage can fail after
+     * admission. Keep those failures explicit without recursing into the file logger.
+     */
+    internal fun logNative(message: String) {
+        logDispatcher.native(message) { outcome ->
+            outcome.exceptionOrNull()?.let { error ->
+                logNativeFailure(message, error)
+            }
+        }
+    }
+
+    internal fun logNativeFailure(
+        message: String,
+        error: Throwable,
+    ) {
+        Log.e(LOG_TAG, "Native file log unavailable: $message", error)
+    }
+
+    internal fun logProgress(
+        taskId: String,
+        message: String,
+    ) {
+        logDispatcher.progress(taskId, message)
+    }
+
+    override fun onTerminate() {
+        if (::logDispatcher.isInitialized) {
+            logDispatcher.shutdown { outcome ->
+                outcome.exceptionOrNull()?.let { error ->
+                    Log.e(LOG_TAG, "Native log dispatcher shutdown failed", error)
+                }
+            }
+        }
+        super.onTerminate()
+    }
+
+    private companion object {
+        const val LOG_TAG = "VideoSlimLog"
     }
 }

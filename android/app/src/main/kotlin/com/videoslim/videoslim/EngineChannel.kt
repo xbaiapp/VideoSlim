@@ -13,6 +13,19 @@ import java.util.concurrent.Executors
 internal typealias LegacyWritePermissionRequester = ((Boolean) -> Unit) -> Unit
 internal typealias NotificationPermissionRequester = ((Boolean) -> Unit) -> Unit
 
+internal fun routeEngineSnapshotLog(
+    snapshot: TaskRuntimeSnapshot,
+    message: String,
+    protectedLogger: (String) -> Unit,
+    progressLogger: (String, String) -> Unit,
+) {
+    if (snapshot.isTerminal) {
+        protectedLogger(message)
+    } else {
+        progressLogger(snapshot.taskId, message)
+    }
+}
+
 internal class EngineChannel(
     private val context: Context,
     messenger: BinaryMessenger,
@@ -21,6 +34,7 @@ internal class EngineChannel(
     private val requestLegacyWritePermission: LegacyWritePermissionRequester,
     private val requestNotificationPermission: NotificationPermissionRequester,
     private val logger: (String) -> Unit = {},
+    private val progressLogger: (String, String) -> Unit = { _, _ -> },
     private val metadataExecutor: ExecutorService = Executors.newSingleThreadExecutor(),
 ) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
     private val methodChannel = MethodChannel(messenger, METHOD_CHANNEL)
@@ -34,7 +48,8 @@ internal class EngineChannel(
     private val registryObserver: (TaskRuntimeSnapshot) -> Unit = { snapshot ->
         runCatching { eventSink?.success(snapshot.toProgressMap()) }
             .onFailure { error -> log("progress delivery failed ${error.stackTraceToString()}") }
-        log("progress=${snapshot.toProgressMap()}")
+        val message = "progress=${snapshot.toProgressMap()}"
+        routeEngineSnapshotLog(snapshot, message, ::log, ::logProgress)
     }
 
     init {
@@ -392,6 +407,13 @@ internal class EngineChannel(
 
     private fun log(message: String) {
         runCatching { logger(message) }
+    }
+
+    private fun logProgress(
+        taskId: String,
+        message: String,
+    ) {
+        runCatching { progressLogger(taskId, message) }
     }
 
     private companion object {
