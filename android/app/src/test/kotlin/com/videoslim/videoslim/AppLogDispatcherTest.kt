@@ -115,6 +115,54 @@ class AppLogDispatcherTest {
     }
 
     @Test
+    fun `native sequence allocation follows admission after bounded preprocessing`() {
+        val executor = ManualExecutorService()
+        val storage = RecordingLogStorage()
+        val slowNormalizationStarted = CountDownLatch(1)
+        val releaseSlowNormalization = CountDownLatch(1)
+        val normalizer = { value: String, byteLimit: Int ->
+            if (value == "slow-native-event") {
+                slowNormalizationStarted.countDown()
+                check(releaseSlowNormalization.await(10, TimeUnit.SECONDS))
+            }
+            AppLogEntryNormalizer.normalizePrefixBounded(value, byteLimit)
+        }
+        val dispatcher =
+            AppLogDispatcher(
+                storage = storage,
+                maxPendingCommands = 4,
+                maxPendingBytes = 2048,
+                executor = executor,
+                sessionId = "test",
+                normalizer = normalizer,
+            )
+        val outcomes = Collections.synchronizedList(mutableListOf<Result<Unit>>())
+        val slowProducer = Thread {
+            dispatcher.native("slow-native-event") { outcomes += it }
+        }
+
+        slowProducer.start()
+        assertTrue(slowNormalizationStarted.await(10, TimeUnit.SECONDS))
+        dispatcher.native("fast-native-event") { outcomes += it }
+        assertEquals(1, dispatcher.pendingSnapshot().commandCount)
+        releaseSlowNormalization.countDown()
+        slowProducer.join(10_000)
+        assertFalse(slowProducer.isAlive)
+        executor.runAll()
+
+        assertEquals(2, outcomes.size)
+        assertTrue(outcomes.all { it.isSuccess })
+        assertTrue(storage.entries[0].endsWith("fast-native-event"))
+        assertTrue(storage.entries[1].endsWith("slow-native-event"))
+        assertEquals(
+            listOf(1L, 2L),
+            storage.entries.map { entry ->
+                Regex("\\[event:test-(\\d+)]").find(entry)!!.groupValues[1].toLong()
+            },
+        )
+    }
+
+    @Test
     fun `priority pressure fails an evicted normal completion exactly once`() {
         val executor = ManualExecutorService()
         val storage = RecordingLogStorage()

@@ -5,7 +5,6 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicLong
 
 internal enum class AppLogPriority {
     NORMAL,
@@ -38,6 +37,8 @@ internal class AppLogDispatcher(
     },
     sessionId: String = UUID.randomUUID().toString().take(8),
     private val clock: () -> Instant = Instant::now,
+    private val normalizer: (String, Int) -> AppLogNormalizationResult =
+        AppLogEntryNormalizer::normalizePrefixBounded,
 ) {
     companion object {
         const val DEFAULT_MAX_PENDING_COMMANDS = 1024
@@ -48,12 +49,12 @@ internal class AppLogDispatcher(
     private val lock = Any()
     private val queue = ArrayDeque<Command>()
     private val pendingProgress = mutableMapOf<String, AppendCommand>()
-    private val sequence = AtomicLong()
+    private var sequence = 0L
     private val processSessionId =
-        AppLogEntryNormalizer.normalize(
+        normalizer(
             sessionId.ifBlank { "process" },
-            byteLimit = 64,
-        )
+            64,
+        ).value
     private var pendingBytes = 0
     private var accepting = true
     private var drainScheduled = false
@@ -75,8 +76,8 @@ internal class AppLogDispatcher(
         val normalized = normalizeForAdmission(entry)
         enqueue(
             AppendCommand(
-                entry = normalized,
-                byteCount = AppLogEntryNormalizer.utf8Size(normalized),
+                entry = normalized.value,
+                byteCount = normalized.utf8ByteCount,
                 classification =
                     if (priority == AppLogPriority.PRIORITY) {
                         Classification.PROTECTED
@@ -93,9 +94,10 @@ internal class AppLogDispatcher(
         message: String,
         completion: (Result<Unit>) -> Unit,
     ) {
-        append(
-            entry = formatNative(message),
-            priority = AppLogPriority.PRIORITY,
+        enqueueNative(
+            message = message,
+            classification = Classification.PROTECTED,
+            progressKey = null,
             completion = completion,
         )
     }
@@ -105,19 +107,15 @@ internal class AppLogDispatcher(
         message: String,
     ) {
         val progressKey =
-            AppLogEntryNormalizer.normalize(
+            normalizer(
                 taskId.ifBlank { "unknown-task" },
-                byteLimit = MAX_PROGRESS_KEY_BYTES,
-            )
-        val normalized = normalizeForAdmission(formatNative(message))
-        enqueue(
-            AppendCommand(
-                entry = normalized,
-                byteCount = AppLogEntryNormalizer.utf8Size(normalized),
-                classification = Classification.PROGRESS,
-                progressKey = progressKey,
-                completion = {},
-            ),
+                MAX_PROGRESS_KEY_BYTES,
+            ).value
+        enqueueNative(
+            message = message,
+            classification = Classification.PROGRESS,
+            progressKey = progressKey,
+            completion = {},
         )
     }
 
@@ -157,48 +155,92 @@ internal class AppLogDispatcher(
         AppLogPendingSnapshot(queue.size, pendingBytes)
     }
 
-    private fun normalizeForAdmission(entry: String): String =
-        AppLogEntryNormalizer.normalize(
+    private fun normalizeForAdmission(entry: String): AppLogNormalizationResult =
+        normalizer(
             entry,
-            byteLimit = minOf(maxEntryBytes, maxPendingBytes),
+            minOf(maxEntryBytes, maxPendingBytes),
         )
 
-    private fun formatNative(message: String): String {
-        val eventId = "$processSessionId-${sequence.incrementAndGet()}"
-        return "${clock()} [INFO] [native] [event:$eventId] $message"
+    private fun enqueueNative(
+        message: String,
+        classification: Classification,
+        progressKey: String?,
+        completion: (Result<Unit>) -> Unit,
+    ) {
+        // Potentially huge producer input is bounded before the admission lock.
+        val boundedMessage = normalizeForAdmission(message).value
+        enqueue(
+            failure = { error -> completion(Result.failure(error)) },
+            commandFactory = {
+                // Sequence allocation and FIFO admission are one locked ordering point.
+                val timestamp = clock()
+                sequence += 1
+                val eventId = "$processSessionId-$sequence"
+                val normalized =
+                    normalizeForAdmission(
+                        "$timestamp [INFO] [native] [event:$eventId] $boundedMessage",
+                    )
+                AppendCommand(
+                    entry = normalized.value,
+                    byteCount = normalized.utf8ByteCount,
+                    classification = classification,
+                    progressKey = progressKey,
+                    completion = completion,
+                )
+            },
+        )
     }
 
     private fun enqueue(command: Command) {
+        enqueue(
+            failure = command::fail,
+            commandFactory = { command },
+        )
+    }
+
+    private fun enqueue(
+        failure: (Throwable) -> Unit,
+        commandFactory: () -> Command,
+    ) {
         val deferred = mutableListOf<() -> Unit>()
         var scheduleDrain = false
         synchronized(lock) {
             if (!accepting) {
                 val error = AppLogDispatcherClosedException()
-                deferred += { command.fail(error) }
+                deferred += { failure(error) }
             } else {
-                val evictions = selectEvictions(command)
-                if (evictions == null) {
-                    val error = AppLogQueueFullException()
-                    deferred += { command.fail(error) }
-                } else {
-                    evictions.forEach { victim ->
-                        removePending(victim)
-                        if (victim.classification == Classification.NORMAL) {
-                            val error = AppLogQueueFullException()
-                            deferred += { victim.fail(error) }
+                val command =
+                    try {
+                        commandFactory()
+                    } catch (error: Throwable) {
+                        deferred += { failure(error) }
+                        null
+                    }
+                if (command != null) {
+                    val evictions = selectEvictions(command)
+                    if (evictions == null) {
+                        val error = AppLogQueueFullException()
+                        deferred += { command.fail(error) }
+                    } else {
+                        evictions.forEach { victim ->
+                            removePending(victim)
+                            if (victim.classification == Classification.NORMAL) {
+                                val error = AppLogQueueFullException()
+                                deferred += { victim.fail(error) }
+                            }
                         }
-                    }
-                    queue.addLast(command)
-                    pendingBytes += command.byteCount
-                    if (command.isBarrier) {
-                        // A later task update must not replace progress accepted before this barrier.
-                        pendingProgress.clear()
-                    } else if (command is AppendCommand && command.progressKey != null) {
-                        pendingProgress[command.progressKey] = command
-                    }
-                    if (!drainScheduled) {
-                        drainScheduled = true
-                        scheduleDrain = true
+                        queue.addLast(command)
+                        pendingBytes += command.byteCount
+                        if (command.isBarrier) {
+                            // A later task update must not replace progress accepted before this barrier.
+                            pendingProgress.clear()
+                        } else if (command is AppendCommand && command.progressKey != null) {
+                            pendingProgress[command.progressKey] = command
+                        }
+                        if (!drainScheduled) {
+                            drainScheduled = true
+                            scheduleDrain = true
+                        }
                     }
                 }
             }

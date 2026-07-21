@@ -9,7 +9,87 @@ import androidx.core.content.FileProvider
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
-import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * Pure exactly-once coordinator for channel replies that may race with disposal.
+ * Claimed replies are still replaced by the disposal outcome until their
+ * main-thread action is actually delivered.
+ */
+internal class LogChannelCompletionCoordinator(
+    private val dispatch: (() -> Unit) -> Unit,
+) {
+    private val lock = Any()
+    private val pending = mutableSetOf<Completion>()
+    private var disposed = false
+
+    fun register(onDisposed: () -> Unit): Completion? {
+        val completion = synchronized(lock) {
+            if (disposed) {
+                null
+            } else {
+                Completion(onDisposed).also(pending::add)
+            }
+        }
+        if (completion == null) dispatch(onDisposed)
+        return completion
+    }
+
+    fun dispose() {
+        val toClose = synchronized(lock) {
+            if (disposed) return
+            disposed = true
+            pending.toList()
+        }
+        toClose.forEach(Completion::scheduleDelivery)
+    }
+
+    inner class Completion internal constructor(
+        private val onDisposed: () -> Unit,
+    ) {
+        private var claimed = false
+        private var delivered = false
+        private var delivery: (() -> Unit)? = null
+
+        fun complete(action: () -> Unit): Boolean {
+            val accepted = synchronized(lock) {
+                if (disposed || claimed || delivered) {
+                    false
+                } else {
+                    claimed = true
+                    delivery = action
+                    true
+                }
+            }
+            if (accepted) scheduleDelivery()
+            return accepted
+        }
+
+        fun submit(
+            submission: () -> Unit,
+            onSynchronousFailure: (Throwable) -> Unit,
+        ) {
+            try {
+                submission()
+            } catch (error: Throwable) {
+                complete { onSynchronousFailure(error) }
+            }
+        }
+
+        internal fun scheduleDelivery() {
+            dispatch(::deliver)
+        }
+
+        private fun deliver() {
+            val action = synchronized(lock) {
+                if (delivered || (!claimed && !disposed)) return
+                delivered = true
+                pending.remove(this)
+                if (disposed) onDisposed else delivery
+            }
+            action?.invoke()
+        }
+    }
+}
 
 /** Native endpoint for the videoslim/logs Flutter method channel. */
 internal class LogChannel(
@@ -24,9 +104,7 @@ internal class LogChannel(
 
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val lifecycleLock = Any()
-    private val pendingReplies = mutableSetOf<PendingReply>()
-    @Volatile private var disposed = false
+    private val completionCoordinator = LogChannelCompletionCoordinator(::postToMain)
 
     init {
         channel.setMethodCallHandler(this)
@@ -43,66 +121,55 @@ internal class LogChannel(
 
     fun dispose() {
         channel.setMethodCallHandler(null)
-        val replies = synchronized(lifecycleLock) {
-            if (disposed) return
-            disposed = true
-            pendingReplies.toList()
-        }
-        replies.forEach(PendingReply::close)
+        completionCoordinator.dispose()
     }
 
     private fun append(call: MethodCall, result: MethodChannel.Result) {
         val reply = registerReply(result, "log_append_failed") ?: return
-        try {
-            val entry = when (val arguments = call.arguments) {
-                is String -> arguments
-                is Map<*, *> -> arguments["entry"] as? String
-                else -> null
-            }
-            if (entry == null) {
-                reply.error(
-                    "invalid_arguments",
-                    "append requires a string entry",
-                    null,
-                )
-                return
-            }
+        val entry = when (val arguments = call.arguments) {
+            is String -> arguments
+            is Map<*, *> -> arguments["entry"] as? String
+            else -> null
+        }
+        if (entry == null) {
+            reply.error(
+                "invalid_arguments",
+                "append requires a string entry",
+                null,
+            )
+            return
+        }
+        reply.submit("log_append_failed") {
             dispatcher.append(entry) { outcome ->
                 outcome.fold(
                     onSuccess = { reply.success(null) },
                     onFailure = { error -> reply.error("log_append_failed", error) },
                 )
             }
-        } catch (error: Throwable) {
-            reply.error("log_append_failed", error)
         }
     }
 
     private fun readAll(result: MethodChannel.Result) {
         val reply = registerReply(result, "log_read_failed") ?: return
-        try {
+        reply.submit("log_read_failed") {
             dispatcher.readAll { outcome ->
                 outcome.fold(
                     onSuccess = reply::success,
                     onFailure = { error -> reply.error("log_read_failed", error) },
                 )
             }
-        } catch (error: Throwable) {
-            reply.error("log_read_failed", error)
         }
     }
 
     private fun shareAll(result: MethodChannel.Result) {
         val reply = registerReply(result, "log_share_failed") ?: return
-        try {
+        reply.submit("log_share_failed") {
             dispatcher.createShareSnapshot { outcome ->
                 outcome.fold(
                     onSuccess = { snapshot -> prepareShare(snapshot, reply) },
                     onFailure = { error -> reply.error("log_share_failed", error) },
                 )
             }
-        } catch (error: Throwable) {
-            reply.error("log_share_failed", error)
         }
     }
 
@@ -135,20 +202,15 @@ internal class LogChannel(
         result: MethodChannel.Result,
         disposalErrorCode: String,
     ): PendingReply? {
-        val reply = PendingReply(result, disposalErrorCode)
-        val alreadyDisposed = synchronized(lifecycleLock) {
-            if (disposed) {
-                true
-            } else {
-                pendingReplies += reply
-                false
-            }
-        }
-        if (alreadyDisposed) {
-            reply.close()
-            return null
-        }
-        return reply
+        val completion = completionCoordinator.register {
+            val error = IllegalStateException("log channel is disposed")
+            result.error(
+                disposalErrorCode,
+                error.message,
+                errorDetails(error),
+            )
+        } ?: return null
+        return PendingReply(result, completion)
     }
 
     private fun postToMain(action: () -> Unit) {
@@ -167,12 +229,20 @@ internal class LogChannel(
 
     private inner class PendingReply(
         private val result: MethodChannel.Result,
-        private val disposalErrorCode: String,
+        private val completion: LogChannelCompletionCoordinator.Completion,
     ) {
-        private val completed = AtomicBoolean()
+        fun submit(
+            synchronousErrorCode: String,
+            submission: () -> Unit,
+        ) {
+            completion.submit(
+                submission = submission,
+                onSynchronousFailure = { error -> deliverError(synchronousErrorCode, error) },
+            )
+        }
 
         fun success(value: Any?) {
-            complete { result.success(value) }
+            completion.complete { result.success(value) }
         }
 
         fun error(
@@ -187,11 +257,11 @@ internal class LogChannel(
             message: String?,
             details: Any?,
         ) {
-            complete { result.error(code, message, details) }
+            completion.complete { result.error(code, message, details) }
         }
 
         fun launchShare(intent: Intent) {
-            complete {
+            completion.complete {
                 try {
                     activity.startActivity(intent)
                 } catch (error: Throwable) {
@@ -206,41 +276,15 @@ internal class LogChannel(
             }
         }
 
-        fun close() {
-            complete(
-                allowDisposed = true,
-                action = {
-                    val error = IllegalStateException("log channel is disposed")
-                    result.error(
-                        disposalErrorCode,
-                        error.message,
-                        errorDetails(error),
-                    )
-                },
-            )
-        }
-
-        private fun complete(
-            allowDisposed: Boolean = false,
-            action: () -> Unit,
+        private fun deliverError(
+            code: String,
+            error: Throwable,
         ) {
-            postToMain {
-                if (!completed.compareAndSet(false, true)) return@postToMain
-                val channelDisposed = synchronized(lifecycleLock) {
-                    pendingReplies.remove(this)
-                    disposed
-                }
-                if (channelDisposed && !allowDisposed) {
-                    val error = IllegalStateException("log channel is disposed")
-                    result.error(
-                        disposalErrorCode,
-                        error.message,
-                        errorDetails(error),
-                    )
-                } else {
-                    action()
-                }
-            }
+            result.error(
+                code,
+                error.message ?: error.javaClass.simpleName,
+                errorDetails(error),
+            )
         }
     }
 }

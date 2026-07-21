@@ -14,58 +14,201 @@ internal interface AppLogStorage {
     fun createShareSnapshot(): File
 }
 
+/** Observable facts from the pure prefix-bounded normalizer. */
+internal data class AppLogNormalizationResult(
+    val value: String,
+    val utf8ByteCount: Int,
+    val inspectedCodeUnits: Int,
+    val truncated: Boolean,
+)
+
 /** Pure one-line normalization shared by queue admission and file storage. */
 internal object AppLogEntryNormalizer {
+    const val TRUNCATION_MARKER = "..."
+    private const val REPLACEMENT_CHARACTER = '\uFFFD'
+    private const val REPLACEMENT_CHARACTER_UTF8_BYTES = 3
+    private const val MAX_RECENT_CHUNKS = 3
+    private const val INITIAL_CAPACITY_LIMIT = 64 * 1024
+    private const val HEX_DIGITS = "0123456789abcdef"
+
     fun normalize(
         entry: String,
         byteLimit: Int,
-    ): String {
+    ): String = normalizePrefixBounded(entry, byteLimit).value
+
+    /**
+     * Escapes and truncates while inspecting only the source prefix that can
+     * contribute to the bounded result. No allocation scales with [entry.length].
+     */
+    fun normalizePrefixBounded(
+        entry: String,
+        byteLimit: Int,
+    ): AppLogNormalizationResult {
         require(byteLimit > 0) { "byteLimit must be positive" }
-        val singleLine = buildString(entry.length) {
-            entry.forEach { character ->
-                when (character) {
-                    '\r' -> append("\\r")
-                    '\n' -> append("\\n")
-                    '\t' -> append("\\t")
-                    else -> {
-                        if (character.code < 0x20) {
-                            append("\\u")
-                            append(character.code.toString(16).padStart(4, '0'))
-                        } else {
-                            append(character)
+        val result =
+            StringBuilder(
+                minOf(entry.length, byteLimit, INITIAL_CAPACITY_LIMIT),
+            )
+        val recentStarts = IntArray(MAX_RECENT_CHUNKS)
+        val recentByteCounts = IntArray(MAX_RECENT_CHUNKS)
+        var recentSize = 0
+        var utf8ByteCount = 0
+        var inspectedCodeUnits = 0
+        var offset = 0
+
+        while (offset < entry.length) {
+            val first = entry[offset]
+            val sourceCodeUnits: Int
+            val chunkUtf8Bytes: Int
+            val kind: ChunkKind
+            when {
+                first == '\r' -> {
+                    sourceCodeUnits = 1
+                    chunkUtf8Bytes = 2
+                    kind = ChunkKind.ESCAPED_CARRIAGE_RETURN
+                }
+                first == '\n' -> {
+                    sourceCodeUnits = 1
+                    chunkUtf8Bytes = 2
+                    kind = ChunkKind.ESCAPED_NEWLINE
+                }
+                first == '\t' -> {
+                    sourceCodeUnits = 1
+                    chunkUtf8Bytes = 2
+                    kind = ChunkKind.ESCAPED_TAB
+                }
+                first.code < 0x20 -> {
+                    sourceCodeUnits = 1
+                    chunkUtf8Bytes = 6
+                    kind = ChunkKind.ESCAPED_CONTROL
+                }
+                Character.isHighSurrogate(first) &&
+                    offset + 1 < entry.length &&
+                    Character.isLowSurrogate(entry[offset + 1]) -> {
+                    sourceCodeUnits = 2
+                    chunkUtf8Bytes = 4
+                    kind = ChunkKind.SURROGATE_PAIR
+                }
+                Character.isSurrogate(first) -> {
+                    sourceCodeUnits = 1
+                    chunkUtf8Bytes = REPLACEMENT_CHARACTER_UTF8_BYTES
+                    kind = ChunkKind.REPLACEMENT
+                }
+                else -> {
+                    sourceCodeUnits = 1
+                    chunkUtf8Bytes =
+                        when {
+                            first.code <= 0x7f -> 1
+                            first.code <= 0x7ff -> 2
+                            else -> 3
                         }
-                    }
+                    kind = ChunkKind.SINGLE_CHARACTER
                 }
             }
+            inspectedCodeUnits += sourceCodeUnits
+            if (chunkUtf8Bytes > byteLimit - utf8ByteCount) break
+
+            val chunkStart = result.length
+            when (kind) {
+                ChunkKind.ESCAPED_CARRIAGE_RETURN -> result.append("\\r")
+                ChunkKind.ESCAPED_NEWLINE -> result.append("\\n")
+                ChunkKind.ESCAPED_TAB -> result.append("\\t")
+                ChunkKind.ESCAPED_CONTROL -> appendControlEscape(result, first.code)
+                ChunkKind.SURROGATE_PAIR -> result.append(first).append(entry[offset + 1])
+                ChunkKind.REPLACEMENT -> result.append(REPLACEMENT_CHARACTER)
+                ChunkKind.SINGLE_CHARACTER -> result.append(first)
+            }
+            if (recentSize == MAX_RECENT_CHUNKS) {
+                for (index in 1 until MAX_RECENT_CHUNKS) {
+                    recentStarts[index - 1] = recentStarts[index]
+                    recentByteCounts[index - 1] = recentByteCounts[index]
+                }
+                recentSize -= 1
+            }
+            recentStarts[recentSize] = chunkStart
+            recentByteCounts[recentSize] = chunkUtf8Bytes
+            recentSize += 1
+            utf8ByteCount += chunkUtf8Bytes
+            offset += sourceCodeUnits
         }
-        return truncateUtf8(singleLine, byteLimit)
+
+        val truncated = offset < entry.length
+        if (truncated) {
+            val marker = if (byteLimit >= TRUNCATION_MARKER.length) {
+                TRUNCATION_MARKER
+            } else {
+                ".".repeat(byteLimit)
+            }
+            val markerBytes = marker.length
+            while (utf8ByteCount > byteLimit - markerBytes) {
+                check(recentSize > 0) { "normalizer lost a retained chunk boundary" }
+                recentSize -= 1
+                result.setLength(recentStarts[recentSize])
+                utf8ByteCount -= recentByteCounts[recentSize]
+            }
+            result.append(marker)
+            utf8ByteCount += markerBytes
+        }
+
+        return AppLogNormalizationResult(
+            value = result.toString(),
+            utf8ByteCount = utf8ByteCount,
+            inspectedCodeUnits = inspectedCodeUnits,
+            truncated = truncated,
+        )
     }
 
-    fun utf8Size(value: String): Int = value.toByteArray(StandardCharsets.UTF_8).size
-
-    private fun truncateUtf8(
-        value: String,
-        limit: Int,
-    ): String {
-        if (utf8Size(value) <= limit) return value
-
-        val suffix = "..."
-        val includeSuffix = limit >= utf8Size(suffix)
-        val contentLimit = if (includeSuffix) limit - utf8Size(suffix) else limit
-        val result = StringBuilder()
-        var retainedBytes = 0
+    /** Counts UTF-8 bytes without allocating a whole encoded copy. */
+    fun utf8Size(value: String): Int {
+        var total = 0
         var offset = 0
         while (offset < value.length) {
-            val codePoint = value.codePointAt(offset)
-            val character = String(Character.toChars(codePoint))
-            val characterBytes = utf8Size(character)
-            if (retainedBytes + characterBytes > contentLimit) break
-            result.append(character)
-            retainedBytes += characterBytes
-            offset += Character.charCount(codePoint)
+            val first = value[offset]
+            val sourceCodeUnits: Int
+            val bytes: Int
+            if (
+                Character.isHighSurrogate(first) &&
+                offset + 1 < value.length &&
+                Character.isLowSurrogate(value[offset + 1])
+            ) {
+                sourceCodeUnits = 2
+                bytes = 4
+            } else {
+                sourceCodeUnits = 1
+                bytes =
+                    when {
+                        Character.isSurrogate(first) -> REPLACEMENT_CHARACTER_UTF8_BYTES
+                        first.code <= 0x7f -> 1
+                        first.code <= 0x7ff -> 2
+                        else -> 3
+                    }
+            }
+            if (total > Int.MAX_VALUE - bytes) return Int.MAX_VALUE
+            total += bytes
+            offset += sourceCodeUnits
         }
-        if (includeSuffix) result.append(suffix)
-        return result.toString()
+        return total
+    }
+
+    private fun appendControlEscape(
+        target: StringBuilder,
+        value: Int,
+    ) {
+        target.append("\\u")
+        target.append(HEX_DIGITS[(value ushr 12) and 0xf])
+        target.append(HEX_DIGITS[(value ushr 8) and 0xf])
+        target.append(HEX_DIGITS[(value ushr 4) and 0xf])
+        target.append(HEX_DIGITS[value and 0xf])
+    }
+
+    private enum class ChunkKind {
+        ESCAPED_CARRIAGE_RETURN,
+        ESCAPED_NEWLINE,
+        ESCAPED_TAB,
+        ESCAPED_CONTROL,
+        SURROGATE_PAIR,
+        REPLACEMENT,
+        SINGLE_CHARACTER,
     }
 }
 
