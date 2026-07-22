@@ -107,6 +107,7 @@ void main() {
           videoDecoderMode: 'hardware',
           videoBitrate: 800000,
           longEdge: 1280,
+          crop: CropRect(left: 12, top: 34, width: 640, height: 480),
           trimStartMs: 1000,
           trimEndMs: 5000,
           audioMode: 'reencode',

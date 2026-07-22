@@ -10,6 +10,7 @@ enum CompressionUnsupportedReason { h264EncoderUnavailable }
 final class CompressionPlan {
   const CompressionPlan({
     required this.settings,
+    required this.crop,
     required this.outputWidth,
     required this.outputHeight,
     required this.effectiveLongEdge,
@@ -29,6 +30,9 @@ final class CompressionPlan {
 
   /// Original user settings from which this plan was derived.
   final CompressionSettings settings;
+
+  /// Optional crop in display-oriented source pixels.
+  final CropRect? crop;
 
   /// Planned display-oriented output width.
   final int outputWidth;
@@ -98,6 +102,7 @@ final class CompressionPlan {
       videoDecoderMode: videoDecoderMode,
       videoBitrate: videoBitrate,
       longEdge: effectiveLongEdge,
+      crop: crop,
       audioMode: audioMode.wireName,
       audioBitrate: audioMode == CompressionAudioMode.reencode
           ? settings.audioBitrate
@@ -134,17 +139,28 @@ final class CompressionPlanner {
     required VideoInfo source,
     required CompressionSettings settings,
     required DeviceCapabilities capabilities,
+    CropRect? crop,
   }) {
     _validateSource(source);
+    _validateCrop(source, crop);
+    if (settings.isPreserveQuality && crop == null) {
+      throw ArgumentError.value(
+        settings.preset,
+        'settings',
+        'Preserve quality is only available with a crop',
+      );
+    }
 
     final geometry = _resolveGeometry(
-      sourceWidth: source.width,
-      sourceHeight: source.height,
+      sourceWidth: crop?.width ?? source.width,
+      sourceHeight: crop?.height ?? source.height,
       requestedLongEdge: settings.resolution.longEdge,
     );
 
     var videoBitrate = settings.videoBitrate;
-    if (settings.usesPresetBitrateScaling) {
+    if (settings.isPreserveQuality) {
+      videoBitrate = _preserveQualityBitrate(source: source, crop: crop!);
+    } else if (settings.usesPresetBitrateScaling) {
       videoBitrate = _multiplyDivideFloor(
         videoBitrate,
         geometry.width * geometry.height,
@@ -198,6 +214,7 @@ final class CompressionPlanner {
 
     return CompressionPlan(
       settings: settings,
+      crop: crop,
       outputWidth: geometry.width,
       outputHeight: geometry.height,
       effectiveLongEdge: geometry.effectiveLongEdge,
@@ -209,7 +226,9 @@ final class CompressionPlanner {
       estimatedOutputBytes: estimatedOutputBytes,
       estimatedOutputMinBytes: estimatedOutputMinBytes,
       estimatedOutputMaxBytes: estimatedOutputMaxBytes,
-      hasLowSavings: _productAtLeast(videoBitrate, 10, source.videoBitrate, 9),
+      hasLowSavings:
+          source.videoBitrate > 0 &&
+          _productAtLeast(videoBitrate, 10, source.videoBitrate, 9),
       isOutsideVerifiedRange:
           source.durationMs > verifiedDurationMs ||
           source.fileSizeBytes > verifiedSourceBytes,
@@ -241,13 +260,60 @@ void _validateSource(VideoInfo source) {
       'File size cannot be negative',
     );
   }
-  if (source.videoBitrate <= 0) {
+  if (source.videoBitrate < 0) {
     throw ArgumentError.value(
       source.videoBitrate,
       'source.videoBitrate',
-      'Video bitrate must be positive',
+      'Video bitrate cannot be negative',
     );
   }
+}
+
+void _validateCrop(VideoInfo source, CropRect? crop) {
+  if (crop == null) return;
+  if (crop.left < 0 ||
+      crop.top < 0 ||
+      crop.width < 64 ||
+      crop.height < 64 ||
+      crop.width.isOdd ||
+      crop.height.isOdd ||
+      crop.left + crop.width > source.width ||
+      crop.top + crop.height > source.height) {
+    throw ArgumentError.value(
+      crop.toChannelMap(),
+      'crop',
+      'Crop must be in bounds, even, and at least 64x64 display pixels',
+    );
+  }
+}
+
+int _preserveQualityBitrate({
+  required VideoInfo source,
+  required CropRect crop,
+}) {
+  final cropPixels = crop.width * crop.height;
+  if (source.videoBitrate > 0) {
+    final boosted = _multiplyDivideFloor(
+      source.videoBitrate,
+      cropPixels * 12,
+      source.width * source.height * 10,
+    );
+    final lower = source.videoBitrate < 2000000 ? source.videoBitrate : 2000000;
+    final upper = source.videoBitrate < 20000000
+        ? source.videoBitrate
+        : 20000000;
+    return boosted.clamp(lower, upper).toInt();
+  }
+
+  var qualityEquivalent = _multiplyDivideFloor(
+    4000000,
+    cropPixels,
+    CompressionPlanner.baselinePixels,
+  );
+  if (qualityEquivalent < CompressionPlanner.minimumPresetVideoBitrate) {
+    qualityEquivalent = CompressionPlanner.minimumPresetVideoBitrate;
+  }
+  return _multiplyDivideFloor(qualityEquivalent, 3, 2);
 }
 
 _Geometry _resolveGeometry({

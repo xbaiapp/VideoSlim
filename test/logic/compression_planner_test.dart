@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:videoslim/logic/compression_planner.dart';
 import 'package:videoslim/models/compression_settings.dart';
 import 'package:videoslim/models/device_capabilities.dart';
+import 'package:videoslim/models/process_request.dart';
 import 'package:videoslim/models/video_info.dart';
 
 void main() {
@@ -75,6 +76,132 @@ void main() {
       expect(plan.outputHeight, 360);
       expect(plan.effectiveLongEdge, isNull);
       expect(plan.videoBitrate, 800000);
+    });
+  });
+
+  group('crop and preserve-quality planning', () {
+    test(
+      'plans ordinary presets from crop pixels before any long-edge scale',
+      () {
+        const crop = CropRect(left: 100, top: 0, width: 960, height: 1080);
+        final plan = planner.plan(
+          source: source(),
+          settings: CompressionSettings.forPreset(CompressionPreset.balanced),
+          capabilities: allEncoders,
+          crop: crop,
+        );
+
+        expect(plan.crop, crop);
+        expect(plan.outputWidth, 960);
+        expect(plan.outputHeight, 1080);
+        expect(plan.videoBitrate, 1250000);
+        expect(
+          plan
+              .toProcessRequest(
+                uri: 'content://source',
+                outputFileName: 'crop.mp4',
+              )
+              .crop,
+          crop,
+        );
+      },
+    );
+
+    test('uses source bitrate, crop area, 1.2 boost and product clamps', () {
+      const halfCrop = CropRect(left: 0, top: 0, width: 960, height: 1080);
+      CompressionPlan preserve(VideoInfo video) => planner.plan(
+        source: video,
+        settings: CompressionSettings.forPreset(
+          CompressionPreset.preserveQuality,
+        ),
+        capabilities: allEncoders,
+        crop: halfCrop,
+      );
+
+      expect(preserve(source(videoBitrate: 10000000)).videoBitrate, 6000000);
+      expect(preserve(source(videoBitrate: 1500000)).videoBitrate, 1500000);
+      expect(
+        planner
+            .plan(
+              source: source(videoBitrate: 40000000),
+              settings: CompressionSettings.forPreset(
+                CompressionPreset.preserveQuality,
+              ),
+              capabilities: allEncoders,
+              crop: const CropRect(left: 0, top: 0, width: 1920, height: 1080),
+            )
+            .videoBitrate,
+        20000000,
+      );
+    });
+
+    test(
+      'falls back from unknown source bitrate to quality pixels times 1.5',
+      () {
+        final plan = planner.plan(
+          source: source(videoBitrate: 0),
+          settings: CompressionSettings.forPreset(
+            CompressionPreset.preserveQuality,
+          ),
+          capabilities: allEncoders,
+          crop: const CropRect(left: 0, top: 0, width: 960, height: 1080),
+        );
+
+        expect(plan.videoBitrate, 3000000);
+        expect(plan.hasLowSavings, isFalse);
+      },
+    );
+
+    test(
+      'applies the existing HEVC fallback after preserve-quality planning',
+      () {
+        final plan = planner.plan(
+          source: source(videoBitrate: 10000000),
+          settings: CompressionSettings.forPreset(
+            CompressionPreset.preserveQuality,
+          ),
+          capabilities: const DeviceCapabilities(
+            hevcEncoder: false,
+            h264Encoder: true,
+          ),
+          crop: const CropRect(left: 0, top: 0, width: 960, height: 1080),
+        );
+
+        expect(plan.videoCodec, VideoCodec.h264);
+        expect(plan.videoBitrate, 9000000);
+        expect(plan.usedCodecFallback, isTrue);
+      },
+    );
+
+    test('rejects preserve quality without crop and invalid crop geometry', () {
+      expect(
+        () => planner.plan(
+          source: source(),
+          settings: CompressionSettings.forPreset(
+            CompressionPreset.preserveQuality,
+          ),
+          capabilities: allEncoders,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => planner.plan(
+          source: source(),
+          settings: CompressionSettings.forPreset(CompressionPreset.balanced),
+          capabilities: allEncoders,
+          crop: const CropRect(left: 1900, top: 0, width: 64, height: 64),
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => planner.plan(
+          source: source(),
+          settings: CompressionSettings.forPreset(CompressionPreset.balanced),
+          capabilities: allEncoders,
+          crop: const CropRect(left: 0, top: 0, width: 65, height: 64),
+        ),
+        throwsArgumentError,
+      );
     });
   });
 

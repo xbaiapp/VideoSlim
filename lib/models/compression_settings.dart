@@ -1,5 +1,7 @@
 /// User-facing compression presets.
-enum CompressionPreset { quality, balanced, maximum }
+///
+/// [preserveQuality] is only meaningful when a display-pixel crop is present.
+enum CompressionPreset { preserveQuality, quality, balanced, maximum }
 
 /// Output video codec requested from the native engine.
 enum VideoCodec { hevc, h264 }
@@ -51,32 +53,41 @@ final class CompressionSettings {
     this.audioBitrate,
   });
 
-  /// Creates one of the three product presets.
-  factory CompressionSettings.forPreset(CompressionPreset preset) =>
-      switch (preset) {
-        CompressionPreset.quality => const CompressionSettings._preset(
-          preset: CompressionPreset.quality,
-          resolution: CompressionResolution.original,
-          videoCodec: VideoCodec.hevc,
-          videoBitrate: 4000000,
-          audioMode: CompressionAudioMode.copy,
-        ),
-        CompressionPreset.balanced => const CompressionSettings._preset(
-          preset: CompressionPreset.balanced,
-          resolution: CompressionResolution.original,
-          videoCodec: VideoCodec.hevc,
-          videoBitrate: 2500000,
-          audioMode: CompressionAudioMode.copy,
-        ),
-        CompressionPreset.maximum => const CompressionSettings._preset(
-          preset: CompressionPreset.maximum,
-          resolution: CompressionResolution.p720,
-          videoCodec: VideoCodec.hevc,
-          videoBitrate: 1200000,
-          audioMode: CompressionAudioMode.reencode,
-          audioBitrate: 96000,
-        ),
-      };
+  /// Creates one of the product presets.
+  factory CompressionSettings.forPreset(
+    CompressionPreset preset,
+  ) => switch (preset) {
+    CompressionPreset.preserveQuality => const CompressionSettings._preset(
+      preset: CompressionPreset.preserveQuality,
+      resolution: CompressionResolution.original,
+      videoCodec: VideoCodec.hevc,
+      // The planner replaces this baseline with the PRD source/crop formula.
+      videoBitrate: 4000000,
+      audioMode: CompressionAudioMode.copy,
+    ),
+    CompressionPreset.quality => const CompressionSettings._preset(
+      preset: CompressionPreset.quality,
+      resolution: CompressionResolution.original,
+      videoCodec: VideoCodec.hevc,
+      videoBitrate: 4000000,
+      audioMode: CompressionAudioMode.copy,
+    ),
+    CompressionPreset.balanced => const CompressionSettings._preset(
+      preset: CompressionPreset.balanced,
+      resolution: CompressionResolution.original,
+      videoCodec: VideoCodec.hevc,
+      videoBitrate: 2500000,
+      audioMode: CompressionAudioMode.copy,
+    ),
+    CompressionPreset.maximum => const CompressionSettings._preset(
+      preset: CompressionPreset.maximum,
+      resolution: CompressionResolution.p720,
+      videoCodec: VideoCodec.hevc,
+      videoBitrate: 1200000,
+      audioMode: CompressionAudioMode.reencode,
+      audioBitrate: 96000,
+    ),
+  };
 
   /// Creates custom M2 settings.
   ///
@@ -117,6 +128,9 @@ final class CompressionSettings {
   /// Target AAC bitrate for [CompressionAudioMode.reencode].
   final int? audioBitrate;
 
+  /// Whether this is the crop-only, visually preserving product preset.
+  bool get isPreserveQuality => preset == CompressionPreset.preserveQuality;
+
   /// Whether [videoBitrate] must be scaled to the planned output pixel count.
-  bool get usesPresetBitrateScaling => preset != null;
+  bool get usesPresetBitrateScaling => preset != null && !isPreserveQuality;
 }

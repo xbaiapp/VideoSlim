@@ -43,6 +43,20 @@ class CropRect {
     'width': width,
     'height': height,
   };
+
+  @override
+  bool operator ==(Object other) =>
+      other is CropRect &&
+      other.left == left &&
+      other.top == top &&
+      other.width == width &&
+      other.height == height;
+
+  @override
+  int get hashCode => Object.hash(left, top, width, height);
+
+  @override
+  String toString() => 'CropRect($left, $top, ${width}x$height)';
 }
 
 /// Parameters for one combined video processing operation.
