@@ -4,13 +4,10 @@
 
 ## 当前冻结状态
 
-- 当前采用“部分 hardening + 真机验收”路线。
-- 主整改基线是 `hardening/external-review-remediation@0a9197d81101e8d6bc1561870dc06dfa9a58a28d`。
+- M3 已由项目所有者于 2026-07-22 接受为 `ACCEPTED — private scope`；当前发布代码基线是 `19abfb7da2e8fa028e7200000f0dc2a114bc840e`（`1.4.3+18`）。
 - `hardening/task3-engine-io`（Slice B）保留但冻结：不集成、不删除、不作为当前候选的一部分。
-- 在项目所有者完成本轮真机验收并明确给出结果前：
-  - 禁止启动任何新计划；
-  - 禁止修改任何生产代码；
-  - 只允许记录验收结果、更新验收文档，或执行项目所有者明确指定的操作。
+- M4 crop/trim 尚未开始；M3 接受不会自动授权 M4、hardening、refactor 或 migration。只有项目所有者明确批准具体范围后才能修改生产代码。
+- 未提供逐项真机证据的矩阵行不得反向预填 PASS，private-scope 接受不得扩写为生产发布或多设备保证。
 - 当前已知限制见 `docs/known-debt.md`。
 
 ## A. 开工审批

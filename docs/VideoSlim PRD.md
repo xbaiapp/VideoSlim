@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.7（M3 发布恢复、无损 payload 与 Flutter 所有权契约冻结） |
-| 日期 | 2026-07-21 |
-| 状态 | M2 `ACCEPTED — private scope`；M3 非真机发布证据按精确 SHA 归档，Pixel/硬件验收在无连接设备时保持未认领 |
+| 文档版本 | v1.8（M3 private-scope 接受与当前发布基线归档） |
+| 日期 | 2026-07-22 |
+| 状态 | M3 `ACCEPTED — private scope`；当前发布代码 `19abfb7...` / App `1.4.3+18`；M4 尚未开始 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
@@ -576,6 +576,7 @@ class HistoryRecord {
 - 视频编码决策：设备硬件 Encoder + 目标平均码率 VBR；不引入 CBR，也不以实际输出码率偏离目标值硬拦截成功发布。
 
 ### M3 音频提取
+- 状态：`ACCEPTED — private scope`（2026-07-22）。项目所有者明确报告当前 M3 候选测试成功；接受范围和未认领矩阵见 `docs/m3-completion-report.md` 与 `docs/m3-device-acceptance.md`。
 - 任务：实现 F4 AAC copy + AAC 强制重编码，入口接入首页与信息页；复用 M2 前台服务、通知、取消、snapshot、发布、恢复与 F19，并以 `taskKind=audio_extraction` 与视频任务隔离。
 - copy：第一音轨必须为 AAC-LC/HE-AAC（`audio/mp4a-latm`），使用 `MediaExtractor + MediaMuxer` 纯 sample copy 到 `.m4a`，不得创建 Decoder/Encoder；非 AAC 稳定返回 `AUDIO_COPY_UNSUPPORTED`。
 - AAC：Media3 audio-only 强制重编码为 AAC-LC 192/128/96/64 kbps；即使 AAC→AAC 也不得 transmux。支持 mono/stereo，>2 声道拒绝；无音轨返回 `AUDIO_TRACK_MISSING`。
@@ -584,6 +585,7 @@ class HistoryRecord {
 - 验收：按 `docs/m3-device-acceptance.md` 实测 copy 短片 3 次、同源 AAC 四码率 bytes 单调及实际 Decoder/Encoder、mono、Opus WebM、无音轨、后台/锁屏、转换/发布取消、默认/SAF、1 小时 copy <10 秒和 F19。未实际执行不得预填 PASS。
 
 ### M4 裁剪编辑器 + 时间裁剪
+- 状态：`NOT STARTED`。M3 接受不等于自动授权 M4 开工；需项目所有者明确批准范围。
 - 任务：F5 全部（含坐标换算纯函数与单元测试）+ F8；裁剪参数并入压缩管线一次转码。
 - 验收：F5 验收标准三类视频全过；trim 起止误差 < 0.5 秒。
 

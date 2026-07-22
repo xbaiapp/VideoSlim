@@ -2,6 +2,8 @@
 
 VideoSlim 是一款仅在 Android 本机处理媒体的私有工具。它不需要网络权限，不上传源文件，当前版本提供视频压缩和音频提取。
 
+> **当前状态（2026-07-22）：** M3 `ACCEPTED — private scope`；当前私有验收版为 `1.4.3+18`，发布代码 `19abfb7da2e8fa028e7200000f0dc2a114bc840e`。这不是商店生产版本，M4 画面裁剪/trim 尚未开始。完整进度见 `docs/current-project-status.md`。
+
 ## M3 功能
 
 ### 视频压缩

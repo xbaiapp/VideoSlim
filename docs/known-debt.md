@@ -1,7 +1,7 @@
 # VideoSlim 已知技术债与冻结边界
 
-> **决策日期：** 2026-07-21
-> **当前路线：** 冻结 Task 3 Slice B，以主整改分支 `0a9197d81101e8d6bc1561870dc06dfa9a58a28d` 进入真机验收。
+> **决策日期：** 2026-07-22
+> **当前路线：** M3 已接受为 `ACCEPTED — private scope`；当前发布代码为 `19abfb7da2e8fa028e7200000f0dc2a114bc840e`，Task 3 Slice B 继续冻结且未集成。
 > **处理原则：** 本清单中的问题不自动触发新计划；只有真机可复现或会丢失/误删用户文件的问题才是 blocker，其他事项由项目所有者裁决。
 
 ## 1. Slice B 冻结状态
@@ -70,7 +70,7 @@ Task 3 Slice B 未合入当前候选。
 
 可能的用户影响：任务开始或结束时，极端慢存储/Provider 条件下仍可能出现短暂无响应。当前没有真机复现证据，也没有确认的用户文件丢失或误删证据，因此按项目规则作为已知限制进入真机验收。
 
-## 4. 真机验收时的 blocker 判定
+## 4. 当前 private-scope blocker 判定
 
 以下任一情况出现时，立即停止该用例、保留 F19 日志与素材信息，并判定为 blocker：
 
@@ -82,12 +82,13 @@ Task 3 Slice B 未合入当前候选。
 
 只在静态复审中出现、无法在真机复现且不涉及用户文件安全的问题，继续保留在本清单，由项目所有者裁决。
 
-## 5. 禁止的状态声明
+## 5. 接受后的禁止状态声明
 
-在真机验收结果返回前，不得声称：
+M3 已由项目所有者接受为 private scope，但仍不得声称：
 
-- M3 已通过；
+- `docs/m3-device-acceptance.md` 中所有空白矩阵项均已通过；
+- 原 PRD 的“一小时 copy <10 秒”已被证明；
 - recovery journal 已完整迁出主线程；
 - Slice B 已完成或已集成；
-- Pixel/GrapheneOS/OEM 行为已通过；
+- API 26–28、多 Provider、多 SoC、Pixel/GrapheneOS/OEM 扩展矩阵均已通过；
 - 当前 APK 是 production-signed 商店包。
