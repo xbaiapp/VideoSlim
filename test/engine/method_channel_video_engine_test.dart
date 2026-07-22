@@ -113,6 +113,54 @@ void main() {
       },
     );
 
+    test('gets a strict display-oriented preview frame', () async {
+      final calls = <MethodCall>[];
+      final expected = Uint8List.fromList(<int>[0xff, 0xd8, 0xff, 0xd9]);
+      messenger.setMockMethodCallHandler(_engineChannel, (
+        MethodCall call,
+      ) async {
+        calls.add(call);
+        return expected;
+      });
+      final engine = MethodChannelVideoEngine(logger: logger);
+
+      final bytes = await engine.getPreviewFrame(
+        'content://videos/42',
+        timeMs: 12_345,
+      );
+
+      expect(bytes, expected);
+      expect(calls.single.method, 'getPreviewFrame');
+      expect(calls.single.arguments, <String, Object?>{
+        'uri': 'content://videos/42',
+        'timeMs': 12_345,
+      });
+      expect(logger.entries, hasLength(1));
+    });
+
+    test('rejects malformed and empty preview-frame responses', () async {
+      final responses = <Object?>[null, <int>[], Uint8List(0), 'jpeg'];
+      var invocation = 0;
+      messenger.setMockMethodCallHandler(
+        _engineChannel,
+        (MethodCall call) async => responses[invocation++],
+      );
+      final engine = MethodChannelVideoEngine(logger: logger);
+
+      for (var index = 0; index < responses.length; index += 1) {
+        final error = await _captureEngineException(
+          engine.getPreviewFrame('content://videos/42', timeMs: 0),
+        );
+        expect(error.code, 'UNKNOWN');
+        expect(error.message, contains('平台返回数据异常'));
+      }
+      await expectLater(
+        engine.getPreviewFrame('content://videos/42', timeMs: -1),
+        throwsArgumentError,
+      );
+      expect(invocation, responses.length);
+    });
+
     test(
       'uses exact channel, methods, arguments, and parses numeric maps',
       () async {

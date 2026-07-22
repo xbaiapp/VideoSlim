@@ -2,11 +2,11 @@ import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
 
-import '../models/audio_extract_request.dart';
 import '../models/audio_info.dart';
 import '../models/compression_settings.dart';
 import '../models/device_capabilities.dart';
 import '../models/progress_event.dart';
+import '../models/process_request.dart';
 import '../models/task_kind.dart';
 import '../models/video_info.dart';
 
@@ -148,6 +148,7 @@ enum HomeInteractionPhase {
   idle,
   pickingSource,
   readingSourceMetadata,
+  editingCrop,
   selectingOutputLocation,
   validatingDestination,
 }
@@ -191,6 +192,7 @@ final class HomeFlowState extends ChangeNotifier {
   String? _publishedOutputUri;
   String? _publishedOutputFileName;
   VideoInfo? _sourceInfo;
+  CropRect? _crop;
   VideoInfo? _outputInfo;
   AudioInfo? _outputAudioInfo;
   DeviceCapabilities? _capabilities;
@@ -221,6 +223,7 @@ final class HomeFlowState extends ChangeNotifier {
   bool get picking => _interactionPhase == HomeInteractionPhase.pickingSource;
   bool get readingMetadata =>
       _interactionPhase == HomeInteractionPhase.readingSourceMetadata;
+  bool get editingCrop => _interactionPhase == HomeInteractionPhase.editingCrop;
   bool get selectingOutputLocation =>
       _interactionPhase == HomeInteractionPhase.selectingOutputLocation;
   bool get validatingDestination =>
@@ -251,6 +254,7 @@ final class HomeFlowState extends ChangeNotifier {
   String? get publishedOutputUri => _publishedOutputUri;
   String? get publishedOutputFileName => _publishedOutputFileName;
   VideoInfo? get sourceInfo => _sourceInfo;
+  CropRect? get crop => _crop;
   VideoInfo? get outputInfo => _outputInfo;
   AudioInfo? get outputAudioInfo => _outputAudioInfo;
   DeviceCapabilities? get capabilities => _capabilities;
@@ -309,6 +313,16 @@ final class HomeFlowState extends ChangeNotifier {
       allowedFrom: const <HomeInteractionPhase>{
         HomeInteractionPhase.pickingSource,
       },
+    );
+  }
+
+  void beginEditingCrop() {
+    if (_selectedUri == null || _sourceInfo == null) {
+      throw StateError('Crop editing requires a selected video.');
+    }
+    _transitionInteraction(
+      HomeInteractionPhase.editingCrop,
+      allowedFrom: const <HomeInteractionPhase>{HomeInteractionPhase.idle},
     );
   }
 
@@ -507,6 +521,50 @@ final class HomeFlowState extends ChangeNotifier {
     _mutate(() => _sourceInfo = info);
   }
 
+  void saveCrop(CropRect crop, {bool selectPreserveQuality = false}) {
+    final source = _sourceInfo;
+    if (source == null ||
+        crop.left < 0 ||
+        crop.top < 0 ||
+        crop.width < 64 ||
+        crop.height < 64 ||
+        crop.width.isOdd ||
+        crop.height.isOdd ||
+        crop.right > source.width ||
+        crop.bottom > source.height) {
+      throw ArgumentError.value(crop, 'crop', 'Invalid display-pixel crop');
+    }
+    _mutate(() {
+      _crop = crop;
+      if (selectPreserveQuality) {
+        _selectedPreset = CompressionPreset.preserveQuality;
+      }
+      _errorText = null;
+    });
+  }
+
+  void restoreCrop(CropRect? crop) {
+    _mutate(() => _crop = crop);
+  }
+
+  void removeCrop() {
+    _mutate(() {
+      _crop = null;
+      if (_selectedPreset == CompressionPreset.preserveQuality) {
+        _selectedPreset = CompressionPreset.balanced;
+      }
+    });
+  }
+
+  void clearCropForNewSource() {
+    _mutate(() {
+      _crop = null;
+      if (_selectedPreset == CompressionPreset.preserveQuality) {
+        _selectedPreset = CompressionPreset.balanced;
+      }
+    });
+  }
+
   void setOutputInfo(VideoInfo? info) {
     _mutate(() => _outputInfo = info);
   }
@@ -600,6 +658,9 @@ final class HomeFlowState extends ChangeNotifier {
   }
 
   void selectCompressionPreset(CompressionPreset? preset) {
+    if (preset == CompressionPreset.preserveQuality && _crop == null) {
+      throw StateError('Preserve-quality requires a crop.');
+    }
     _mutate(() => _selectedPreset = preset);
   }
 
@@ -682,6 +743,7 @@ final class HomeFlowState extends ChangeNotifier {
       _audioExtractMode = AudioExtractMode.copy;
       _audioExtractBitrate = 128000;
       _sourceInfo = null;
+      _crop = null;
       _outputInfo = null;
       _outputAudioInfo = null;
       _outputPublished = false;
@@ -746,6 +808,9 @@ final class HomeFlowState extends ChangeNotifier {
     if (_cancelling && _taskLifecycle != HomeTaskLifecycle.processing) {
       throw StateError('Cancellation can only overlay a processing task.');
     }
+    if (_selectedPreset == CompressionPreset.preserveQuality && _crop == null) {
+      throw StateError('Preserve-quality requires a crop.');
+    }
   }
 
   @override
@@ -787,6 +852,7 @@ final class _HomeFlowStateSnapshot {
     required this.publishedOutputUri,
     required this.publishedOutputFileName,
     required this.sourceInfo,
+    required this.crop,
     required this.outputInfo,
     required this.outputAudioInfo,
     required this.capabilities,
@@ -831,6 +897,7 @@ final class _HomeFlowStateSnapshot {
         publishedOutputUri: state._publishedOutputUri,
         publishedOutputFileName: state._publishedOutputFileName,
         sourceInfo: state._sourceInfo,
+        crop: state._crop,
         outputInfo: state._outputInfo,
         outputAudioInfo: state._outputAudioInfo,
         capabilities: state._capabilities,
@@ -873,6 +940,7 @@ final class _HomeFlowStateSnapshot {
   final String? publishedOutputUri;
   final String? publishedOutputFileName;
   final VideoInfo? sourceInfo;
+  final CropRect? crop;
   final VideoInfo? outputInfo;
   final AudioInfo? outputAudioInfo;
   final DeviceCapabilities? capabilities;
@@ -915,6 +983,7 @@ final class _HomeFlowStateSnapshot {
     state._publishedOutputUri = publishedOutputUri;
     state._publishedOutputFileName = publishedOutputFileName;
     state._sourceInfo = sourceInfo;
+    state._crop = crop;
     state._outputInfo = outputInfo;
     state._outputAudioInfo = outputAudioInfo;
     state._capabilities = capabilities;

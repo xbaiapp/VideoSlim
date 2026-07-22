@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../models/audio_info.dart';
 import '../models/device_capabilities.dart';
 import '../models/process_request.dart';
@@ -9,6 +11,9 @@ import '../models/video_info.dart';
 abstract class VideoEngine {
   /// Reads complete technical metadata for [uri].
   Future<VideoInfo> getVideoInfo(String uri);
+
+  /// Reads a display-oriented JPEG preview near [timeMs].
+  Future<Uint8List> getPreviewFrame(String uri, {required int timeMs});
 
   /// Reads audio-specific metadata without invoking the video metadata path.
   Future<AudioInfo> getAudioInfo(String uri) =>

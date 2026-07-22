@@ -126,6 +126,7 @@ final class _FakeEngine implements VideoEngine {
   final List<ProcessRequest> processRequests = <ProcessRequest>[];
   final List<AudioExtractRequest> audioProcessRequests =
       <AudioExtractRequest>[];
+  final List<Map<String, Object?>> previewFrameCalls = <Map<String, Object?>>[];
   final List<String> metadataCalls = <String>[];
   final List<String> audioMetadataCalls = <String>[];
   final List<String> cancelCalls = <String>[];
@@ -172,6 +173,12 @@ final class _FakeEngine implements VideoEngine {
       );
     }
     return info;
+  }
+
+  @override
+  Future<Uint8List> getPreviewFrame(String uri, {required int timeMs}) async {
+    previewFrameCalls.add(<String, Object?>{'uri': uri, 'timeMs': timeMs});
+    return Uint8List.fromList(<int>[0xff, 0xd8, 0xff, 0xd9]);
   }
 
   @override
@@ -309,12 +316,33 @@ Future<void> _tapCompression(WidgetTester tester) async {
   await tester.pump();
 }
 
+Future<void> _confirmCompressionIfShown(WidgetTester tester) async {
+  final confirm = find.byKey(const ValueKey<String>('confirm-compression'));
+  if (confirm.evaluate().isEmpty) return;
+  await tester.tap(confirm);
+  await tester.pump();
+  await tester.pump();
+}
+
+Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
+  await tester.ensureVisible(finder);
+  await tester.tap(finder);
+  await tester.pump();
+}
+
 Future<void> _tapAudioExtraction(WidgetTester tester) async {
   final finder = find.byKey(const ValueKey<String>('extract-audio'));
   await tester.ensureVisible(finder);
   await tester.tap(finder);
   await tester.pump();
   await tester.pump();
+}
+
+Future<void> _saveCropFromEditor(WidgetTester tester) async {
+  await tester.pumpAndSettle();
+  expect(find.byKey(const ValueKey<String>('crop-editor')), findsOneWidget);
+  await tester.tap(find.byKey(const ValueKey<String>('save-crop')));
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -344,12 +372,9 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('提取音频'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey<String>('future-crop-card')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey<String>('crop-entry')), findsOneWidget);
     expect(find.text('裁剪画面'), findsOneWidget);
-    expect(find.text('后续里程碑开放'), findsOneWidget);
+    expect(find.text('先框选画面再保存'), findsOneWidget);
     final providerContext = tester.element(find.text('视频瘦身，本机完成'));
     expect(
       Provider.of<HomeFlowState>(providerContext, listen: false),
@@ -408,6 +433,114 @@ void main() {
     expect(
       find.byKey(const ValueKey<String>('estimated-output-size')),
       findsOneWidget,
+    );
+  });
+
+  testWidgets('home crop entry picks a video, opens S4, and selects preserve', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    picker.galleryResult = _sourceUri;
+    engine.infoByUri[_sourceUri] = _videoInfo();
+
+    await tester.tap(find.byKey(const ValueKey<String>('crop-entry')));
+    await tester.pump();
+    await tester.pump();
+    await _saveCropFromEditor(tester);
+
+    expect(picker.galleryCalls, 1);
+    expect(engine.metadataCalls, <String>[_sourceUri]);
+    expect(engine.previewFrameCalls.single, <String, Object?>{
+      'uri': _sourceUri,
+      'timeMs': 32500,
+    });
+    expect(
+      find.byKey(const ValueKey<String>('crop-applied-badge')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('preset-preserveQuality')),
+      findsOneWidget,
+    );
+
+    await _tapCompression(tester);
+    await _confirmCompressionIfShown(tester);
+    expect(
+      engine.lastRequest?.crop,
+      const CropRect(left: 0, top: 0, width: 1080, height: 1920),
+    );
+    expect(engine.lastRequest?.videoCodec, 'hevc');
+  });
+
+  testWidgets('S3 crop add, cancel, and remove preserve workflow state', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+
+    await _tapVisible(
+      tester,
+      find.byKey(const ValueKey<String>('s3-add-crop')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey<String>('save-crop')));
+    await tester.pumpAndSettle();
+    expect(find.text('已裁剪 1080×1920'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('preset-preserveQuality')),
+      findsOneWidget,
+    );
+
+    final preserveChip = find.byKey(
+      const ValueKey<String>('preset-preserveQuality'),
+    );
+    await _tapVisible(tester, preserveChip);
+    await _tapVisible(
+      tester,
+      find.byKey(const ValueKey<String>('s3-edit-crop')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey<String>('cancel-crop')));
+    await tester.pumpAndSettle();
+    expect(find.text('已裁剪 1080×1920'), findsOneWidget);
+    expect(
+      tester
+          .widget<ChoiceChip>(
+            find.byKey(const ValueKey<String>('preset-preserveQuality')),
+          )
+          .selected,
+      isTrue,
+    );
+
+    await _tapVisible(
+      tester,
+      find.byKey(const ValueKey<String>('s3-remove-crop')),
+    );
+    expect(
+      find.byKey(const ValueKey<String>('preset-preserveQuality')),
+      findsNothing,
+    );
+    expect(
+      tester
+          .widget<ChoiceChip>(
+            find.byKey(const ValueKey<String>('preset-balanced')),
+          )
+          .selected,
+      isTrue,
     );
   });
 
@@ -780,6 +913,62 @@ void main() {
 
     expect(find.text('存储空间不足，请释放空间后重试。'), findsOneWidget);
     expect(find.text('使用兼容模式重试'), findsNothing);
+  });
+
+  testWidgets('INVALID_CROP keeps S3 editable for recovery', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapVisible(
+      tester,
+      find.byKey(const ValueKey<String>('s3-add-crop')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey<String>('save-crop')));
+    await tester.pumpAndSettle();
+    await _tapCompression(tester);
+    await _confirmCompressionIfShown(tester);
+    expect(engine.lastRequest, isNotNull);
+    final flow = Provider.of<HomeFlowState>(
+      tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+      listen: false,
+    );
+    expect(flow.taskId, 'task-1');
+    expect(flow.processing, isTrue);
+
+    engine.progress.add(
+      const ProgressEvent(
+        taskId: 'task-1',
+        percent: 0,
+        state: TaskState.failed,
+        errorCode: 'INVALID_CROP',
+        errorMessage: 'native detail must not be shown',
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(flow.errorText, '裁剪区域无效，请重新框选。');
+    expect(find.text('裁剪区域无效，请重新框选。'), findsOneWidget);
+    expect(find.byKey(const ValueKey<String>('s3-edit-crop')), findsOneWidget);
+    final start = find.byKey(const ValueKey<String>('start-m2-compression'));
+    expect(tester.widget<FilledButton>(start).onPressed, isNull);
+    expect(find.text('请先重新编辑或移除无效的裁剪区域。'), findsOneWidget);
+
+    await _tapVisible(
+      tester,
+      find.byKey(const ValueKey<String>('s3-remove-crop')),
+    );
+    expect(find.text('裁剪区域无效，请重新框选。'), findsNothing);
+    expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
   });
 
   testWidgets('decoder failure offers an explicit software decoder retry', (

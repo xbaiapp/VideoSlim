@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../logic/compression_planner.dart';
 import '../models/compression_settings.dart';
 import '../models/output_location.dart';
+import '../models/process_request.dart';
 import 'video_info_card.dart';
 
 class M2CompressionCard extends StatelessWidget {
@@ -14,6 +15,7 @@ class M2CompressionCard extends StatelessWidget {
     required this.customVideoBitrate,
     required this.customAudioMode,
     required this.customAudioBitrate,
+    required this.crop,
     required this.plan,
     required this.capabilitiesLoading,
     required this.hdrSource,
@@ -26,6 +28,8 @@ class M2CompressionCard extends StatelessWidget {
     required this.onVideoBitrateChanged,
     required this.onAudioModeChanged,
     required this.onAudioBitrateChanged,
+    required this.onEditCrop,
+    required this.onRemoveCrop,
     required this.onCompress,
     required this.onChooseOutputLocation,
     required this.onUseDefaultOutputLocation,
@@ -37,6 +41,7 @@ class M2CompressionCard extends StatelessWidget {
   final int customVideoBitrate;
   final CompressionAudioMode customAudioMode;
   final int customAudioBitrate;
+  final CropRect? crop;
   final CompressionPlan? plan;
   final bool capabilitiesLoading;
   final bool hdrSource;
@@ -49,6 +54,8 @@ class M2CompressionCard extends StatelessWidget {
   final ValueChanged<int> onVideoBitrateChanged;
   final ValueChanged<CompressionAudioMode> onAudioModeChanged;
   final ValueChanged<int> onAudioBitrateChanged;
+  final VoidCallback? onEditCrop;
+  final VoidCallback? onRemoveCrop;
   final VoidCallback? onCompress;
   final VoidCallback? onChooseOutputLocation;
   final VoidCallback? onUseDefaultOutputLocation;
@@ -81,11 +88,19 @@ class M2CompressionCard extends StatelessWidget {
                 context,
               ).textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
             ),
+            const SizedBox(height: 14),
+            _CropSettingsPanel(
+              crop: crop,
+              onEdit: onEditCrop,
+              onRemove: onRemoveCrop,
+            ),
             const SizedBox(height: 16),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: <Widget>[
+                if (crop != null)
+                  _presetChip('保持画质（仅裁剪）', CompressionPreset.preserveQuality),
                 _presetChip('画质优先', CompressionPreset.quality),
                 _presetChip('均衡', CompressionPreset.balanced),
                 _presetChip('极限压缩', CompressionPreset.maximum),
@@ -170,6 +185,91 @@ class M2CompressionCard extends StatelessWidget {
     selected: selectedPreset == preset,
     onSelected: (_) => onPresetChanged(preset),
   );
+}
+
+class _CropSettingsPanel extends StatelessWidget {
+  const _CropSettingsPanel({
+    required this.crop,
+    required this.onEdit,
+    required this.onRemove,
+  });
+
+  final CropRect? crop;
+  final VoidCallback? onEdit;
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final value = crop;
+    return Container(
+      key: const ValueKey<String>('s3-crop-panel'),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: value == null
+          ? Row(
+              children: <Widget>[
+                const Icon(Icons.crop_rounded),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        '裁剪画面（可选）',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      Text('先框选需要保留的画面，再统一设置输出。'),
+                    ],
+                  ),
+                ),
+                TextButton(
+                  key: const ValueKey<String>('s3-add-crop'),
+                  onPressed: onEdit,
+                  child: const Text('添加'),
+                ),
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Icon(Icons.check_circle_rounded, color: colors.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '已裁剪 ${value.width}×${value.height}',
+                        key: const ValueKey<String>('crop-applied-badge'),
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: <Widget>[
+                    TextButton(
+                      key: const ValueKey<String>('s3-edit-crop'),
+                      onPressed: onEdit,
+                      child: const Text('编辑'),
+                    ),
+                    TextButton(
+                      key: const ValueKey<String>('s3-remove-crop'),
+                      onPressed: onRemove,
+                      child: const Text('移除'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+    );
+  }
 }
 
 class _CustomSettings extends StatelessWidget {

@@ -1,5 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:videoslim/models/compression_settings.dart';
+import 'package:videoslim/models/process_request.dart';
 import 'package:videoslim/models/progress_event.dart';
+import 'package:videoslim/models/video_info.dart';
 import 'package:videoslim/state/home_flow_state.dart';
 
 void main() {
@@ -43,6 +46,87 @@ void main() {
     expect(state.selectingOutputLocation, isFalse);
     expect(state.validatingDestination, isTrue);
   });
+
+  test('crop editing is a typed exclusive interaction phase', () {
+    state.completeRestoration();
+    expect(state.beginEditingCrop, throwsStateError);
+
+    state.setSelectedSource(uri: 'content://video', info: _videoInfo());
+    state.beginEditingCrop();
+
+    expect(state.editingCrop, isTrue);
+    expect(state.interactionPhase, HomeInteractionPhase.editingCrop);
+    expect(state.interactionLocked, isTrue);
+    expect(state.beginTaskPreparation, throwsStateError);
+
+    state.completeInteraction();
+    expect(state.editingCrop, isFalse);
+    expect(state.interactionLocked, isFalse);
+  });
+
+  test('entry B saves crop and selects preserve-quality', () {
+    state.completeRestoration();
+    state.setSelectedSource(uri: 'content://video', info: _videoInfo());
+    state.beginEditingCrop();
+    const crop = CropRect(left: 20, top: 30, width: 640, height: 480);
+
+    state.update(() {
+      state.completeInteraction();
+      state.saveCrop(crop, selectPreserveQuality: true);
+    });
+
+    expect(state.crop, crop);
+    expect(state.selectedPreset, CompressionPreset.preserveQuality);
+  });
+
+  test('S3 edit keeps preset and removal falls back only from preserve', () {
+    state.completeRestoration();
+    state.setSelectedSource(uri: 'content://video', info: _videoInfo());
+    state.selectCompressionPreset(CompressionPreset.quality);
+    const crop = CropRect(left: 20, top: 30, width: 640, height: 480);
+
+    state.saveCrop(crop);
+    expect(state.selectedPreset, CompressionPreset.quality);
+    state.removeCrop();
+    expect(state.crop, isNull);
+    expect(state.selectedPreset, CompressionPreset.quality);
+
+    state.saveCrop(crop, selectPreserveQuality: true);
+    state.removeCrop();
+    expect(state.selectedPreset, CompressionPreset.balanced);
+    expect(
+      () => state.selectCompressionPreset(CompressionPreset.preserveQuality),
+      throwsStateError,
+    );
+  });
+
+  test(
+    'crop mutation validates even bounded 64-pixel geometry and rolls back',
+    () {
+      state.completeRestoration();
+      state.setSelectedSource(uri: 'content://video', info: _videoInfo());
+      const crop = CropRect(left: 20, top: 30, width: 640, height: 480);
+      state.saveCrop(crop);
+
+      for (final invalid in <CropRect>[
+        const CropRect(left: 0, top: 0, width: 63, height: 64),
+        const CropRect(left: 0, top: 0, width: 65, height: 64),
+        const CropRect(left: 1500, top: 0, width: 640, height: 480),
+      ]) {
+        expect(() => state.saveCrop(invalid), throwsArgumentError);
+        expect(state.crop, crop);
+      }
+
+      expect(
+        () => state.update(() {
+          state.removeCrop();
+          throw ArgumentError('forced failure');
+        }),
+        throwsArgumentError,
+      );
+      expect(state.crop, crop);
+    },
+  );
 
   test('task transitions keep lifecycle phases mutually exclusive', () {
     state.completeRestoration();
@@ -373,3 +457,18 @@ void main() {
     expect(state.interactionLocked, isFalse);
   });
 }
+
+VideoInfo _videoInfo() => const VideoInfo(
+  uri: 'content://video',
+  fileName: 'video.mp4',
+  fileSizeBytes: 10,
+  durationMs: 1000,
+  container: 'video/mp4',
+  videoCodec: 'h264',
+  width: 1920,
+  height: 1080,
+  rotationDegrees: 0,
+  frameRate: 30,
+  videoBitrate: 4000000,
+  isHdr: false,
+);

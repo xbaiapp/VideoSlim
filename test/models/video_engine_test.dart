@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:videoslim/engine/video_engine.dart';
@@ -31,6 +32,10 @@ void main() {
       expect(
         (await engine.getVideoInfo('content://video')).uri,
         'content://video',
+      );
+      expect(
+        await engine.getPreviewFrame('content://video', timeMs: 0),
+        Uint8List.fromList(<int>[0xff, 0xd8, 0xff, 0xd9]),
       );
       expect(await engine.process(processRequest), 'process-task');
       expect(await engine.extractAudio(extractRequest), 'extract-task');
@@ -87,6 +92,10 @@ class _FakeVideoEngine implements VideoEngine {
 
   @override
   Future<TaskSnapshot?> getTaskSnapshot() async => null;
+
+  @override
+  Future<Uint8List> getPreviewFrame(String uri, {required int timeMs}) async =>
+      Uint8List.fromList(<int>[0xff, 0xd8, 0xff, 0xd9]);
 
   @override
   Future<VideoInfo> getVideoInfo(String uri) async => VideoInfo(

@@ -25,6 +25,7 @@ import '../state/home_flow_state.dart';
 import '../widgets/m2_compression_card.dart';
 import '../widgets/audio_extract_card.dart';
 import '../widgets/audio_result_card.dart';
+import '../widgets/crop_editor.dart';
 import '../widgets/video_info_card.dart';
 import 'debug_log_screen.dart';
 
@@ -77,6 +78,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool get _picking => _flow.picking;
   bool get _readingMetadata => _flow.readingMetadata;
+  bool get _editingCrop => _flow.editingCrop;
   bool get _selectingOutputLocation => _flow.selectingOutputLocation;
   bool get _validatingDestination => _flow.validatingDestination;
   bool get _preparing => _flow.preparing;
@@ -109,9 +111,12 @@ class _HomeScreenState extends State<HomeScreen> {
   String? get _selectedUri => _flow.selectedUri;
   String? get _taskId => _flow.taskId;
   String? get _errorText => _flow.errorText;
+  bool get _invalidCropNeedsEdit =>
+      _errorText != null && _lastFailureCode == 'INVALID_CROP';
   String? get _publishedOutputUri => _flow.publishedOutputUri;
   String? get _publishedOutputFileName => _flow.publishedOutputFileName;
   VideoInfo? get _sourceInfo => _flow.sourceInfo;
+  CropRect? get _crop => _flow.crop;
   VideoInfo? get _outputInfo => _flow.outputInfo;
   AudioInfo? get _outputAudioInfo => _flow.outputAudioInfo;
   Duration? get _processElapsed => _flow.processElapsed;
@@ -262,6 +267,7 @@ class _HomeScreenState extends State<HomeScreen> {
       source: source,
       settings: _compressionSettings,
       capabilities: capabilities,
+      crop: _crop,
     );
   }
 
@@ -415,6 +421,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _taskOutputLocationLabel = snapshot.outputLocationLabel;
       _lastVideoDecoderMode = snapshot.videoDecoderMode;
       _lastProcessRequest = snapshot.retryRequest;
+      _flow.restoreCrop(snapshot.retryRequest?.crop);
       _lastAudioExtractRequest = snapshot.audioRetryRequest;
       final audioRetry = snapshot.audioRetryRequest;
       if (audioRetry != null) {
@@ -501,7 +508,10 @@ class _HomeScreenState extends State<HomeScreen> {
     _timingTimer = null;
   }
 
-  Future<void> _pick(_ImportSource source) async {
+  Future<void> _pick(
+    _ImportSource source, {
+    bool editCropAfterPick = false,
+  }) async {
     if (_interactionLocked) {
       _logFlow('忽略重复导入点击', details: <String, Object?>{'source': source.name});
       return;
@@ -542,6 +552,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _flow.update(() {
         _flow.beginReadingSourceMetadata();
         _flow.setSelectedSource(uri: uri, info: null);
+        _flow.clearCropForNewSource();
         _flow.setOutputInfo(null);
         _flow.setOutputAudioInfo(null);
         _flow.setActiveTaskKind(TaskKind.videoCompression);
@@ -590,6 +601,9 @@ class _HomeScreenState extends State<HomeScreen> {
         },
       );
       unawaited(_loadCapabilities(generation));
+      if (editCropAfterPick && _isCurrent(generation)) {
+        await _editCrop(selectPreserveOnSave: true);
+      }
     } catch (error, stackTrace) {
       if (!_isCurrent(generation)) {
         return;
@@ -606,6 +620,67 @@ class _HomeScreenState extends State<HomeScreen> {
         details: <String, Object?>{'source': source.name},
       );
     }
+  }
+
+  Future<void> _editCrop({bool selectPreserveOnSave = false}) async {
+    final info = _sourceInfo;
+    final uri = _selectedUri;
+    if (_interactionLocked || info == null || uri == null) return;
+    _flow.beginEditingCrop();
+    try {
+      final crop = await Navigator.of(context).push<CropRect>(
+        MaterialPageRoute<CropRect>(
+          builder: (_) => CropEditor(
+            engine: widget.engine,
+            uri: uri,
+            sourceWidth: info.width,
+            sourceHeight: info.height,
+            durationMs: info.durationMs,
+            initialCrop: _crop,
+          ),
+        ),
+      );
+      if (!mounted || !_editingCrop) return;
+      _flow.update(() {
+        _flow.completeInteraction();
+        if (crop != null) {
+          _flow.saveCrop(crop, selectPreserveQuality: selectPreserveOnSave);
+        }
+      });
+      if (crop != null) {
+        _logFlow(
+          'M4-A 裁剪已保存',
+          details: <String, Object?>{
+            'crop': crop.toChannelMap(),
+            'preset': _selectedPreset?.name ?? 'custom',
+          },
+        );
+      }
+    } catch (error, stackTrace) {
+      if (mounted && _editingCrop) {
+        _flow.update(() {
+          _flow.completeInteraction();
+          _flow.setErrorText('无法打开裁剪编辑器，请稍后重试。');
+        });
+      }
+      _logError('M4-A 裁剪编辑失败', error, stackTrace);
+    } finally {
+      if (mounted && _editingCrop) _flow.completeInteraction();
+    }
+  }
+
+  void _removeCrop() {
+    if (_interactionLocked || _crop == null) return;
+    _flow.update(() {
+      _flow.removeCrop();
+      if (_lastFailureCode == 'INVALID_CROP') {
+        _flow.setErrorText(null);
+      }
+    });
+    _logFlow(
+      'M4-A 裁剪已移除',
+      details: <String, Object?>{'preset': _selectedPreset?.name ?? 'custom'},
+    );
   }
 
   Future<void> _extractAudio() async {
@@ -1099,6 +1174,17 @@ class _HomeScreenState extends State<HomeScreen> {
       _logFlow('阻止压缩：进度通道已关闭', level: AppLogLevel.error);
       return;
     }
+
+    _logFlow(
+      'M4-A 输出计划已确认',
+      details: <String, Object?>{
+        'preset': _selectedPreset?.name ?? 'custom',
+        'crop': _crop?.toChannelMap(),
+        'outputWidth': plan.outputWidth,
+        'outputHeight': plan.outputHeight,
+        'videoBitrate': plan.videoBitrate,
+      },
+    );
 
     final outputLocationRevision = _outputLocationRevision;
     final generation = _reserveDestinationValidation();
@@ -1911,6 +1997,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       onExtractAudio: _interactionLocked
                           ? null
                           : () => _pick(_ImportSource.gallery),
+                      onCrop: _interactionLocked
+                          ? null
+                          : () => _pick(
+                              _ImportSource.gallery,
+                              editCropAfterPick: true,
+                            ),
                     ),
                   ],
                   if (_errorText != null) ...<Widget>[
@@ -1967,7 +2059,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       outputInfo == null &&
                       outputAudioInfo == null &&
                       !_outputPublished &&
-                      _errorText == null &&
+                      (_errorText == null ||
+                          _lastFailureCode == 'INVALID_CROP') &&
                       !_processing &&
                       !_finishing &&
                       !_preparing) ...<Widget>[
@@ -1979,11 +2072,14 @@ class _HomeScreenState extends State<HomeScreen> {
                       customVideoBitrate: _customVideoBitrate,
                       customAudioMode: _customAudioMode,
                       customAudioBitrate: _customAudioBitrate,
+                      crop: _crop,
                       plan: _compressionPlan,
                       capabilitiesLoading: _capabilitiesLoading,
                       hdrSource: sourceInfo.isHdr,
                       disabledReason: _progressStreamClosed
                           ? '处理状态连接已中断，请重启应用后再压缩。'
+                          : _invalidCropNeedsEdit
+                          ? '请先重新编辑或移除无效的裁剪区域。'
                           : !_capabilitiesLoading && _capabilities == null
                           ? '无法检查手机的处理能力，请重新选择视频或重启应用。'
                           : _compressionPlan?.isSupported == false
@@ -2015,6 +2111,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       onAudioBitrateChanged: (value) => _changeSettings(
                         () => _flow.setCustomAudioBitrate(value),
                       ),
+                      onEditCrop: _interactionLocked ? null : _editCrop,
+                      onRemoveCrop: _interactionLocked ? null : _removeCrop,
                       onChooseOutputLocation: _interactionLocked
                           ? null
                           : _chooseOutputFolder,
@@ -2024,6 +2122,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       onCompress:
                           !_interactionLocked &&
                               !_progressStreamClosed &&
+                              !_invalidCropNeedsEdit &&
                               !_capabilitiesLoading &&
                               !_outputLocationLoading &&
                               _outputLocation.writable &&
@@ -2316,9 +2415,10 @@ class _ImportCard extends StatelessWidget {
 }
 
 class _FeatureCards extends StatelessWidget {
-  const _FeatureCards({required this.onExtractAudio});
+  const _FeatureCards({required this.onExtractAudio, required this.onCrop});
 
   final VoidCallback? onExtractAudio;
+  final VoidCallback? onCrop;
 
   @override
   Widget build(BuildContext context) {
@@ -2331,11 +2431,12 @@ class _FeatureCards extends StatelessWidget {
           subtitle: '从视频保存 M4A 音频',
           onTap: onExtractAudio,
         );
-        const crop = _DisabledFeatureCard(
-          key: ValueKey<String>('future-crop-card'),
+        final crop = _ActiveFeatureCard(
+          key: const ValueKey<String>('crop-entry'),
           icon: Icons.crop_rounded,
           title: '裁剪画面',
-          milestone: '后续里程碑开放',
+          subtitle: '先框选画面再保存',
+          onTap: onCrop,
         );
         if (constraints.maxWidth < 390) {
           return Column(
@@ -2346,7 +2447,7 @@ class _FeatureCards extends StatelessWidget {
           children: <Widget>[
             Expanded(child: audio),
             const SizedBox(width: 10),
-            const Expanded(child: crop),
+            Expanded(child: crop),
           ],
         );
       },
@@ -2411,67 +2512,6 @@ class _ActiveFeatureCard extends StatelessWidget {
                 Icons.chevron_right_rounded,
                 color: colors.onPrimaryContainer,
               ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DisabledFeatureCard extends StatelessWidget {
-  const _DisabledFeatureCard({
-    super.key,
-    required this.icon,
-    required this.title,
-    required this.milestone,
-  });
-
-  final IconData icon;
-  final String title;
-  final String milestone;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return Semantics(
-      enabled: false,
-      button: true,
-      label: '$title，$milestone',
-      child: Card(
-        color: colors.surfaceContainerLow,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: BorderSide(color: colors.outlineVariant),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: <Widget>[
-              Icon(icon, color: colors.onSurfaceVariant),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      title,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: colors.onSurfaceVariant,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      milestone,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: colors.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Icon(Icons.lock_clock_outlined, color: colors.outline),
             ],
           ),
         ),
@@ -3067,6 +3107,7 @@ String _messageForCode(
     'VIDEO_FORMAT_UNSUPPORTED' => '这台手机暂时无法读取这种视频格式。',
     'COMPATIBILITY_DECODER_UNAVAILABLE' => '这台手机没有可用于此视频的软件读取方式。原视频没有被修改。',
     'VIDEO_ENCODING_FAILED' => '手机没能按当前设置完成压缩。可按原设置重试，或返回调整格式或画质。',
+    'INVALID_CROP' => '裁剪区域无效，请重新框选。',
     'AUDIO_TRACK_MISSING' => '这个视频没有可提取的音轨。',
     'AUDIO_COPY_UNSUPPORTED' => '原音轨不是 AAC，无法无损提取。请改用 AAC 转码。',
     'AUDIO_CHANNEL_LAYOUT_UNSUPPORTED' => '目前只支持单声道或双声道音轨。原视频没有被修改。',

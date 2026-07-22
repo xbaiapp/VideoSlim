@@ -41,6 +41,28 @@ final class MethodChannelVideoEngine implements VideoEngine {
   }
 
   @override
+  Future<Uint8List> getPreviewFrame(String uri, {required int timeMs}) {
+    if (timeMs < 0) {
+      return Future<Uint8List>.error(
+        ArgumentError.value(timeMs, 'timeMs', 'must not be negative'),
+      );
+    }
+    final arguments = <String, Object?>{'uri': uri, 'timeMs': timeMs};
+    return _invoker.invoke<Uint8List>(
+      'getPreviewFrame',
+      arguments: arguments,
+      parse: (Object? response) {
+        if (response case final Uint8List bytes when bytes.isNotEmpty) {
+          return bytes;
+        }
+        throw FormatException(
+          'getPreviewFrame response must be non-empty Uint8List, got $response',
+        );
+      },
+    );
+  }
+
+  @override
   Future<AudioInfo> getAudioInfo(String uri) {
     final arguments = <String, Object?>{'uri': uri};
     return _invoker.invoke<AudioInfo>(

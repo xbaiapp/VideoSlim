@@ -78,6 +78,52 @@ void main() {
       expect(edge.bottom, lessThanOrEqualTo(geometry.videoRect.bottom));
     });
 
+    test('locked edge handles preserve ratio at the 64px minimum', () {
+      final geometry = CropGeometry(
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        viewportSize: const Size(960, 540),
+      );
+      final landscape = geometry.applyAspectRatio(
+        geometry.videoRect,
+        CropAspectRatio.landscape16x9,
+      );
+      final portrait = geometry.applyAspectRatio(
+        geometry.videoRect,
+        CropAspectRatio.portrait9x16,
+      );
+
+      final landscapePixels = geometry.viewportToCrop(
+        geometry.resize(
+          landscape,
+          CropHandle.right,
+          const Offset(-2000, 0),
+          aspectRatio: CropAspectRatio.landscape16x9,
+        ),
+      );
+      final portraitPixels = geometry.viewportToCrop(
+        geometry.resize(
+          portrait,
+          CropHandle.bottom,
+          const Offset(0, -2000),
+          aspectRatio: CropAspectRatio.portrait9x16,
+        ),
+      );
+
+      expect(landscapePixels.width, greaterThanOrEqualTo(64));
+      expect(landscapePixels.height, greaterThanOrEqualTo(64));
+      expect(
+        landscapePixels.width / landscapePixels.height,
+        closeTo(16 / 9, 0.02),
+      );
+      expect(portraitPixels.width, greaterThanOrEqualTo(64));
+      expect(portraitPixels.height, greaterThanOrEqualTo(64));
+      expect(
+        portraitPixels.width / portraitPixels.height,
+        closeTo(9 / 16, 0.02),
+      );
+    });
+
     test('applies aspect aids and evenizes only right and bottom', () {
       final geometry = CropGeometry(
         sourceWidth: 1001,

@@ -36,6 +36,12 @@ class CropRect {
   /// Crop height in pixels.
   final int height;
 
+  /// Exclusive right edge in display pixels.
+  int get right => left + width;
+
+  /// Exclusive bottom edge in display pixels.
+  int get bottom => top + height;
+
   /// Converts this rectangle to its nested channel representation.
   Map<String, int> toChannelMap() => <String, int>{
     'left': left,

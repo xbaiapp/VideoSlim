@@ -302,21 +302,24 @@ final class CropGeometry {
       final fixedX = _isLeft(handle) ? selection.right : selection.left;
       final movingX =
           (_isLeft(handle) ? selection.left : selection.right) + delta.dx;
-      var width = (movingX - fixedX).abs().clamp(
-        _minimumWidth,
-        _isLeft(handle) ? fixedX - videoRect.left : videoRect.right - fixedX,
-      );
-      var height = width / ratio;
-      final maxHeight =
+      final availableWidth = _isLeft(handle)
+          ? fixedX - videoRect.left
+          : videoRect.right - fixedX;
+      final availableHeight =
           2 *
           ((selection.center.dy - videoRect.top) <
                   (videoRect.bottom - selection.center.dy)
               ? selection.center.dy - videoRect.top
               : videoRect.bottom - selection.center.dy);
-      if (height > maxHeight) {
-        height = maxHeight;
-        width = height * ratio;
-      }
+      final minimumWidth = _minimumWidth > _minimumHeight * ratio
+          ? _minimumWidth
+          : _minimumHeight * ratio;
+      final maximumWidth = availableWidth < availableHeight * ratio
+          ? availableWidth
+          : availableHeight * ratio;
+      if (maximumWidth < minimumWidth) return selection;
+      final width = (movingX - fixedX).abs().clamp(minimumWidth, maximumWidth);
+      final height = width / ratio;
       final left = _isLeft(handle) ? fixedX - width : fixedX;
       return Rect.fromCenter(
         center: Offset(left + width / 2, selection.center.dy),
@@ -328,21 +331,24 @@ final class CropGeometry {
     final fixedY = _isTop(handle) ? selection.bottom : selection.top;
     final movingY =
         (_isTop(handle) ? selection.top : selection.bottom) + delta.dy;
-    var height = (movingY - fixedY).abs().clamp(
-      _minimumHeight,
-      _isTop(handle) ? fixedY - videoRect.top : videoRect.bottom - fixedY,
-    );
-    var width = height * ratio;
-    final maxWidth =
+    final availableHeight = _isTop(handle)
+        ? fixedY - videoRect.top
+        : videoRect.bottom - fixedY;
+    final availableWidth =
         2 *
         ((selection.center.dx - videoRect.left) <
                 (videoRect.right - selection.center.dx)
             ? selection.center.dx - videoRect.left
             : videoRect.right - selection.center.dx);
-    if (width > maxWidth) {
-      width = maxWidth;
-      height = width / ratio;
-    }
+    final minimumHeight = _minimumHeight > _minimumWidth / ratio
+        ? _minimumHeight
+        : _minimumWidth / ratio;
+    final maximumHeight = availableHeight < availableWidth / ratio
+        ? availableHeight
+        : availableWidth / ratio;
+    if (maximumHeight < minimumHeight) return selection;
+    final height = (movingY - fixedY).abs().clamp(minimumHeight, maximumHeight);
+    final width = height * ratio;
     final top = _isTop(handle) ? fixedY - height : fixedY;
     return Rect.fromCenter(
       center: Offset(selection.center.dx, top + height / 2),
