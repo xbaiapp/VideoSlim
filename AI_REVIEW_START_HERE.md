@@ -2,9 +2,9 @@
 
 > **用途：** 给新的 AI/开发者一个可验证的当前项目入口。先读本文，再决定是否需要展开 PRD 和源码。
 > **生成日期：** 2026-07-22
-> **当前发布版本：** `1.4.3+18`
-> **发布代码 SHA：** `19abfb7da2e8fa028e7200000f0dc2a114bc840e`
-> **阶段：** M3 `ACCEPTED — private scope`；M4 未开始
+> **当前候选版本：** `1.5.0+19`
+> **M4-A 候选代码 SHA：** `6de3f7f971bbfbe4b1b2a8cf457f8e125b9228e1`
+> **阶段：** M4-A `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`；M3 `1.4.3+18` 仍是当前已接受发布基线
 > **安全：** 凭据、用户媒体、运行时数据库和私有日志不属于本交接包；任何秘密值只能写为 `[REDACTED]`。
 
 ## 1. 先读什么
@@ -13,10 +13,11 @@
 2. `docs/current-project-status.md`（当前进度与证据）
 3. `README.md`（当前用户能力）
 4. `docs/VideoSlim PRD.md`（产品和权威 contract）
-5. `docs/m3-completion-report.md`（M3 实现、修复、验证、接受范围）
-6. `docs/known-debt.md`（冻结 Slice B 与已知限制）
-7. `AGENTS.md`（项目治理、复审预算、真机优先规则）
-8. 之后再读下方“关键源码”。
+5. `docs/m4-a-completion-report.md`（M4-A 实现、自动化、候选与证据边界）
+6. `docs/m4-device-acceptance.md`（全部仍为 PENDING 的真机矩阵）
+7. `docs/known-debt.md`（冻结 Slice B 与已知限制）
+8. `AGENTS.md`（项目治理、复审预算、真机优先规则）
+9. 之后再读下方“关键源码”。
 
 ## 2. 产品边界
 
@@ -47,16 +48,17 @@ VideoSlim 是 Android 本地媒体工具：
 | M1 | ACCEPTED | 导入→metadata→压缩→相册→F19 主流程通过 |
 | M2 | `ACCEPTED — private scope` | 完整压缩、前台任务、取消、恢复、SAF 和兼容 Decoder 重试 |
 | M3 | `ACCEPTED — private scope` | AAC 无损直提和 AAC 强制重编码；所有者于 2026-07-22 报告测试成功 |
-| M4 | NOT STARTED | crop + trim，仅 contract/UI seam 已预留 |
+| M4-A | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | F5 画面裁剪已实现；自动化与候选构建通过，真机矩阵未执行 |
+| M4-B | `NOT STARTED — NOT AUTHORIZED` | F8 时间裁剪未实现、未授权 |
 | M5/M6 | NOT STARTED | 打磨、批量、目标大小、iOS/上架 |
 
 当前 APK：
 
 ```text
-VideoSlim-1.4.3+18-19abfb7-arm64-v8a-release.apk
-SHA-256 12523bac8b91994e23f965c98ce9f26c4e0ff3a8aac18fbfefb4cb01f34fbcf7
+VideoSlim-1.5.0+19-6de3f7f-arm64-v8a-release.apk
+SHA-256 de8c6a4b4ce53f4ae7d117bd361b0f2830681d3b3d3798de76fa47a2e3520b4f
 package com.videoslim.videoslim
-version 1.4.3+18
+version 1.5.0+19
 ```
 
 ## 4. 技术架构
@@ -128,11 +130,12 @@ Picker URI
 
 ### Flutter
 
-- `lib/screens/home_screen.dart` — 主工作流与界面；当前 crop card 禁用
+- `lib/screens/home_screen.dart` — 主工作流、双入口和 S3/S4 裁剪接线
+- `lib/widgets/crop_editor.dart` / `lib/logic/crop_geometry.dart` — 裁剪编辑器与显示像素几何
 - `lib/state/home_flow_state.dart` — typed UI/workflow state
 - `lib/engine/video_engine.dart` — 跨平台引擎接口
 - `lib/engine/method_channel_video_engine.dart` — 平台通道 adapter
-- `lib/models/process_request.dart` — 已有 `CropRect`、crop/trim wire contract
+- `lib/models/process_request.dart` — `CropRect` 与 crop request/snapshot/retry contract；trim 仍拒绝非空
 - `lib/models/audio_extract_request.dart` — M3 音频请求
 - `lib/logic/compression_planner.dart` — 输出尺寸、码率、估算和 capability fallback
 - `lib/logic/audio_extract_planner.dart` — M3 模式、文件名和估算
@@ -143,6 +146,7 @@ Picker URI
 - `ProcessingRuntime.kt` / `ProcessingRegistry.kt` — 进程级任务所有权和状态
 - `ProcessingService.kt` — 前台服务、通知、终态和 recovery observer
 - `TranscodeEngine.kt` — Media3 视频转码、codec preflight、effects、发布
+- `CropGeometryMapper.kt` / `PreviewFrameReader.kt` — 显示像素到 NDC 与只读预览帧
 - `AudioExtractionEngine.kt` — AAC copy / AAC encode
 - `AudioSampleCopyLoop.kt` / `AudioSampleDigest.kt` — sample copy 和完整性证据
 - `AudioMetadataReader.kt` — 音频 metadata/物理扫描 fallback
@@ -150,7 +154,7 @@ Picker URI
 - `MediaStoreSaver.kt` — 默认 MediaStore 与 SAF document-tree 发布
 - `TaskRecoveryStore.kt` / `RecoveryIoCoordinator.kt` / `VideoSlimApplication.kt` — durable journal、进程级 reconciliation gate 与启动对账
 
-## 6. M3 验证状态
+## 6. 验证状态
 
 发布代码 `19abfb7...`：
 
@@ -161,6 +165,14 @@ Picker URI
 - exact-SHA 双复审：PASS / PASS，0 blocker；
 - 项目所有者：M3 测试成功，接受为 private scope。
 
+M4-A 候选代码 `6de3f7f...`：
+
+- Flutter analyze：PASS；Flutter tests：213/213；
+- Android JVM tests：317/317；debug/release lint 与 assemble：PASS；
+- ARM64 APK 的 zipalign、v2 signature、package/version/SDK/ABI、权限与凭据模式扫描：PASS；
+- exact-SHA Route B：PASS、0 blocker；Route A 未返回最终 verdict，按规则不计 PASS；
+- 构建机无连接设备，`docs/m4-device-acceptance.md` 全部保持 PENDING。
+
 远端 CI 不是全绿：主 Flutter/Android job 全部通过，但 API 35 x86_64 instrumentation job 因 runner 中 `sdkmanager: command not found` 在该 job 的应用/instrumentation 构建前失败，emulator instrumentation 未执行。
 
 ## 7. 不要误读的事实
@@ -170,36 +182,29 @@ Picker URI
 - `1.4.3+18` 只消除成功后 `getAudioInfo` 的重复扫描，不删除发布前完整校验。
 - Task 3 Slice B 未集成；其 worktree/patch 是冻结研究，不是产品代码。
 - Release 使用 Debug certificate，不是生产签名。
-- Crop/trim 未实现。Dart contract 已预留不代表 native 支持。
+- M4-A crop 已实现但尚未真机接受；M4-B trim 仍未实现、未授权。
 
-## 8. M4 裁剪扩展边界
+## 8. M4-A 实现边界与剩余验收
 
-若下一任务是画面裁剪，不应重写架构：
+M4-A 已按下列一次转码链路实现：
 
 ```text
 裁剪 UI → display-oriented CropRect
 → CompressionPlanner 以裁剪后尺寸规划
 → ProcessRequest.crop
-→ Kotlin 严格解析/旋转坐标换算
+→ Kotlin 严格解析与 display-pixel → NDC 映射
 → Media3 Effects: crop → Presentation/scale
 → 现有 Transformer/verify/publication/recovery
 ```
 
-已存在：
-
-- `CropRect` 和平台 wire map；
-- 首页 disabled crop card；
-- `ProcessRequest` 的 crop/trim keys；
-- `TranscodeEngine` 的 Media3 `Effects`/`Presentation` seam。
-
-尚需实现：裁剪编辑器、预览坐标纯函数、Kotlin display→NDC 转换、边界/偶数尺寸校验、planner 的裁剪后 geometry、effect order、snapshot/recovery 和横屏/竖屏/rotation 真机矩阵。
+已完成裁剪编辑器、预览帧、比例锁、边界/偶数尺寸、裁后 planner、`Crop → Presentation`、snapshot/retry round-trip 和 `INVALID_CROP` 恢复。尚未完成的是 0°/90°/180°/270°、codec、后台、锁屏、取消、恢复和文件安全的真实设备矩阵。
 
 不要生成“裁剪中间视频”再二次压缩；PRD 明确要求裁剪、缩放、压缩一次转码完成。
 
 ## 9. 已知债务和下一 AI 的工作规则
 
 - 先读 `docs/known-debt.md`；不要恢复或合并冻结的 Slice B。
-- M3 已接受，但任何 M4/新 hardening/refactor/migration 仍需项目所有者明确批准。
+- M4-A 只允许继续既定真机验收；M4-B/F8 或任何新 hardening/refactor/migration 仍需项目所有者明确批准。
 - “分析”意味着只读，不得自动编辑代码。
 - 每任务默认最多一次实现、一次修订、一轮 exact-SHA 复审。
 - 只有真机可复现问题或用户文件丢失/误删风险是当前 private-scope blocker。
