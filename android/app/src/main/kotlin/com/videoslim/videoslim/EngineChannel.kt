@@ -10,6 +10,7 @@ import io.flutter.plugin.common.MethodChannel
 
 internal typealias LegacyWritePermissionRequester = ((Boolean) -> Unit) -> Unit
 internal typealias NotificationPermissionRequester = ((Boolean) -> Unit) -> Unit
+internal typealias PreviewFrameProvider = (String, Long) -> ByteArray
 
 internal fun routeEngineSnapshotLog(
     snapshot: TaskRuntimeSnapshot,
@@ -29,6 +30,7 @@ internal class EngineChannel(
     messenger: BinaryMessenger,
     private val metadataReader: VideoMetadataReader,
     private val transcodeEngine: TranscodeEngine,
+    private val previewFrameProvider: PreviewFrameProvider = PreviewFrameReader(context)::read,
     private val requestLegacyWritePermission: LegacyWritePermissionRequester,
     private val requestNotificationPermission: NotificationPermissionRequester,
     private val ioDispatcher: AppMediaIoDispatcher,
@@ -60,6 +62,7 @@ internal class EngineChannel(
         log("method=${call.method} arguments=${call.arguments}")
         when (call.method) {
             "getVideoInfo" -> getVideoInfo(call.arguments, reply)
+            "getPreviewFrame" -> getPreviewFrame(call.arguments, reply)
             "getAudioInfo" -> getAudioInfo(call.arguments, reply)
             "getCapabilities" -> getCapabilities(call.arguments, reply)
             "getTaskSnapshot" -> getTaskSnapshot(call.arguments, reply)
@@ -117,6 +120,31 @@ internal class EngineChannel(
                     }
                 },
                 onFailure = { error -> reply.error(metadataFailure(error), error) },
+            )
+        }
+    }
+
+    private fun getPreviewFrame(arguments: Any?, reply: PendingEngineReply) {
+        val request =
+            try {
+                PreviewFrameRequest.parse(arguments)
+            } catch (error: Throwable) {
+                reply.error(EngineFailure(EngineErrorCode.UNKNOWN, "预览帧参数无效"), error)
+                return
+            }
+        submitIo(reply, MediaIoOperation.VIDEO_PREVIEW_FRAME, {
+            previewFrameProvider(request.sourceUri, request.timeMs)
+        }) { outcome ->
+            outcome.fold(
+                onSuccess = { response ->
+                    reply.success(response) {
+                        log(
+                            "method=getPreviewFrame timeMs=${request.timeMs} " +
+                                "responseBytes=${response.size}",
+                        )
+                    }
+                },
+                onFailure = { error -> reply.error(previewFrameFailure(error), error) },
             )
         }
     }
@@ -421,6 +449,15 @@ internal class EngineChannel(
         )
         result.error(failure.code.wireName, failure.message, details)
     }
+
+    private fun previewFrameFailure(error: Throwable): EngineFailure =
+        when (error) {
+            is PreviewFrameException ->
+                EngineFailure(EngineErrorCode.UNKNOWN, error.message ?: "无法读取视频预览")
+            is AppMediaIoRejectedException ->
+                EngineFailure(EngineErrorCode.UNKNOWN, "媒体操作繁忙，请稍后重试")
+            else -> EngineErrorMapper.fromThrowable(error)
+        }
 
     private fun metadataFailure(error: Throwable): EngineFailure =
         when (error) {

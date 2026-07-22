@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicInteger
 /** Every operation here may cross a provider, resolver, or persistent-preference boundary. */
 internal enum class MediaIoOperation {
     VIDEO_METADATA,
+    VIDEO_PREVIEW_FRAME,
     AUDIO_METADATA,
     OUTPUT_DESTINATION_VALIDATION,
     VIDEO_GRANT_PERSISTENCE,

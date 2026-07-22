@@ -36,6 +36,60 @@ class TranscodePlanTest {
     }
 
     @Test
+    fun `plans crop before presentation scaling and exposes effect order`() {
+        val croppedOnly =
+            TranscodePlan.create(
+                request =
+                    request(
+                        crop = CropRect(left = 100, top = 50, width = 1280, height = 720),
+                    ),
+                metadata = metadata(displayWidth = 1920, displayHeight = 1080),
+                sdkInt = 35,
+            )
+        assertEquals(VideoDimensions(1280, 720), croppedOnly.outputDimensions)
+        assertFalse(croppedOnly.presentationRequired)
+        assertEquals(listOf(VideoEffectKind.CROP), croppedOnly.videoEffectOrder)
+
+        val croppedAndScaled =
+            TranscodePlan.create(
+                request =
+                    request(
+                        longEdge = 854,
+                        crop = CropRect(left = 100, top = 50, width = 1280, height = 720),
+                    ),
+                metadata = metadata(displayWidth = 1920, displayHeight = 1080),
+                sdkInt = 35,
+            )
+        assertEquals(VideoDimensions(854, 480), croppedAndScaled.outputDimensions)
+        assertTrue(croppedAndScaled.presentationRequired)
+        assertEquals(
+            listOf(VideoEffectKind.CROP, VideoEffectKind.PRESENTATION),
+            croppedAndScaled.videoEffectOrder,
+        )
+    }
+
+    @Test
+    fun `crop planning fails closed with INVALID_CROP`() {
+        val exception =
+            try {
+                TranscodePlan.create(
+                    request =
+                        request(
+                            crop = CropRect(left = 1900, top = 0, width = 100, height = 100),
+                        ),
+                    metadata = metadata(displayWidth = 1920, displayHeight = 1080),
+                    sdkInt = 35,
+                )
+                fail("Expected CropMappingException")
+                error("unreachable")
+            } catch (error: CropMappingException) {
+                error
+            }
+
+        assertEquals(EngineErrorCode.INVALID_CROP, exception.failure.code)
+    }
+
+    @Test
     fun `rounds a scaled short edge to an even dimension`() {
         val plan =
             TranscodePlan.create(
@@ -253,6 +307,7 @@ class TranscodePlanTest {
     private fun request(
         videoBitrate: Int = 2_500_000,
         longEdge: Int? = null,
+        crop: CropRect? = null,
         audioMode: AudioMode = AudioMode.COPY,
         audioBitrate: Int? = null,
     ): ProcessRequest =
@@ -262,6 +317,7 @@ class TranscodePlanTest {
             videoCodec = VideoCodec.HEVC,
             videoBitrate = videoBitrate,
             longEdge = longEdge,
+            crop = crop,
             audioMode = audioMode,
             audioBitrate = audioBitrate,
         )

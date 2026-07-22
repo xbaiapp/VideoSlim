@@ -11,11 +11,13 @@ import android.os.StatFs
 import android.os.SystemClock
 import android.os.storage.StorageManager
 import androidx.media3.common.C
+import androidx.media3.common.Effect
 import androidx.media3.common.util.Clock
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaLibraryInfo
 import androidx.media3.common.MimeTypes
 import androidx.media3.datasource.DataSourceBitmapLoader
+import androidx.media3.effect.Crop
 import androidx.media3.effect.Presentation
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.transformer.AudioEncoderSettings
@@ -434,19 +436,26 @@ internal class TranscodeEngine(
             val editedItemBuilder =
                 EditedMediaItem.Builder(MediaItem.fromUri(task.request.sourceUri))
                     .setRemoveAudio(task.request.audioMode == AudioMode.REMOVE)
-            if (plan.presentationRequired) {
-                editedItemBuilder.setEffects(
-                    Effects(
-                        emptyList(),
-                        listOf(
+            val videoEffects = mutableListOf<Effect>()
+            plan.videoEffectOrder.forEach { effect ->
+                when (effect) {
+                    VideoEffectKind.CROP -> {
+                        val crop = checkNotNull(plan.crop).ndc
+                        videoEffects += Crop(crop.left, crop.right, crop.bottom, crop.top)
+                    }
+                    VideoEffectKind.PRESENTATION -> {
+                        videoEffects +=
                             Presentation.createForWidthAndHeight(
                                 plan.outputDimensions.width,
                                 plan.outputDimensions.height,
                                 Presentation.LAYOUT_SCALE_TO_FIT,
-                            ),
-                        ),
-                    ),
-                )
+                            )
+                    }
+                }
+            }
+            if (videoEffects.isNotEmpty()) {
+                // Order is a product invariant: crop display pixels before any scaling.
+                editedItemBuilder.setEffects(Effects(emptyList(), videoEffects))
             }
             val sequence = EditedMediaItemSequence.Builder(editedItemBuilder.build()).build()
             val composition =
@@ -804,6 +813,7 @@ internal class TranscodeEngine(
         when (error) {
             is EngineOperationException -> error.failure
             is TranscodePlanException -> error.failure
+            is CropMappingException -> error.failure
             is VideoMetadataException ->
                 if (error.code == VideoMetadataException.SOURCE_CORRUPTED) {
                     EngineFailure(EngineErrorCode.SOURCE_CORRUPTED, error.message)

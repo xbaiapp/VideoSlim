@@ -8,6 +8,50 @@ import org.junit.Test
 
 class ProcessModelsTest {
     @Test
+    fun `parses the exact preview-frame request`() {
+        assertEquals(
+            PreviewFrameRequest(
+                sourceUri = "content://media/external/video/media/42",
+                timeMs = 12_345L,
+            ),
+            PreviewFrameRequest.parse(
+                mapOf(
+                    "uri" to "content://media/external/video/media/42",
+                    "timeMs" to 12_345,
+                ),
+            ),
+        )
+        assertEquals(
+            12_345L,
+            PreviewFrameRequest.parse(
+                mapOf(
+                    "uri" to "content://media/external/video/media/42",
+                    "timeMs" to 12_345L,
+                ),
+            ).timeMs,
+        )
+    }
+
+    @Test
+    fun `rejects malformed preview-frame requests`() {
+        listOf<Any?>(
+            null,
+            emptyMap<String, Any?>(),
+            mapOf("uri" to "file:///tmp/video.mp4", "timeMs" to 0),
+            mapOf("uri" to "content://media/video/1", "timeMs" to -1),
+            mapOf("uri" to "content://media/video/1", "timeMs" to 1.0),
+            mapOf("uri" to "content://media/video/1", "timeMs" to 0, "extra" to true),
+        ).forEach { request ->
+            try {
+                PreviewFrameRequest.parse(request)
+                fail("Expected preview request rejection for $request")
+            } catch (_: IllegalArgumentException) {
+                // Expected.
+            }
+        }
+    }
+
+    @Test
     fun `parses the exact M2 nested request`() {
         val request = ProcessRequest.parse(validArguments())
 
@@ -167,9 +211,48 @@ class ProcessModelsTest {
     }
 
     @Test
-    fun `M2 still rejects crop and trim`() {
+    fun `M4-A accepts a strict crop and round-trips it for retry`() {
+        val crop = linkedMapOf<String, Any?>(
+            "left" to 12,
+            "top" to 34L,
+            "width" to 640,
+            "height" to 480L,
+        )
+        val request =
+            ProcessRequest.parse(
+                validArguments(video = validVideo().apply { this["crop"] = crop }),
+            )
+
+        assertEquals(CropRect(left = 12, top = 34, width = 640, height = 480), request.crop)
+        assertEquals(crop.mapValues { (_, value) -> (value as Number).toInt() }, request.toChannelMap()
+            .let { it["video"] as Map<*, *> }["crop"])
+        assertEquals(
+            request,
+            ProcessRequest.parse(request.toChannelMap()),
+        )
+    }
+
+    @Test
+    fun `M4-A crop validation is strict and uses INVALID_CROP`() {
+        val invalidCrops =
+            listOf<Any?>(
+                "not-a-map",
+                emptyMap<String, Any?>(),
+                mapOf("left" to 0, "top" to 0, "width" to 100, "height" to 100, "extra" to 1),
+                mapOf("left" to -1, "top" to 0, "width" to 100, "height" to 100),
+                mapOf("left" to 0, "top" to 0, "width" to 0, "height" to 100),
+                mapOf("left" to 0.0, "top" to 0, "width" to 100, "height" to 100),
+            )
+        invalidCrops.forEach { crop ->
+            val exception =
+                rejected(validArguments(video = validVideo().apply { this["crop"] = crop }))
+            assertEquals(EngineErrorCode.INVALID_CROP, exception.error.code)
+        }
+    }
+
+    @Test
+    fun `M4-A still rejects non-null trim`() {
         mapOf<String, Any?>(
-            "crop" to mapOf("left" to 0, "top" to 0, "width" to 100, "height" to 100),
             "trimStartMs" to 0,
             "trimEndMs" to 10_000,
         ).forEach { (key, value) ->

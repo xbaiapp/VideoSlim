@@ -46,6 +46,7 @@ enum class EngineErrorCode(
     SOURCE_PERMISSION_LOST("SOURCE_PERMISSION_LOST", "无法继续读取这个视频，请重新选择文件"),
     SOURCE_UNAVAILABLE("SOURCE_UNAVAILABLE", "所选视频已移动、删除或暂时不可用"),
     SOURCE_PROVIDER_FAILED("SOURCE_PROVIDER_FAILED", "手机无法持续读取这个视频，请重新选择或稍后重试"),
+    INVALID_CROP("INVALID_CROP", "裁剪区域无效，请重新框选"),
 
     VIDEO_DECODING_FAILED("VIDEO_DECODING_FAILED", "手机的视频解码器未能完成此次处理，原视频没有被修改"),
     VIDEO_FORMAT_UNSUPPORTED("VIDEO_FORMAT_UNSUPPORTED", "这台手机暂时无法读取这种视频格式"),
@@ -126,6 +127,52 @@ internal enum class AudioMode(
     }
 }
 
+internal data class PreviewFrameRequest(
+    val sourceUri: String,
+    val timeMs: Long,
+) {
+    companion object {
+        fun parse(arguments: Any?): PreviewFrameRequest {
+            val map = arguments as? Map<*, *>
+                ?: throw IllegalArgumentException("预览帧参数必须是对象")
+            val expectedKeys = setOf("uri", "timeMs")
+            if (map.keys.any { it !is String } || map.keys != expectedKeys) {
+                throw IllegalArgumentException("预览帧字段必须严格为 ${expectedKeys.sorted()}")
+            }
+            val sourceUri = map["uri"] as? String
+                ?: throw IllegalArgumentException("uri 必须是字符串")
+            if (!isValidContentVideoUri(sourceUri)) {
+                throw IllegalArgumentException("uri 必须是有效的 content:// URI")
+            }
+            val timeMs =
+                when (val value = map["timeMs"]) {
+                    is Byte -> value.toLong()
+                    is Short -> value.toLong()
+                    is Int -> value.toLong()
+                    is Long -> value
+                    else -> throw IllegalArgumentException("timeMs 必须是整数")
+                }
+            if (timeMs < 0L) throw IllegalArgumentException("timeMs 不得小于 0")
+            return PreviewFrameRequest(sourceUri = sourceUri, timeMs = timeMs)
+        }
+    }
+}
+
+internal data class CropRect(
+    val left: Int,
+    val top: Int,
+    val width: Int,
+    val height: Int,
+) {
+    fun toChannelMap(): Map<String, Int> =
+        linkedMapOf(
+            "left" to left,
+            "top" to top,
+            "width" to width,
+            "height" to height,
+        )
+}
+
 internal data class ProcessRequest(
     val sourceUri: String,
     val outputFileName: String,
@@ -135,6 +182,7 @@ internal data class ProcessRequest(
     val videoDecoderMode: VideoDecoderMode = VideoDecoderMode.HARDWARE,
     val videoBitrate: Int,
     val longEdge: Int?,
+    val crop: CropRect? = null,
     val audioMode: AudioMode,
     val audioBitrate: Int?,
 ) {
@@ -153,7 +201,7 @@ internal data class ProcessRequest(
                     "decoderMode" to videoDecoderMode.wireName,
                     "bitrate" to videoBitrate,
                     "longEdge" to longEdge,
-                    "crop" to null,
+                    "crop" to crop?.toChannelMap(),
                     "trimStartMs" to null,
                     "trimEndMs" to null,
                 ),
@@ -223,9 +271,10 @@ internal data class ProcessRequest(
                         invalid("video.longEdge 必须为 null、1920、1280 或 854")
                     }
                 }
-            listOf("crop", "trimStartMs", "trimEndMs").forEach { key ->
+            val crop = parseCrop(video["crop"])
+            listOf("trimStartMs", "trimEndMs").forEach { key ->
                 if (video[key] != null) {
-                    invalid("M2 暂不支持 video.$key，请传 null")
+                    invalid("M4-A 暂不支持 video.$key，请传 null")
                 }
             }
 
@@ -244,9 +293,31 @@ internal data class ProcessRequest(
                 videoDecoderMode = videoDecoderMode,
                 videoBitrate = videoBitrate,
                 longEdge = longEdge,
+                crop = crop,
                 audioMode = audioMode,
                 audioBitrate = audioBitrate,
             )
+        }
+
+        private fun parseCrop(value: Any?): CropRect? {
+            if (value == null) return null
+            return try {
+                val crop =
+                    value.exactMap(
+                        "video.crop 必须是完整对象",
+                        setOf("left", "top", "width", "height"),
+                    )
+                CropRect(
+                    left = crop["left"].nonNegativeChannelInt("video.crop.left"),
+                    top = crop["top"].nonNegativeChannelInt("video.crop.top"),
+                    width = crop["width"].positiveChannelInt("video.crop.width"),
+                    height = crop["height"].positiveChannelInt("video.crop.height"),
+                )
+            } catch (error: ProcessRequestException) {
+                throw ProcessRequestException(
+                    EngineFailure(EngineErrorCode.INVALID_CROP, "裁剪区域无效，请重新框选"),
+                )
+            }
         }
 
         private fun parseAudioBitrate(
@@ -301,6 +372,21 @@ internal data class ProcessRequest(
             val value = this as? Map<*, *> ?: invalid(description)
             if (value.keys.any { it !is String } || value.keys != expectedKeys) {
                 invalid("$description，字段必须严格为 ${expectedKeys.sorted().joinToString()}")
+            }
+            return value
+        }
+
+        private fun Any?.nonNegativeChannelInt(fieldName: String): Int {
+            val value =
+                when (this) {
+                    is Byte -> toInt()
+                    is Short -> toInt()
+                    is Int -> this
+                    is Long -> takeIf { it in 0..Int.MAX_VALUE.toLong() }?.toInt()
+                    else -> null
+                }
+            if (value == null || value < 0) {
+                invalid("$fieldName 必须是大于等于 0 的整数")
             }
             return value
         }

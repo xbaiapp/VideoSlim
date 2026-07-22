@@ -36,12 +36,25 @@ internal fun hasSufficientStorage(
         minOf(cacheAvailableBytes, publicAvailableBytes) >= estimate.sharedPoolRequiredBytes
     }
 
+internal enum class VideoEffectKind {
+    CROP,
+    PRESENTATION,
+}
+
 internal data class TranscodePlan(
     val outputDimensions: VideoDimensions,
+    val crop: MappedCrop?,
     val presentationRequired: Boolean,
     val hdrMode: HdrMode,
     val storageEstimate: StorageEstimate,
 ) {
+    val videoEffectOrder: List<VideoEffectKind>
+        get() =
+            buildList {
+                if (crop != null) add(VideoEffectKind.CROP)
+                if (presentationRequired) add(VideoEffectKind.PRESENTATION)
+            }
+
     companion object {
         fun create(
             request: ProcessRequest,
@@ -49,12 +62,23 @@ internal data class TranscodePlan(
             sdkInt: Int,
         ): TranscodePlan {
             val sourceDimensions = validateDisplayDimensions(metadata)
-            val outputDimensions = scaleForLongEdge(sourceDimensions, request.longEdge)
+            val mappedCrop =
+                request.crop?.let { crop ->
+                    CropGeometryMapper.map(
+                        crop = crop,
+                        displayWidth = sourceDimensions.width,
+                        displayHeight = sourceDimensions.height,
+                        rotationDegrees = metadata.rotationDegrees,
+                    )
+                }
+            val effectInputDimensions = mappedCrop?.outputDimensions ?: sourceDimensions
+            val outputDimensions = scaleForLongEdge(effectInputDimensions, request.longEdge)
             val hdrMode = selectHdrMode(metadata.isHdr, sdkInt)
 
             return TranscodePlan(
                 outputDimensions = outputDimensions,
-                presentationRequired = outputDimensions != sourceDimensions,
+                crop = mappedCrop,
+                presentationRequired = outputDimensions != effectInputDimensions,
                 hdrMode = hdrMode,
                 storageEstimate = estimateStorage(request, metadata),
             )
