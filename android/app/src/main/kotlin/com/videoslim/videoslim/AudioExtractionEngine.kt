@@ -431,6 +431,7 @@ internal class AudioExtractionEngine(
             cleanupTempAndRecovery(task)
             task.stage = AudioStage.FINISHED
             activeTask = null
+            ProcessingRuntime.verifiedAudioInfoCache.store(publishedUri, outputMetadata)
             emit(task, 100.0, TaskRuntimeSnapshot.STATE_SUCCESS, outputUri = publishedUri)
             log(
                 "taskKind=audio_extraction task=${task.id} terminal=success output=$publishedUri " +

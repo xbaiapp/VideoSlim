@@ -48,6 +48,7 @@ internal object SerializableArguments {
 
 internal object ProcessingRuntime {
     val registry = ProcessingRegistry()
+    val verifiedAudioInfoCache = VerifiedAudioInfoCache()
     private val reconciliationGate = ProcessReconciliationGate()
 
     internal fun startReconciliationOnce(action: () -> Unit): CompletionStage<Unit> =

@@ -135,6 +135,18 @@ internal class EngineChannel(
                 reply.error(EngineFailure(EngineErrorCode.UNKNOWN, "音频信息参数无效"), error)
                 return
             }
+        val verifiedResponse =
+            takeVerifiedPublishedAudioInfo(
+                outputUri = uri,
+                snapshot = ProcessingRuntime.registry.snapshot(),
+                cache = ProcessingRuntime.verifiedAudioInfoCache,
+            )
+        if (verifiedResponse != null) {
+            reply.success(verifiedResponse) {
+                log("method=getAudioInfo response=$verifiedResponse source=verified_output")
+            }
+            return
+        }
         submitIo(reply, MediaIoOperation.AUDIO_METADATA, {
             audioMetadataReader.read(uri).toChannelMap()
         }) { outcome ->
