@@ -6,7 +6,7 @@
 
 - M3 已由项目所有者于 2026-07-22 接受为 `ACCEPTED — private scope`；当前发布代码基线是 `19abfb7da2e8fa028e7200000f0dc2a114bc840e`（`1.4.3+18`）。
 - `hardening/task3-engine-io`（Slice B）保留但冻结：不集成、不删除、不作为当前候选的一部分。
-- M4 crop/trim 尚未开始；M3 接受不会自动授权 M4、hardening、refactor 或 migration。只有项目所有者明确批准具体范围后才能修改生产代码。
+- M4-A/F5 画面裁剪已由项目所有者于 2026-07-22 明确授权实施，当前进入候选与真机验收阶段；M4-B/F8 时间裁剪仍未开始、未授权。该授权不包含 hardening、refactor 或 migration。
 - 未提供逐项真机证据的矩阵行不得反向预填 PASS，private-scope 接受不得扩写为生产发布或多设备保证。
 - 当前已知限制见 `docs/known-debt.md`。
 
