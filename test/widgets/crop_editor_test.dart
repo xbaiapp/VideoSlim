@@ -85,6 +85,53 @@ void main() {
     },
   );
 
+  testWidgets('slow sub-pixel handle updates accumulate within one drag', (
+    WidgetTester tester,
+  ) async {
+    final engine = _ControlledPreviewEngine();
+    await tester.pumpWidget(_app(engine));
+    engine.requests.single.completer.complete(_png());
+    await tester.pump();
+
+    final topHandle = find.byKey(const ValueKey<String>('crop-handle-top'));
+    final selection = find.byKey(const ValueKey<String>('crop-selection'));
+    final gesture = await tester.startGesture(tester.getCenter(topHandle));
+    await gesture.moveBy(const Offset(0, 24));
+    await tester.pump();
+    final beforeSlowUpdates = tester.getRect(selection);
+
+    for (var index = 0; index < 20; index += 1) {
+      await gesture.moveBy(const Offset(0, 0.05));
+      await tester.pump();
+    }
+    final afterSlowUpdates = tester.getRect(selection);
+    await gesture.up();
+
+    expect(afterSlowUpdates.top, greaterThan(beforeSlowUpdates.top + 0.5));
+  });
+
+  testWidgets('free top resize keeps the opposite pixel edge fixed', (
+    WidgetTester tester,
+  ) async {
+    final engine = _ControlledPreviewEngine();
+    await tester.pumpWidget(_app(engine));
+    engine.requests.single.completer.complete(_png());
+    await tester.pump();
+
+    final topHandle = find.byKey(const ValueKey<String>('crop-handle-top'));
+    final selection = find.byKey(const ValueKey<String>('crop-selection'));
+    final initial = tester.getRect(selection);
+    final scale = initial.width / 1080;
+    final gesture = await tester.startGesture(tester.getCenter(topHandle));
+    await gesture.moveBy(Offset(0, 201 * scale));
+    await tester.pump();
+    final resized = tester.getRect(selection);
+    await gesture.up();
+
+    expect(resized.top, greaterThan(initial.top));
+    expect(resized.bottom, closeTo(initial.bottom, 0.01));
+  });
+
   testWidgets('frame slider is throttled and stale responses cannot win', (
     WidgetTester tester,
   ) async {

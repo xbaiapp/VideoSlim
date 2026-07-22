@@ -43,6 +43,9 @@ class _CropEditorState extends State<CropEditor> {
   Timer? _frameTimer;
   int _frameRequestEpoch = 0;
   CropGeometry? _latestGeometry;
+  Rect? _dragStartSelection;
+  CropRect? _dragStartCrop;
+  Offset _dragDelta = Offset.zero;
 
   @override
   void initState() {
@@ -114,26 +117,75 @@ class _CropEditorState extends State<CropEditor> {
   void _moveCrop(DragUpdateDetails details) {
     final geometry = _latestGeometry;
     if (geometry == null) return;
-    final selection = geometry.cropToViewport(_crop);
+    final selection = _dragStartSelection ?? geometry.cropToViewport(_crop);
+    _dragDelta += details.delta;
     setState(() {
-      _crop = geometry.viewportToCrop(geometry.move(selection, details.delta));
+      _crop = geometry.viewportToCrop(geometry.move(selection, _dragDelta));
     });
   }
 
   void _resizeCrop(CropHandle handle, DragUpdateDetails details) {
     final geometry = _latestGeometry;
     if (geometry == null) return;
-    final selection = geometry.cropToViewport(_crop);
+    final selection = _dragStartSelection ?? geometry.cropToViewport(_crop);
+    final startCrop = _dragStartCrop ?? _crop;
+    _dragDelta += details.delta;
     setState(() {
-      _crop = geometry.viewportToCrop(
+      final resized = geometry.viewportToCrop(
         geometry.resize(
           selection,
           handle,
-          details.delta,
+          _dragDelta,
           aspectRatio: _aspectRatio,
         ),
       );
+      _crop = _keepOppositeEdgesFixed(resized, startCrop, handle);
     });
+  }
+
+  void _startCropDrag(DragStartDetails details) {
+    final geometry = _latestGeometry;
+    if (geometry == null) return;
+    _dragStartSelection = geometry.cropToViewport(_crop);
+    _dragStartCrop = _crop;
+    _dragDelta = Offset.zero;
+  }
+
+  void _endCropDrag([DragEndDetails? details]) {
+    _dragStartSelection = null;
+    _dragStartCrop = null;
+    _dragDelta = Offset.zero;
+  }
+
+  CropRect _keepOppositeEdgesFixed(
+    CropRect resized,
+    CropRect start,
+    CropHandle handle,
+  ) {
+    final left = switch (handle) {
+      CropHandle.topLeft ||
+      CropHandle.left ||
+      CropHandle.bottomLeft => start.right - resized.width,
+      CropHandle.topRight ||
+      CropHandle.right ||
+      CropHandle.bottomRight => start.left,
+      _ => resized.left,
+    };
+    final top = switch (handle) {
+      CropHandle.topLeft ||
+      CropHandle.top ||
+      CropHandle.topRight => start.bottom - resized.height,
+      CropHandle.bottomLeft ||
+      CropHandle.bottom ||
+      CropHandle.bottomRight => start.top,
+      _ => resized.top,
+    };
+    return CropRect(
+      left: left,
+      top: top,
+      width: resized.width,
+      height: resized.height,
+    );
   }
 
   @override
@@ -229,7 +281,10 @@ class _CropEditorState extends State<CropEditor> {
                                 child: GestureDetector(
                                   key: const ValueKey<String>('crop-selection'),
                                   behavior: HitTestBehavior.translucent,
+                                  onPanStart: _startCropDrag,
                                   onPanUpdate: _moveCrop,
+                                  onPanEnd: _endCropDrag,
+                                  onPanCancel: _endCropDrag,
                                   child: DecoratedBox(
                                     decoration: BoxDecoration(
                                       border: Border.all(
@@ -244,8 +299,11 @@ class _CropEditorState extends State<CropEditor> {
                                 _CropHandleWidget(
                                   handle: handle,
                                   selection: selection,
+                                  onPanStart: _startCropDrag,
                                   onPanUpdate: (details) =>
                                       _resizeCrop(handle, details),
+                                  onPanEnd: _endCropDrag,
+                                  onPanCancel: _endCropDrag,
                                 ),
                             ],
                           );
@@ -353,7 +411,10 @@ class _CropHandleWidget extends StatelessWidget {
   const _CropHandleWidget({
     required this.handle,
     required this.selection,
+    required this.onPanStart,
     required this.onPanUpdate,
+    required this.onPanEnd,
+    required this.onPanCancel,
   });
 
   static const double _touchSize = 40;
@@ -361,7 +422,10 @@ class _CropHandleWidget extends StatelessWidget {
 
   final CropHandle handle;
   final Rect selection;
+  final GestureDragStartCallback onPanStart;
   final GestureDragUpdateCallback onPanUpdate;
+  final GestureDragEndCallback onPanEnd;
+  final VoidCallback onPanCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -383,7 +447,10 @@ class _CropHandleWidget extends StatelessWidget {
       child: GestureDetector(
         key: ValueKey<String>('crop-handle-${handle.name}'),
         behavior: HitTestBehavior.opaque,
+        onPanStart: onPanStart,
         onPanUpdate: onPanUpdate,
+        onPanEnd: onPanEnd,
+        onPanCancel: onPanCancel,
         child: Center(
           child: Container(
             width: _visualSize,
