@@ -2,8 +2,8 @@
 
 > **用途：** 给新的 AI/开发者一个可验证的当前项目入口。先读本文，再决定是否需要展开 PRD 和源码。
 > **生成日期：** 2026-07-22
-> **当前候选版本：** `1.5.0+19`
-> **M4-A 候选代码 SHA：** `6de3f7f971bbfbe4b1b2a8cf457f8e125b9228e1`
+> **当前候选版本：** `1.5.0+20`
+> **M4-A 候选代码 SHA：** `d41e21c2ed063c087b384a5b63e8e4ab0a9985a7`
 > **阶段：** M4-A `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`；M3 `1.4.3+18` 仍是当前已接受发布基线
 > **安全：** 凭据、用户媒体、运行时数据库和私有日志不属于本交接包；任何秘密值只能写为 `[REDACTED]`。
 
@@ -55,10 +55,10 @@ VideoSlim 是 Android 本地媒体工具：
 当前 APK：
 
 ```text
-VideoSlim-1.5.0+19-6de3f7f-arm64-v8a-release.apk
-SHA-256 de8c6a4b4ce53f4ae7d117bd361b0f2830681d3b3d3798de76fa47a2e3520b4f
+VideoSlim-1.5.0+20-d41e21c-arm64-v8a-release.apk
+SHA-256 680f6a9a5f5fca58b9e69a7d833ea9ffbd74b02b989ac1d44f2d2877d052b784
 package com.videoslim.videoslim
-version 1.5.0+19
+version 1.5.0+20
 ```
 
 ## 4. 技术架构
@@ -131,7 +131,7 @@ Picker URI
 ### Flutter
 
 - `lib/screens/home_screen.dart` — 主工作流、双入口和 S3/S4 裁剪接线
-- `lib/widgets/crop_editor.dart` / `lib/logic/crop_geometry.dart` — 裁剪编辑器与显示像素几何
+- `lib/widgets/crop_editor.dart` / `lib/logic/crop_geometry.dart` — 裁剪编辑器与显示像素几何；单次手势累计位移并固定缩放对边
 - `lib/state/home_flow_state.dart` — typed UI/workflow state
 - `lib/engine/video_engine.dart` — 跨平台引擎接口
 - `lib/engine/method_channel_video_engine.dart` — 平台通道 adapter
@@ -165,12 +165,13 @@ Picker URI
 - exact-SHA 双复审：PASS / PASS，0 blocker；
 - 项目所有者：M3 测试成功，接受为 private scope。
 
-M4-A 候选代码 `6de3f7f...`：
+M4-A 修复候选代码 `d41e21c...`：
 
-- Flutter analyze：PASS；Flutter tests：213/213；
+- Flutter analyze：PASS；Flutter tests：215/215；
 - Android JVM tests：317/317；debug/release lint 与 assemble：PASS；
 - ARM64 APK 的 zipalign、v2 signature、package/version/SDK/ABI、权限与凭据模式扫描：PASS；
-- exact-SHA Route B：PASS、0 blocker；Route A 未返回最终 verdict，按规则不计 PASS；
+- 初始冻结 SHA `6de3f7f...` 的 exact-SHA Route B：PASS、0 blocker；Route A 未返回最终 verdict，按规则不计 PASS；源码随后因真机手势反馈变更，旧 exact 结论不冒充当前 SHA 的 PASS；
+- 当前手势修复 diff 的唯一 focused review：PASS；慢速亚像素累计与自由模式固定对边 RED→GREEN 回归测试通过；
 - 构建机无连接设备，`docs/m4-device-acceptance.md` 全部保持 PENDING。
 
 远端 CI 不是全绿：主 Flutter/Android job 全部通过，但 API 35 x86_64 instrumentation job 因 runner 中 `sdkmanager: command not found` 在该 job 的应用/instrumentation 构建前失败，emulator instrumentation 未执行。

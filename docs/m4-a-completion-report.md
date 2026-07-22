@@ -1,9 +1,9 @@
 # VideoSlim M4-A 候选完成报告
 
 > **状态（2026-07-22）：** `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`
-> **候选源代码：** `6de3f7f971bbfbe4b1b2a8cf457f8e125b9228e1`
-> **候选 tree：** `28bbb852bbaaa887f739ca09871102d78c9775fe`
-> **版本：** `1.5.0+19`
+> **候选源代码：** `d41e21c2ed063c087b384a5b63e8e4ab0a9985a7`
+> **候选 tree：** `24befa9adb1fec15b3a8bb910e3556a931763c4b`
+> **版本：** `1.5.0+20`
 > **范围：** 仅 M4-A/F5 画面裁剪；M4-B/F8 时间裁剪仍未授权、未实现
 
 ## 1. 已交付范围
@@ -31,6 +31,7 @@
 - 预览帧滑杆使用 180ms 节流和 epoch 防旧响应覆盖；
 - 首页入口保存后默认保持画质；S3 编辑保持原档位；取消回滚；移除 crop 时保持画质自动回到均衡；
 - `INVALID_CROP` 原样重复提交被禁用，用户可编辑或移除后恢复。
+- 真机反馈小修：缩放/移动从按下位置累计整段手势位移，避免慢速微增量被逐帧偶数像素舍入吞掉；八个缩放手柄在取整后固定相反源像素边。
 
 ## 2. 范围与架构不变量
 
@@ -48,7 +49,7 @@
 
 - Dart format：PASS，0 changed；
 - Flutter analyze：PASS，0 issues；
-- Flutter tests：`213/213` PASS；
+- Flutter tests：`215/215` PASS；
 - Android JVM tests：`317/317` PASS，0 failures/errors/skipped；
 - Android debug/release lint：PASS；
 - Android debug/release assemble：PASS；
@@ -69,16 +70,25 @@
 - 候选阻塞项：已返回结论的 Route B 为 0；Route A 无最终 verdict，不能据此声明双路 PASS。
 - 非阻塞已知债：Route B 仅发现 `docs/current-project-status.md` 与 `AI_REVIEW_START_HERE.md` 的候选状态陈旧；本次文档收口同步修正，不涉及生产代码。
 
+上述 exact-SHA 结果只锚定已被替代的初始冻结 SHA `6de3f7f...`。项目所有者随后在真机复现手势问题并明确授权一次局部修复；旧 exact 结论不冒充当前 SHA 的 PASS。
+
+### 真机反馈局部修复
+
+- RED：慢速亚像素更新不能累计；自由模式拖上边时底边因偶数取整偏移；
+- GREEN：`cec0dfb` 从手势起点累计总位移，并按八个手柄方向恢复固定对边；
+- focused review：PASS，0 blocker；
+- 修复后 Flutter analyze、215 项完整 Flutter tests 与 `git diff --check` 均通过；没有 Android 原生、转码、publication/recovery 或文件生命周期改动。
+
 ## 5. 候选 APK
 
-- 文件：`VideoSlim-1.5.0+19-6de3f7f-arm64-v8a-release.apk`
-- 路径：`/root/artifacts/videoslim/m4-a/VideoSlim-1.5.0+19-6de3f7f-arm64-v8a-release.apk`
+- 文件：`VideoSlim-1.5.0+20-d41e21c-arm64-v8a-release.apk`
+- 路径：`/root/artifacts/videoslim/m4-a/VideoSlim-1.5.0+20-d41e21c-arm64-v8a-release.apk`
 - Package：`com.videoslim.videoslim`
-- versionName/versionCode：`1.5.0 / 19`
+- versionName/versionCode：`1.5.0 / 20`
 - minSdk/targetSdk/compileSdk：`26 / 36 / 36`
 - ABI：仅 `arm64-v8a`
 - 大小：`18,362,275` bytes
-- SHA-256：`de8c6a4b4ce53f4ae7d117bd361b0f2830681d3b3d3798de76fa47a2e3520b4f`
+- SHA-256：`680f6a9a5f5fca58b9e69a7d833ea9ffbd74b02b989ac1d44f2d2877d052b784`
 - ZIP alignment：PASS
 - 签名：Android Debug certificate，APK Signature Scheme v2；不是商店生产签名
 - 权限：没有 `INTERNET`、`READ_MEDIA_VIDEO`、`READ_MEDIA_AUDIO` 或 `MANAGE_EXTERNAL_STORAGE`

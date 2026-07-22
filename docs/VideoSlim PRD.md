@@ -4,7 +4,7 @@
 |---|---|
 | 文档版本 | v1.9（M4 拆分：M4-A 画面裁剪已授权；M4-B 时间裁剪未授权） |
 | 日期 | 2026-07-22 |
-| 状态 | M3 `ACCEPTED — private scope`；M4-A `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`（`6de3f7f...` / App `1.5.0+19`）；M4-B 未授权 |
+| 状态 | M3 `ACCEPTED — private scope`；M4-A `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`（`d41e21c...` / App `1.5.0+20`，含真机反馈的裁剪手势小修）；M4-B 未授权 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
