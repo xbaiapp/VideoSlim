@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.9（M4 拆分：M4-A 画面裁剪已授权；M4-B 时间裁剪未授权） |
-| 日期 | 2026-07-22 |
-| 状态 | M3 `ACCEPTED — private scope`；M4-A `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`（`d41e21c...` / App `1.5.0+20`，含真机反馈的裁剪手势小修）；M4-B 未授权 |
+| 文档版本 | v1.10（增加原拍摄时间/GPS保留、发布前核验与输出命名契约） |
+| 日期 | 2026-07-23 |
+| 状态 | M3 `ACCEPTED — private scope`；M4-A `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`（`d41e21c...` / App `1.5.0+20`）；拍摄时间/GPS与命名增强已实现、自动化门禁通过，真机素材验收待执行；M4-B 未授权 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
@@ -250,8 +250,11 @@
 ### F7 输出与结果
 
 - 视频输出到相册 `Movies/VideoSlim/`，音频输出到系统音频 `Music/VideoSlim/`，通过 `MediaStore` 插入（使用 `IS_PENDING` 标志防止写入中被扫描）；视频和音频都允许用户显式改用持久化授权的自定义 SAF 文件夹；
-- 默认文件命名：视频为 `<safe stem>_slim_yyyyMMdd_HHmmss.mp4`，音频固定为 `<safe stem>_slim_yyyyMMdd_HHmmss.m4a`；`safe stem` 是去除扩展名并完成危险字符/路径分隔符清洗后的源文件名主干；
-- MediaStore/SAF provider 在同秒生成或已有同名文件时追加 collision suffix（例如 ` (1)`），它只是第二层冲突保护，不替代时间戳命名；结果页、snapshot 和 F19 必须使用 provider 实际分配的文件名；
+- 默认文件命名使用经清洗、UTF-8 总长不超过 240 bytes 的 `<safe stem>`、毫秒级处理时间和四位随机十六进制 token：视频为 `<safe stem>_slim_<h265|h264>_target<kbps>k_<yyyyMMdd_HHmmssSSS>_<token>.mp4`；音频直提为 `<safe stem>_audio_copy_<yyyyMMdd_HHmmssSSS>_<token>.m4a`；AAC 重编码为 `<safe stem>_audio_aac_target<kbps>k_<yyyyMMdd_HHmmssSSS>_<token>.m4a`。视频 codec 必须反映能力 fallback 后的最终计划；`target` 只表示目标码率，不表示硬件 VBR 的实测平均码率；
+- 随机 token 只是第一层冲突缓解。MediaStore/SAF provider 在已有同名文件时继续追加 collision suffix（例如 ` (1)`）；结果页、snapshot 和 F19 必须使用 provider 实际分配的文件名；
+- 视频压缩只保留来源中存在且可可靠解析的拍摄/容器创建时间与 GPS 经纬度，不复制设备型号、软件版本、Apple 私有 atom、Pixel `mett`、完整 XMP/mdta 或其他厂商字段；来源字段缺失或无效时保持缺失，不得使用处理时间、文件 mtime、设备当前位置或目录信息伪造；
+- 受支持的来源时间/GPS在同一次 Media3 转码的 MP4 mux 中写入。Transformer 完成后、分配公开 MediaStore/SAF 输出前必须回读临时 MP4：时间按容器秒精度、位置按 `0.0001°` 容差核验；已承诺字段缺失或不匹配时返回 `CAPTURE_METADATA_FAILED`，不发布不完整结果；
+- 默认 MediaStore 视频发布时，仅从已验证的来源拍摄时间设置 `DATE_TAKEN`；音频不继承视频时间/GPS。自定义 SAF 只承诺 MP4 内部字段，不承诺图库索引日期；
 - 成功后必须在结果页顶部以高显著性文案显示实际保存位置与文件名：视频为“系统相册 > Movies > VideoSlim > 文件名”，音频为“系统音频 > Music > VideoSlim > 文件名”，自定义 SAF 显示用户可理解的文件夹标签；不得只显示原始 `content://` URI 或模糊的“保存成功”。同时提供打开/播放主按钮；
 - 结果页展示：原大小 → 新大小、节省百分比（大字号突出）、实际文件名与人类可读保存位置、点击可播放预览、分享按钮（系统分享）、"删除原视频"按钮（需二次确认，且仅对相册来源提供）。
 

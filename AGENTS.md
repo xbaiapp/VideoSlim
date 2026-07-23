@@ -7,6 +7,7 @@
 - M3 已由项目所有者于 2026-07-22 接受为 `ACCEPTED — private scope`；当前发布代码基线是 `19abfb7da2e8fa028e7200000f0dc2a114bc840e`（`1.4.3+18`）。
 - `hardening/task3-engine-io`（Slice B）保留但冻结：不集成、不删除、不作为当前候选的一部分。
 - M4-A/F5 画面裁剪已由项目所有者于 2026-07-22 明确授权实施，当前进入候选与真机验收阶段；M4-B/F8 时间裁剪仍未开始、未授权。该授权不包含 hardening、refactor 或 migration。
+- 项目所有者已于 2026-07-22 授权拍摄时间/GPS保留和输出命名增强；范围固定为“仅保留来源中存在且可靠的时间与位置”，不增加隐私模式、完整 metadata 复制、第二次 remux 或音频继承。真机结论记录在 `docs/capture-metadata-device-acceptance.md`。
 - 未提供逐项真机证据的矩阵行不得反向预填 PASS，private-scope 接受不得扩写为生产发布或多设备保证。
 - 当前已知限制见 `docs/known-debt.md`。
 
