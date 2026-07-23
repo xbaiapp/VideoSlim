@@ -2,12 +2,17 @@
 
 > **日期：** 2026-07-23
 > **候选版本：** `1.6.0+21`
-> **状态：** `PENDING — DEVICE AND REAL-SOURCE ACCEPTANCE REQUIRED`
+> **候选源代码：** `497c5d2c028213835825f1aea1df5d356450d7f2`
+> **候选APK：** `VideoSlim-1.6.0+21-497c5d2-arm64-v8a-release.apk`
+> **APK SHA-256：** `f1c035effffafafb319cedec4d1de8fe4f41c84c0009afc6f9ddb66f0e94b6b3`
+> **状态：** `BLOCKED — DO NOT START; EXACT-SHA ROUTE A FAIL`
 > **范围：** 仅原拍摄时间/GPS保留、MediaStore `DATE_TAKEN`、输出命名及现有视频链路回归
 
 ## 1. 验收边界
 
 自动化测试、静态 APK 检查和桌面端容器工具不能替代真实 Android 设备上的 Media3 mux、MediaStore 和 SAF 行为。没有未加工原始素材或没有实际执行的行必须保持 `PENDING`，不得推断为 PASS。
+
+**当前停止条件：** `497c5d2...`在无可靠来源时间时没有覆盖Media3 `System.currentTimeMillis()`缺省时间，也没有核验时间字段必须缺失。当前APK已隔离；新修订通过完整门禁和exact-SHA复审前，不得执行本清单。
 
 验收期间不得：
 
@@ -117,6 +122,7 @@ ffprobe -v error -show_format -show_streams OUTPUT.mp4
 | HEVC 不可用后 H.264 fallback | 名称使用 `h264`，不保留原始 `h265` 选择 | PENDING |
 | AAC 音轨直提 | `_audio_copy_<yyyyMMdd_HHmmssSSS>_<4hex>.m4a` | PENDING |
 | AAC 重编码 | `_audio_aac_target<kbps>k_<yyyyMMdd_HHmmssSSS>_<4hex>.m4a` | PENDING |
+| copy不兼容后AAC重试 | 名称从 `_audio_copy_` 更新为 `_audio_aac_target128k_`，不沿用旧模式名 | PENDING |
 | Unicode/长名称 | 危险字符已清理，完整 UTF-8 名称不超过 240 bytes | PENDING |
 | 同毫秒或已有同名 | provider 最终分配不覆盖已有文件 | PENDING |
 

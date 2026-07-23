@@ -3,7 +3,7 @@
 > **日期：** 2026-07-22
 > **授权：** 项目所有者已批准“先写规划，再开始实施”
 > **基线：** `c8c9e070ead6`（`m4a/crop`，已交付裁剪修复候选 `1.5.0+20`）
-> **状态：** IMPLEMENTED — AUTOMATED GATES PASS; DEVICE ACCEPTANCE PENDING
+> **状态：** BLOCKED — EXACT-SHA ROUTE A FAIL; OWNER DECISION REQUIRED
 > **规模评级：** 中等偏小；若需要第二次 remux、专用 MOV/MP4 writer 或 Media3 升级，立即停止并重新评级
 
 ## 1. 目标

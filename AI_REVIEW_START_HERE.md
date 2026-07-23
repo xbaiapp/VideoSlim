@@ -1,10 +1,10 @@
 # VideoSlim — AI Review Start Here
 
 > **用途：** 给新的 AI/开发者一个可验证的当前项目入口。先读本文，再决定是否需要展开 PRD 和源码。
-> **生成日期：** 2026-07-22
-> **当前候选版本：** `1.5.0+20`
-> **M4-A 候选代码 SHA：** `d41e21c2ed063c087b384a5b63e8e4ab0a9985a7`
-> **阶段：** M4-A `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`；M3 `1.4.3+18` 仍是当前已接受发布基线
+> **生成日期：** 2026-07-23
+> **当前候选版本：** `1.6.0+21`
+> **当前候选代码 SHA：** `497c5d2c028213835825f1aea1df5d356450d7f2`
+> **阶段：** 拍摄时间/GPS保留与命名增强 `BLOCKED — EXACT-SHA ROUTE A FAIL`；M4-A仍待完整真机矩阵；M3 `1.4.3+18` 仍是当前已接受发布基线
 > **安全：** 凭据、用户媒体、运行时数据库和私有日志不属于本交接包；任何秘密值只能写为 `[REDACTED]`。
 
 ## 1. 先读什么
@@ -13,11 +13,12 @@
 2. `docs/current-project-status.md`（当前进度与证据）
 3. `README.md`（当前用户能力）
 4. `docs/VideoSlim PRD.md`（产品和权威 contract）
-5. `docs/m4-a-completion-report.md`（M4-A 实现、自动化、候选与证据边界）
-6. `docs/m4-device-acceptance.md`（全部仍为 PENDING 的真机矩阵）
-7. `docs/known-debt.md`（冻结 Slice B 与已知限制）
-8. `AGENTS.md`（项目治理、复审预算、真机优先规则）
-9. 之后再读下方“关键源码”。
+5. `docs/capture-metadata-completion-report.md`（当前候选实现、APK和证据边界）
+6. `docs/capture-metadata-device-acceptance.md`（当前功能的真实来源/设备矩阵）
+7. `docs/m4-a-completion-report.md` / `docs/m4-device-acceptance.md`（仍保留的裁剪候选与PENDING矩阵）
+8. `docs/known-debt.md`（冻结 Slice B 与已知限制）
+9. `AGENTS.md`（项目治理、复审预算、真机优先规则）
+10. 之后再读下方“关键源码”。
 
 ## 2. 产品边界
 
@@ -49,16 +50,17 @@ VideoSlim 是 Android 本地媒体工具：
 | M2 | `ACCEPTED — private scope` | 完整压缩、前台任务、取消、恢复、SAF 和兼容 Decoder 重试 |
 | M3 | `ACCEPTED — private scope` | AAC 无损直提和 AAC 强制重编码；所有者于 2026-07-22 报告测试成功 |
 | M4-A | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | F5 画面裁剪已实现；自动化与候选构建通过，真机矩阵未执行 |
+| F7 metadata/name增强 | `BLOCKED — EXACT-SHA REVIEW FAIL` | 无来源时间时Media3缺省处理时间未被覆盖/拒绝；当前APK禁止分发 |
 | M4-B | `NOT STARTED — NOT AUTHORIZED` | F8 时间裁剪未实现、未授权 |
 | M5/M6 | NOT STARTED | 打磨、批量、目标大小、iOS/上架 |
 
-当前 APK：
+当前被隔离APK（不得分发或安装）：
 
 ```text
-VideoSlim-1.5.0+20-d41e21c-arm64-v8a-release.apk
-SHA-256 680f6a9a5f5fca58b9e69a7d833ea9ffbd74b02b989ac1d44f2d2877d052b784
+VideoSlim-1.6.0+21-497c5d2-arm64-v8a-release.apk
+SHA-256 f1c035effffafafb319cedec4d1de8fe4f41c84c0009afc6f9ddb66f0e94b6b3
 package com.videoslim.videoslim
-version 1.5.0+20
+version 1.6.0+21
 ```
 
 ## 4. 技术架构
@@ -92,11 +94,12 @@ EngineChannel + ProcessingRuntime/Registry
 ```text
 Picker URI
 → VideoMetadataReader
+→ reliable source capture time/GPS policy
 → CompressionPlanner
 → ProcessRequest
 → capability/exact-format/storage preflight
-→ Media3 Transformer
-→ private MP4 verification
+→ Media3 Transformer + InAppMp4Muxer capture metadata provider
+→ private MP4 media + promised capture metadata verification
 → MediaStore/SAF publication
 → registry/snapshot success
 → Flutter result/open/share
@@ -138,7 +141,7 @@ Picker URI
 - `lib/models/process_request.dart` — `CropRect` 与 crop request/snapshot/retry contract；trim 仍拒绝非空
 - `lib/models/audio_extract_request.dart` — M3 音频请求
 - `lib/logic/compression_planner.dart` — 输出尺寸、码率、估算和 capability fallback
-- `lib/logic/audio_extract_planner.dart` — M3 模式、文件名和估算
+- `lib/logic/audio_extract_planner.dart` / `lib/logic/output_file_name_builder.dart` — M3模式、最终计划命名和估算
 
 ### Android/Kotlin
 
@@ -146,6 +149,7 @@ Picker URI
 - `ProcessingRuntime.kt` / `ProcessingRegistry.kt` — 进程级任务所有权和状态
 - `ProcessingService.kt` — 前台服务、通知、终态和 recovery observer
 - `TranscodeEngine.kt` — Media3 视频转码、codec preflight、effects、发布
+- `CaptureMetadata.kt` / `VideoMetadataReader.kt` — 来源时间/GPS解析、muxer白名单、发布前核验与安全传播
 - `CropGeometryMapper.kt` / `PreviewFrameReader.kt` — 显示像素到 NDC 与只读预览帧
 - `AudioExtractionEngine.kt` — AAC copy / AAC encode
 - `AudioSampleCopyLoop.kt` / `AudioSampleDigest.kt` — sample copy 和完整性证据
@@ -174,6 +178,14 @@ M4-A 修复候选代码 `d41e21c...`：
 - 当前手势修复 diff 的唯一 focused review：PASS；慢速亚像素累计与自由模式固定对边 RED→GREEN 回归测试通过；
 - 构建机无连接设备，`docs/m4-device-acceptance.md` 全部保持 PENDING。
 
+被阻止的 metadata/name候选代码 `497c5d2...`：
+
+- Flutter analyze：PASS；Flutter tests：219/219；
+- Android JVM tests：337/337；debug/release lint 与 assemble：PASS；
+- ARM64 APK package/version/SDK/ABI、zipalign、v2签名、权限diff与常见凭据模式扫描：PASS；
+- 旧 `47c5448...` 双路复审均超时且被AAC重试命名修订失效，不计PASS；最终 `497c5d2...` Route A：FAIL（Media3缺省处理时间伪造blocker），Route B：PASS；
+- `docs/capture-metadata-device-acceptance.md` 的真实iPhone/Pixel、MediaStore与SAF矩阵全部保持PENDING。
+
 远端 CI 不是全绿：主 Flutter/Android job 全部通过，但 API 35 x86_64 instrumentation job 因 runner 中 `sdkmanager: command not found` 在该 job 的应用/instrumentation 构建前失败，emulator instrumentation 未执行。
 
 ## 7. 不要误读的事实
@@ -184,6 +196,7 @@ M4-A 修复候选代码 `d41e21c...`：
 - Task 3 Slice B 未集成；其 worktree/patch 是冻结研究，不是产品代码。
 - Release 使用 Debug certificate，不是生产签名。
 - M4-A crop 已实现但尚未真机接受；M4-B trim 仍未实现、未授权。
+- `1.6.0+21` 已被静态exact-SHA复审阻止：来源时间缺失时不能让Media3的处理时间默认值进入输出；不得安装或启动metadata真机验收。
 
 ## 8. M4-A 实现边界与剩余验收
 
@@ -206,6 +219,7 @@ M4-A 已按下列一次转码链路实现：
 
 - 先读 `docs/known-debt.md`；不要恢复或合并冻结的 Slice B。
 - M4-A 只允许继续既定真机验收；M4-B/F8 或任何新 hardening/refactor/migration 仍需项目所有者明确批准。
+- 当前候选只保留可靠来源时间/GPS；不要增加隐私模式、完整metadata复制、设备定位、音频继承、第二次remux或自定义MP4 writer。真实单次mux失败时停止并报告规模升级。
 - “分析”意味着只读，不得自动编辑代码。
 - 每任务默认最多一次实现、一次修订、一轮 exact-SHA 复审。
 - 只有真机可复现问题或用户文件丢失/误删风险是当前 private-scope blocker。
