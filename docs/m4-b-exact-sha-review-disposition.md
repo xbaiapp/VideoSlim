@@ -3,7 +3,7 @@
 > **日期：** 2026-07-23
 > **受审源码：** `9c9ca887ec4a8a26a6eb892077f88d333eb2a0da`
 > **受审tree：** `84181f4e05173788232bae2186326e16ac75247e`
-> **结论：** `BLOCKER ACCEPTED — CORRECTIVE REVISION IN VERIFICATION`
+> **结论：** `BLOCKER ACCEPTED — CORRECTIVE REVISION VERIFIED`
 > **设备证据：** `NOT CLAIMED`
 
 ## 1. 复审执行边界
@@ -49,7 +49,9 @@
 - `flutter analyze`：PASS；
 - Flutter完整测试：`244/244 PASS`。
 
-新的冻结源码SHA、完整Flutter/Android exact-SHA门禁、纠正自动化闭环和APK身份必须在后续证据中记录。按每任务一轮复审预算不发起第二轮，也不得把旧SHA的混合裁决写成纠正SHA的PASS。旧SHA `9c9ca887ec4a8a26a6eb892077f88d333eb2a0da`已被本阻断项否决，不得用于构建或交付内部候选。
+纠正源码已冻结为`9351e75bcc43c71a6e7caf03093fe27b0072b061`（tree `c9807183c59bbce7fdf47ac79fac2fde24c179ed`），并在该exact SHA上通过Flutter `244/244`、Android JVM `346/346`、debug/release lint和debug assemble。`1.8.0+24` ARM64内部APK随后通过独立静态核验；身份和哈希见`docs/m4-b-completion-report.md`。
+
+按每任务一轮复审预算不发起第二轮，也不得把旧SHA的混合裁决写成纠正SHA的PASS。旧SHA `9c9ca887ec4a8a26a6eb892077f88d333eb2a0da`已被本阻断项否决，不得用于构建或交付内部候选。
 
 ## 5. 设备边界
 

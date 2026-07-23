@@ -2,7 +2,7 @@
 
 VideoSlim 是一款仅在 Android 本机处理媒体的私有工具。它不需要网络权限，不上传源文件，当前版本提供视频压缩和音频提取。
 
-> **当前状态（2026-07-23）：** M3 `1.4.3+18`仍是已接受私有基线。M4-B/F8首个冻结SHA的一次双路复审发现一项`INVALID_TRIM`恢复阻断，唯一纠正修订正在执行exact-SHA门禁；`1.8.0+24`尚不是候选、也没有真机PASS。C1b/C2/C3及M4-C仍未授权。完整进度见`docs/current-project-status.md`。
+> **当前状态（2026-07-23）：** M3 `1.4.3+18`仍是已接受私有基线。M4-B/F8唯一纠正修订`9351e75...`已通过完整自动化和APK静态核验；`1.8.0+24`是Debug-certificate ARM64私有内部候选，真机状态仍为`NOT RUN — NO DEVICE EVIDENCE`。C1b/C2/C3及M4-C仍未授权。完整进度见`docs/current-project-status.md`。
 
 ## 当前功能
 
@@ -56,4 +56,4 @@ cd android
   --console=plain
 ```
 
-当前候选的C1a矩阵见 `docs/c1a-low-savings-device-acceptance.md`，真实来源/metadata矩阵见 `docs/capture-metadata-device-acceptance.md`，M4-A画面裁剪矩阵见 `docs/m4-device-acceptance.md`，M4-B时间裁剪矩阵见 `docs/m4-b-device-acceptance.md`，M4-B复审处置见`docs/m4-b-exact-sha-review-disposition.md`。M3测试素材可用 `tool/generate_m3_fixtures.sh` 生成；二进制fixture不提交到Git。
+当前候选的C1a矩阵见 `docs/c1a-low-savings-device-acceptance.md`，真实来源/metadata矩阵见 `docs/capture-metadata-device-acceptance.md`，M4-A画面裁剪矩阵见 `docs/m4-device-acceptance.md`。M4-B完成报告、复审处置与真机矩阵分别见`docs/m4-b-completion-report.md`、`docs/m4-b-exact-sha-review-disposition.md`和`docs/m4-b-device-acceptance.md`。M3测试素材可用 `tool/generate_m3_fixtures.sh` 生成；二进制fixture不提交到Git。
