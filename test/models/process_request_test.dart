@@ -116,6 +116,7 @@ void main() {
 
         final restored = ProcessRequest.fromChannelMap(request.toChannelMap());
         expect(restored.toChannelMap(), request.toChannelMap());
+        expect(restored.videoTrim, const VideoTrim(startMs: 1000, endMs: 5000));
         expect(
           restored.withVideoDecoderMode('software').toChannelMap(),
           <String, Object?>{
@@ -128,6 +129,40 @@ void main() {
         );
       },
     );
+
+    test('rejects partial malformed and sub-second trim channel values', () {
+      Map<String, Object?> channelWithTrim(Object? start, Object? end) {
+        final map = const ProcessRequest(
+          uri: 'content://media/video/trim',
+          outputFileName: 'trim.mp4',
+          videoCodec: 'hevc',
+          videoBitrate: 1000000,
+          audioMode: 'copy',
+        ).toChannelMap();
+        final video = map['video']! as Map<String, Object?>;
+        video['trimStartMs'] = start;
+        video['trimEndMs'] = end;
+        return map;
+      }
+
+      for (final values in <(Object?, Object?)>[
+        (0, null),
+        (null, 5000),
+        (-1, 5000),
+        (5000, 5000),
+        (5000, 4999),
+        (0, 999),
+        (0.0, 5000),
+        (0, '5000'),
+      ]) {
+        expect(
+          () => ProcessRequest.fromChannelMap(
+            channelWithTrim(values.$1, values.$2),
+          ),
+          throwsFormatException,
+        );
+      }
+    });
 
     test('asserts on unsupported wire values and invalid dimensions', () {
       expect(
@@ -142,6 +177,10 @@ void main() {
       );
       expect(
         () => CropRect(left: 0, top: 0, width: 0, height: 100),
+        throwsA(isA<AssertionError>()),
+      );
+      expect(
+        () => VideoTrim(startMs: 0, endMs: 999),
         throwsA(isA<AssertionError>()),
       );
       expect(

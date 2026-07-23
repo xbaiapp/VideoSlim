@@ -205,6 +205,76 @@ void main() {
     });
   });
 
+  group('single-segment trim planning', () {
+    test('uses retained duration for estimates and request round-trip', () {
+      const trim = VideoTrim(startMs: 2000, endMs: 6000);
+      final plan = planner.plan(
+        source: source(durationMs: 10000),
+        settings: CompressionSettings.forPreset(CompressionPreset.balanced),
+        capabilities: allEncoders,
+        trim: trim,
+      );
+
+      expect(plan.trim, trim);
+      expect(plan.effectiveDurationMs, 4000);
+      expect(plan.estimatedOutputBytes, 5508304);
+      expect(plan.estimatedOutputMinBytes, 5258304);
+      expect(plan.estimatedOutputMaxBytes, 6764704);
+      final request = plan.toProcessRequest(
+        uri: 'content://source',
+        outputFileName: 'trim.mp4',
+      );
+      expect(request.trimStartMs, 2000);
+      expect(request.trimEndMs, 6000);
+      expect(request.videoTrim, trim);
+    });
+
+    test(
+      'full-range endpoints are valid and out-of-range end fails closed',
+      () {
+        expect(
+          planner
+              .plan(
+                source: source(durationMs: 10000),
+                settings: CompressionSettings.forPreset(
+                  CompressionPreset.balanced,
+                ),
+                capabilities: allEncoders,
+                trim: const VideoTrim(startMs: 0, endMs: 10000),
+              )
+              .effectiveDurationMs,
+          10000,
+        );
+        expect(
+          () => planner.plan(
+            source: source(durationMs: 10000),
+            settings: CompressionSettings.forPreset(CompressionPreset.balanced),
+            capabilities: allEncoders,
+            trim: const VideoTrim(startMs: 0, endMs: 11000),
+          ),
+          throwsArgumentError,
+        );
+      },
+    );
+
+    test('trimmed conservative upper bound drives the low-savings warning', () {
+      final full = planner.plan(
+        source: source(durationMs: 10000, fileSizeBytes: 10000000),
+        settings: CompressionSettings.forPreset(CompressionPreset.balanced),
+        capabilities: allEncoders,
+      );
+      final trimmed = planner.plan(
+        source: source(durationMs: 10000, fileSizeBytes: 10000000),
+        settings: CompressionSettings.forPreset(CompressionPreset.balanced),
+        capabilities: allEncoders,
+        trim: const VideoTrim(startMs: 2000, endMs: 6000),
+      );
+
+      expect(full.hasLowSavings, isTrue);
+      expect(trimmed.hasLowSavings, isFalse);
+    });
+  });
+
   group('custom planning', () {
     test(
       'keeps direct bitrate and calculates even aspect-preserving output',

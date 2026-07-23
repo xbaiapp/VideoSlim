@@ -56,12 +56,15 @@ class TranscodePlanTest {
                     request(
                         longEdge = 854,
                         crop = CropRect(left = 100, top = 50, width = 1280, height = 720),
+                        trim = TimeTrim(startMs = 2_000L, endMs = 8_000L),
                     ),
                 metadata = metadata(displayWidth = 1920, displayHeight = 1080),
                 sdkInt = 35,
             )
         assertEquals(VideoDimensions(854, 480), croppedAndScaled.outputDimensions)
         assertTrue(croppedAndScaled.presentationRequired)
+        assertEquals(TimeTrim(startMs = 2_000L, endMs = 8_000L), croppedAndScaled.trim)
+        assertEquals(6_000L, croppedAndScaled.effectiveDurationMs)
         assertEquals(
             listOf(VideoEffectKind.CROP, VideoEffectKind.PRESENTATION),
             croppedAndScaled.videoEffectOrder,
@@ -226,6 +229,35 @@ class TranscodePlanTest {
     }
 
     @Test
+    fun `trim validates against metadata and storage uses retained duration`() {
+        val plan =
+            TranscodePlan.create(
+                request = request(trim = TimeTrim(startMs = 2_000L, endMs = 6_000L)),
+                metadata = metadata(durationMs = 10_000L, audioBitrate = 128_000),
+                sdkInt = 35,
+            )
+
+        assertEquals(TimeTrim(startMs = 2_000L, endMs = 6_000L), plan.trim)
+        assertEquals(4_000L, plan.effectiveDurationMs)
+        assertEquals(1_250_000L, plan.storageEstimate.videoBytes)
+        assertEquals(64_000L, plan.storageEstimate.audioBytes)
+
+        val exception =
+            try {
+                TranscodePlan.create(
+                    request = request(trim = TimeTrim(startMs = 0L, endMs = 10_001L)),
+                    metadata = metadata(durationMs = 10_000L),
+                    sdkInt = 35,
+                )
+                fail("Expected invalid trim")
+                error("unreachable")
+            } catch (error: TranscodePlanException) {
+                error
+            }
+        assertEquals(EngineErrorCode.INVALID_TRIM, exception.failure.code)
+    }
+
+    @Test
     fun `storage preflight distinguishes shared separate and unknown pools`() {
         val estimate =
             StorageEstimate(
@@ -308,6 +340,7 @@ class TranscodePlanTest {
         videoBitrate: Int = 2_500_000,
         longEdge: Int? = null,
         crop: CropRect? = null,
+        trim: TimeTrim? = null,
         audioMode: AudioMode = AudioMode.COPY,
         audioBitrate: Int? = null,
     ): ProcessRequest =
@@ -318,6 +351,7 @@ class TranscodePlanTest {
             videoBitrate = videoBitrate,
             longEdge = longEdge,
             crop = crop,
+            trim = trim,
             audioMode = audioMode,
             audioBitrate = audioBitrate,
         )

@@ -16,6 +16,8 @@ class M2CompressionCard extends StatelessWidget {
     required this.customAudioMode,
     required this.customAudioBitrate,
     required this.crop,
+    required this.trim,
+    required this.sourceDurationMs,
     required this.plan,
     required this.capabilitiesLoading,
     required this.hdrSource,
@@ -30,6 +32,8 @@ class M2CompressionCard extends StatelessWidget {
     required this.onAudioBitrateChanged,
     required this.onEditCrop,
     required this.onRemoveCrop,
+    required this.onEditTrim,
+    required this.onRemoveTrim,
     required this.onCompress,
     required this.onChooseOutputLocation,
     required this.onUseDefaultOutputLocation,
@@ -42,6 +46,8 @@ class M2CompressionCard extends StatelessWidget {
   final CompressionAudioMode customAudioMode;
   final int customAudioBitrate;
   final CropRect? crop;
+  final VideoTrim? trim;
+  final int sourceDurationMs;
   final CompressionPlan? plan;
   final bool capabilitiesLoading;
   final bool hdrSource;
@@ -56,6 +62,8 @@ class M2CompressionCard extends StatelessWidget {
   final ValueChanged<int> onAudioBitrateChanged;
   final VoidCallback? onEditCrop;
   final VoidCallback? onRemoveCrop;
+  final VoidCallback? onEditTrim;
+  final VoidCallback? onRemoveTrim;
   final VoidCallback? onCompress;
   final VoidCallback? onChooseOutputLocation;
   final VoidCallback? onUseDefaultOutputLocation;
@@ -93,6 +101,13 @@ class M2CompressionCard extends StatelessWidget {
               crop: crop,
               onEdit: onEditCrop,
               onRemove: onRemoveCrop,
+            ),
+            const SizedBox(height: 10),
+            _TrimSettingsPanel(
+              trim: trim,
+              sourceDurationMs: sourceDurationMs,
+              onEdit: onEditTrim,
+              onRemove: onRemoveTrim,
             ),
             const SizedBox(height: 16),
             Wrap(
@@ -261,6 +276,99 @@ class _CropSettingsPanel extends StatelessWidget {
                     ),
                     TextButton(
                       key: const ValueKey<String>('s3-remove-crop'),
+                      onPressed: onRemove,
+                      child: const Text('移除'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+class _TrimSettingsPanel extends StatelessWidget {
+  const _TrimSettingsPanel({
+    required this.trim,
+    required this.sourceDurationMs,
+    required this.onEdit,
+    required this.onRemove,
+  });
+
+  final VideoTrim? trim;
+  final int sourceDurationMs;
+  final VoidCallback? onEdit;
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final value = trim;
+    final canTrim = sourceDurationMs >= 1000;
+    return Container(
+      key: const ValueKey<String>('s3-trim-panel'),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: value == null
+          ? Row(
+              children: <Widget>[
+                const Icon(Icons.content_cut_rounded),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      const Text(
+                        '裁剪时长（可选）',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      Text(
+                        canTrim
+                            ? '当前保留完整视频 ${_formatTrimTime(sourceDurationMs)}'
+                            : '视频不足 1 秒，无法设置时间裁剪',
+                      ),
+                    ],
+                  ),
+                ),
+                TextButton(
+                  key: const ValueKey<String>('s3-add-trim'),
+                  onPressed: canTrim ? onEdit : null,
+                  child: const Text('添加'),
+                ),
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Icon(Icons.check_circle_rounded, color: colors.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${_formatTrimTime(value.startMs)}–${_formatTrimTime(value.endMs)}'
+                        '（保留 ${_formatTrimTime(value.durationMs)}）',
+                        key: const ValueKey<String>('trim-applied-badge'),
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: <Widget>[
+                    TextButton(
+                      key: const ValueKey<String>('s3-edit-trim'),
+                      onPressed: onEdit,
+                      child: const Text('编辑'),
+                    ),
+                    TextButton(
+                      key: const ValueKey<String>('s3-remove-trim'),
                       onPressed: onRemove,
                       child: const Text('移除'),
                     ),
@@ -562,6 +670,18 @@ class _Notice extends StatelessWidget {
       ),
     );
   }
+}
+
+String _formatTrimTime(int milliseconds) {
+  final safe = milliseconds.clamp(0, 99 * 60 * 60 * 1000);
+  final hours = safe ~/ 3600000;
+  final minutes = (safe ~/ 60000) % 60;
+  final seconds = (safe ~/ 1000) % 60;
+  final millis = safe % 1000;
+  final prefix = hours > 0 ? '${hours.toString().padLeft(2, '0')}:' : '';
+  return '$prefix${minutes.toString().padLeft(2, '0')}:'
+      '${seconds.toString().padLeft(2, '0')}.'
+      '${millis.toString().padLeft(3, '0')}';
 }
 
 String _resolutionLabel(CompressionResolution value) => switch (value) {

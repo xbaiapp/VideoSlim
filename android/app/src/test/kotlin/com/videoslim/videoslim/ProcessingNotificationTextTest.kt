@@ -148,6 +148,21 @@ class ProcessingNotificationTextTest {
     }
 
     @Test
+    fun `invalid trim notification returns the user to the time editor`() {
+        val failed =
+            ProcessingNotificationText.from(
+                snapshot(
+                    state = "failed",
+                    percent = 0.0,
+                    errorCode = EngineErrorCode.INVALID_TRIM.wireName,
+                ),
+            )
+
+        assertTrue(failed.body.contains("时间裁剪范围无效"))
+        assertTrue(failed.body.contains("重新选择"))
+    }
+
+    @Test
     fun `cancelled state remains readable`() {
         val cancelled =
             ProcessingNotificationText.from(

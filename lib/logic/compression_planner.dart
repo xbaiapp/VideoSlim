@@ -11,6 +11,8 @@ final class CompressionPlan {
   const CompressionPlan({
     required this.settings,
     required this.crop,
+    required this.trim,
+    required this.effectiveDurationMs,
     required this.outputWidth,
     required this.outputHeight,
     required this.effectiveLongEdge,
@@ -33,6 +35,12 @@ final class CompressionPlan {
 
   /// Optional crop in display-oriented source pixels.
   final CropRect? crop;
+
+  /// Optional continuous source-timeline segment retained by M4-B.
+  final VideoTrim? trim;
+
+  /// Duration used by all output estimates.
+  final int effectiveDurationMs;
 
   /// Planned display-oriented output width.
   final int outputWidth;
@@ -105,6 +113,8 @@ final class CompressionPlan {
       videoBitrate: videoBitrate,
       longEdge: effectiveLongEdge,
       crop: crop,
+      trimStartMs: trim?.startMs,
+      trimEndMs: trim?.endMs,
       audioMode: audioMode.wireName,
       audioBitrate: audioMode == CompressionAudioMode.reencode
           ? settings.audioBitrate
@@ -142,9 +152,11 @@ final class CompressionPlanner {
     required CompressionSettings settings,
     required DeviceCapabilities capabilities,
     CropRect? crop,
+    VideoTrim? trim,
   }) {
     _validateSource(source);
     _validateCrop(source, crop);
+    _validateTrim(source, trim);
     if (settings.isPreserveQuality && crop == null) {
       throw ArgumentError.value(
         settings.preset,
@@ -188,15 +200,16 @@ final class CompressionPlanner {
       unsupportedReason = CompressionUnsupportedReason.h264EncoderUnavailable;
     }
 
+    final effectiveDurationMs = trim?.durationMs ?? source.durationMs;
     final audio = _resolveAudio(source: source, settings: settings);
     final videoBytes = _multiplyDivideFloor(
       videoBitrate,
-      source.durationMs,
+      effectiveDurationMs,
       8000,
     );
     final audioBytes = _multiplyDivideFloor(
       audio.bitrate,
-      source.durationMs,
+      effectiveDurationMs,
       8000,
     );
     final nominalMediaBytes = videoBytes + audioBytes;
@@ -217,6 +230,8 @@ final class CompressionPlanner {
     return CompressionPlan(
       settings: settings,
       crop: crop,
+      trim: trim,
+      effectiveDurationMs: effectiveDurationMs,
       outputWidth: geometry.width,
       outputHeight: geometry.height,
       effectiveLongEdge: geometry.effectiveLongEdge,
@@ -290,6 +305,19 @@ void _validateCrop(VideoInfo source, CropRect? crop) {
       crop.toChannelMap(),
       'crop',
       'Crop must be in bounds, even, and at least 64x64 display pixels',
+    );
+  }
+}
+
+void _validateTrim(VideoInfo source, VideoTrim? trim) {
+  if (trim == null) return;
+  if (trim.startMs < 0 ||
+      trim.durationMs < 1000 ||
+      trim.endMs > source.durationMs) {
+    throw ArgumentError.value(
+      trim,
+      'trim',
+      'Trim must retain at least 1000 ms within the source timeline',
     );
   }
 }

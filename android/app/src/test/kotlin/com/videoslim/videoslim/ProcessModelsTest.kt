@@ -251,12 +251,50 @@ class ProcessModelsTest {
     }
 
     @Test
-    fun `M4-A still rejects non-null trim`() {
-        mapOf<String, Any?>(
-            "trimStartMs" to 0,
-            "trimEndMs" to 10_000,
-        ).forEach { (key, value) ->
-            assertRejected(validArguments(video = validVideo().apply { this[key] = value }))
+    fun `M4-B accepts strict paired trim and round-trips it for recovery`() {
+        listOf(2_000 to 8_000, 2_000L to 8_000L).forEach { (start, end) ->
+            val request =
+                ProcessRequest.parse(
+                    validArguments(
+                        video =
+                            validVideo().apply {
+                                this["trimStartMs"] = start
+                                this["trimEndMs"] = end
+                            },
+                    ),
+                )
+
+            assertEquals(TimeTrim(startMs = 2_000L, endMs = 8_000L), request.trim)
+            assertEquals(request, ProcessRequest.parse(request.toChannelMap()))
+        }
+    }
+
+    @Test
+    fun `M4-B trim validation is strict and uses INVALID_TRIM`() {
+        val invalidPairs =
+            listOf(
+                0 to null,
+                null to 10_000,
+                -1 to 10_000,
+                10_000 to 10_000,
+                10_000 to 9_999,
+                0 to 999,
+                0.0 to 10_000,
+                0 to "10000",
+                true to 10_000,
+            )
+        invalidPairs.forEach { (start, end) ->
+            val exception =
+                rejected(
+                    validArguments(
+                        video =
+                            validVideo().apply {
+                                this["trimStartMs"] = start
+                                this["trimEndMs"] = end
+                            },
+                    ),
+                )
+            assertEquals(EngineErrorCode.INVALID_TRIM, exception.error.code)
         }
     }
 

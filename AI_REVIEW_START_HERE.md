@@ -4,7 +4,8 @@
 > **生成日期：** 2026-07-23
 > **当前候选版本：** `1.7.0+23`
 > **当前候选代码 SHA：** `7c49e57e3b6eafeeb765f2600c17b0242bea1160`
-> **阶段：** C1a已实现但项目所有者跳过真机验收（未记PASS）；D1已完成并确认Pixel HEVC运行期明显过冲；M4-B/F8单段时间裁剪已获准进入规划；M3 `1.4.3+18`仍是当前已接受发布基线
+> **M4-B目标版本：** `1.8.0+24`（RED→GREEN和完整自动门禁已通过，等待冻结后的唯一复审）
+> **阶段：** C1a已实现但项目所有者跳过真机验收（未记PASS）；D1已完成并确认Pixel HEVC运行期明显过冲；M4-B/F8单段时间裁剪等待exact-SHA复审；M3 `1.4.3+18`仍是当前已接受发布基线
 > **安全：** 凭据、用户媒体、运行时数据库和私有日志不属于本交接包；任何秘密值只能写为 `[REDACTED]`。
 
 ## 1. 先读什么
@@ -13,14 +14,15 @@
 2. `AI_REVIEW_START_HERE.md`（本文）
 3. `docs/current-project-status.md`（当前进度与证据）
 4. `README.md`（当前用户能力）
-5. `docs/d1-bitrate-diagnosis-2026-07-23.md`（当前已完成的码率诊断）
-6. `docs/c1a-low-savings-completion-report.md` / `docs/c1a-low-savings-device-acceptance.md`（已实现功能与跳过的PENDING矩阵）
-7. `docs/VideoSlim PRD.md`（产品和权威 contract）
-8. `docs/capture-metadata-completion-report.md` / `docs/capture-metadata-device-acceptance.md`（仍保留的metadata证据与矩阵）
-9. `docs/m4-a-completion-report.md` / `docs/m4-device-acceptance.md`（仍保留的裁剪候选与PENDING矩阵）
-10. `docs/known-debt.md`（冻结 Slice B 与已知限制）
-11. `AGENTS.md`（项目治理、复审预算、真机优先规则）
-12. 之后再读下方“关键源码”。
+5. `docs/m4-b-device-acceptance.md`（M4-B真机矩阵；当前全部PENDING）
+6. `docs/d1-bitrate-diagnosis-2026-07-23.md`（当前已完成的码率诊断）
+7. `docs/c1a-low-savings-completion-report.md` / `docs/c1a-low-savings-device-acceptance.md`（已实现功能与跳过的PENDING矩阵）
+8. `docs/VideoSlim PRD.md`（产品和权威 contract）
+9. `docs/capture-metadata-completion-report.md` / `docs/capture-metadata-device-acceptance.md`（仍保留的metadata证据与矩阵）
+10. `docs/m4-a-completion-report.md` / `docs/m4-device-acceptance.md`（仍保留的画面裁剪候选与PENDING矩阵）
+11. `docs/known-debt.md`（冻结 Slice B 与已知限制）
+12. `AGENTS.md`（项目治理、复审预算、真机优先规则）
+13. 之后再读下方“关键源码”。
 
 ## 2. 产品边界
 
@@ -54,7 +56,7 @@ VideoSlim 是 Android 本地媒体工具：
 | M4-A | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | F5 画面裁剪已实现；自动化与候选构建通过，真机矩阵未执行 |
 | F7 metadata/name增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 无来源时间改用unknown sentinel并增加必无核验；focused review通过 |
 | C轨 D1/F20–F22 | `C1a IMPLEMENTED — DEVICE TEST WAIVED；D1 COMPLETE` | D1有效配置500 kbps，Pixel HEVC运行期明显过冲；C1b/C2/C3未授权 |
-| M4-B | `AUTHORIZED — PLANNING` | F8连续单段时间裁剪是当前唯一代码项 |
+| M4-B | `AUTOMATED VERIFIED — REVIEW PENDING` | F8连续单段时间裁剪已完成RED→GREEN和完整门禁；候选冻结、唯一复审、APK和真机证据尚未完成 |
 | M4-C | `PLANNED — NOT AUTHORIZED` | F23同源多段依赖M4-B真机接受 |
 | M5/M6 | NOT STARTED | 打磨、批量、目标大小、iOS/上架 |
 
@@ -137,14 +139,15 @@ Picker URI
 
 ### Flutter
 
-- `lib/screens/home_screen.dart` — 主工作流、双入口和 S3/S4 裁剪接线
-- `lib/widgets/crop_editor.dart` / `lib/logic/crop_geometry.dart` — 裁剪编辑器与显示像素几何；单次手势累计位移并固定缩放对边
+- `lib/screens/home_screen.dart` — 主工作流及S3到画面/时间S4编辑器接线
+- `lib/widgets/crop_editor.dart` / `lib/logic/crop_geometry.dart` — 画面裁剪编辑器与显示像素几何；单次手势累计位移并固定缩放对边
+- `lib/widgets/trim_editor.dart` — 连续单段起止编辑、1秒下限、180ms预览节流与旧响应隔离
 - `lib/state/home_flow_state.dart` — typed UI/workflow state
 - `lib/engine/video_engine.dart` — 跨平台引擎接口
 - `lib/engine/method_channel_video_engine.dart` — 平台通道 adapter
-- `lib/models/process_request.dart` — `CropRect` 与 crop request/snapshot/retry contract；trim 仍拒绝非空
+- `lib/models/process_request.dart` — `CropRect`、`VideoTrim`与严格request/snapshot/retry contract
 - `lib/models/audio_extract_request.dart` — M3 音频请求
-- `lib/logic/compression_planner.dart` — 输出尺寸、码率、估算和 capability fallback
+- `lib/logic/compression_planner.dart` — 输出尺寸、码率、trim有效时长估算、C1a判断和capability fallback
 - `lib/logic/audio_extract_planner.dart` / `lib/logic/output_file_name_builder.dart` — M3模式、最终计划命名和估算
 - `lib/logic/log_clipboard_payload.dart` / `lib/screens/debug_log_screen.dart` — Android Binder安全的最近128 KiB日志复制与完整文件分享边界
 
@@ -153,7 +156,8 @@ Picker URI
 - `EngineChannel.kt` — MethodChannel/EventChannel、I/O routing、snapshot/readback
 - `ProcessingRuntime.kt` / `ProcessingRegistry.kt` — 进程级任务所有权和状态
 - `ProcessingService.kt` — 前台服务、通知、终态和 recovery observer
-- `TranscodeEngine.kt` — Media3 视频转码、codec preflight、effects、发布
+- `TranscodeEngine.kt` / `TrimmedMediaItem.kt` — Media3输入clipping、视频转码、codec preflight、effects与发布
+- `ProcessModels.kt` / `TranscodePlan.kt` — 严格trim解析、`INVALID_TRIM`、来源时长边界和存储预检
 - `CaptureMetadata.kt` / `VideoMetadataReader.kt` — 来源时间/GPS解析、muxer白名单、发布前核验与安全传播
 - `CropGeometryMapper.kt` / `PreviewFrameReader.kt` — 显示像素到 NDC 与只读预览帧
 - `AudioExtractionEngine.kt` — AAC copy / AAC encode
@@ -210,7 +214,7 @@ D1已从此前提供的最新相关F19任务完成零代码诊断：Media3有效
 - `1.4.3+18` 只消除成功后 `getAudioInfo` 的重复扫描，不删除发布前完整校验。
 - Task 3 Slice B 未集成；其 worktree/patch 是冻结研究，不是产品代码。
 - Release 使用 Debug certificate，不是生产签名。
-- M4-A crop与C1a提示已实现但尚未真机接受；C1b/C2/C3、M4-B trim与M4-C多段仍未实现、未授权。
+- M4-A crop与C1a提示已实现但尚未真机接受；M4-B连续单段trim已实现但尚未冻结候选或真机接受；C1b/C2/C3与M4-C多段仍未实现、未授权。
 - `a92d1cd...` 已用1904/zero sentinel覆盖Media3处理时间默认值，并对时间/GPS执行必有与必无核验；`b0267a0...` 只增加日志复制边界。单次Pixel成功不能替代真机矩阵，不得提前写为ACCEPTED。
 
 ## 8. M4-A 实现边界与剩余验收

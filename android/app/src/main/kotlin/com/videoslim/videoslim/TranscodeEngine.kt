@@ -444,8 +444,13 @@ internal class TranscodeEngine(
                     ).build()
             task.transformer = transformer
 
+            val mediaItem =
+                MediaItem.Builder()
+                    .setUri(task.request.sourceUri)
+                    .setClippingConfiguration(clippingConfigurationFor(plan.trim))
+                    .build()
             val editedItemBuilder =
-                EditedMediaItem.Builder(MediaItem.fromUri(task.request.sourceUri))
+                EditedMediaItem.Builder(mediaItem)
                     .setRemoveAudio(task.request.audioMode == AudioMode.REMOVE)
             val videoEffects = mutableListOf<Effect>()
             plan.videoEffectOrder.forEach { effect ->

@@ -174,6 +174,7 @@ internal data class ProcessingNotificationText(
                 EngineErrorCode.SOURCE_UNAVAILABLE.wireName -> "所选视频已移动、删除或暂时不可用"
                 EngineErrorCode.SOURCE_PROVIDER_FAILED.wireName -> "手机无法持续读取视频，请重新选择或稍后重试"
                 EngineErrorCode.SOURCE_CORRUPTED.wireName -> "无法处理这个视频，文件可能损坏或格式不受支持"
+                EngineErrorCode.INVALID_TRIM.wireName -> "时间裁剪范围无效，请打开 VideoSlim 重新选择"
                 EngineErrorCode.VIDEO_DECODING_FAILED.wireName ->
                     if (snapshot.videoDecoderMode == VideoDecoderMode.HARDWARE.wireName) {
                         "视频读取方式未能完成，原视频没有被修改。可打开 VideoSlim 使用兼容模式重试"

@@ -65,6 +65,30 @@ class CropRect {
   String toString() => 'CropRect($left, $top, ${width}x$height)';
 }
 
+/// One continuous source-timeline segment retained by M4-B.
+class VideoTrim {
+  /// Creates a trim with an inclusive start, exclusive end, and at least one
+  /// second of retained media.
+  const VideoTrim({required this.startMs, required this.endMs})
+    : assert(startMs >= 0),
+      assert(endMs - startMs >= 1000);
+
+  final int startMs;
+  final int endMs;
+
+  int get durationMs => endMs - startMs;
+
+  @override
+  bool operator ==(Object other) =>
+      other is VideoTrim && other.startMs == startMs && other.endMs == endMs;
+
+  @override
+  int get hashCode => Object.hash(startMs, endMs);
+
+  @override
+  String toString() => 'VideoTrim($startMs–$endMs ms)';
+}
+
 /// Parameters for one combined video processing operation.
 ///
 /// The Dart representation stays flat for simple business-layer use. Use
@@ -93,10 +117,12 @@ class ProcessRequest {
        assert(videoDecoderMode == 'hardware' || videoDecoderMode == 'software'),
        assert(videoBitrate > 0),
        assert(longEdge == null || longEdge > 0),
+       assert((trimStartMs == null) == (trimEndMs == null)),
        assert(trimStartMs == null || trimStartMs >= 0),
-       assert(trimEndMs == null || trimEndMs >= 0),
        assert(
-         trimStartMs == null || trimEndMs == null || trimEndMs > trimStartMs,
+         trimStartMs == null ||
+             trimEndMs == null ||
+             trimEndMs - trimStartMs >= 1000,
        ),
        assert(
          audioMode == 'copy' ||
@@ -131,6 +157,7 @@ class ProcessRequest {
     _requireExactKeys(audio, const <String>{'mode', 'bitrate'});
 
     final cropValue = video['crop'];
+    final trim = _parseVideoTrim(video);
     return ProcessRequest(
       uri: _requiredString(map, 'uri'),
       outputFileName: _requiredString(map, 'outputFileName'),
@@ -154,8 +181,8 @@ class ProcessRequest {
                   ? cropValue
                   : throw const FormatException('Expected Map for video.crop'),
             ),
-      trimStartMs: _optionalWholeInt(video, 'trimStartMs', minimum: 0),
-      trimEndMs: _optionalWholeInt(video, 'trimEndMs', minimum: 0),
+      trimStartMs: trim?.startMs,
+      trimEndMs: trim?.endMs,
       audioMode: _requiredEnumString(audio, 'mode', const <String>{
         'copy',
         'reencode',
@@ -195,8 +222,13 @@ class ProcessRequest {
   /// Optional inclusive trim start in milliseconds.
   final int? trimStartMs;
 
-  /// Optional trim end in milliseconds.
+  /// Optional exclusive trim end in milliseconds.
   final int? trimEndMs;
+
+  /// Typed single-segment trim reconstructed from the paired wire fields.
+  VideoTrim? get videoTrim => trimStartMs == null
+      ? null
+      : VideoTrim(startMs: trimStartMs!, endMs: trimEndMs!);
 
   /// Audio handling mode: `copy`, `reencode`, or `remove`.
   final String audioMode;
@@ -249,6 +281,18 @@ void _requireExactKeys(Map<Object?, Object?> map, Set<String> expected) {
       map.length != expected.length) {
     throw FormatException('Unexpected channel-map keys: ${map.keys}');
   }
+}
+
+VideoTrim? _parseVideoTrim(Map<Object?, Object?> video) {
+  final start = video['trimStartMs'];
+  final end = video['trimEndMs'];
+  if (start == null && end == null) return null;
+  if (start is! int || end is! int || start < 0 || end - start < 1000) {
+    throw const FormatException(
+      'Expected paired integer trim endpoints retaining at least 1000 ms',
+    );
+  }
+  return VideoTrim(startMs: start, endMs: end);
 }
 
 Map<Object?, Object?> _requiredMap(Map<Object?, Object?> map, String key) {

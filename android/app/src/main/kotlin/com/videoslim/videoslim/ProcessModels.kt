@@ -47,6 +47,7 @@ enum class EngineErrorCode(
     SOURCE_UNAVAILABLE("SOURCE_UNAVAILABLE", "所选视频已移动、删除或暂时不可用"),
     SOURCE_PROVIDER_FAILED("SOURCE_PROVIDER_FAILED", "手机无法持续读取这个视频，请重新选择或稍后重试"),
     INVALID_CROP("INVALID_CROP", "裁剪区域无效，请重新框选"),
+    INVALID_TRIM("INVALID_TRIM", "时间裁剪范围无效，请重新选择"),
 
     VIDEO_DECODING_FAILED("VIDEO_DECODING_FAILED", "手机的视频解码器未能完成此次处理，原视频没有被修改"),
     VIDEO_FORMAT_UNSUPPORTED("VIDEO_FORMAT_UNSUPPORTED", "这台手机暂时无法读取这种视频格式"),
@@ -177,6 +178,14 @@ internal data class CropRect(
         )
 }
 
+internal data class TimeTrim(
+    val startMs: Long,
+    val endMs: Long,
+) {
+    val durationMs: Long
+        get() = endMs - startMs
+}
+
 internal data class ProcessRequest(
     val sourceUri: String,
     val outputFileName: String,
@@ -187,6 +196,7 @@ internal data class ProcessRequest(
     val videoBitrate: Int,
     val longEdge: Int?,
     val crop: CropRect? = null,
+    val trim: TimeTrim? = null,
     val audioMode: AudioMode,
     val audioBitrate: Int?,
 ) {
@@ -206,8 +216,8 @@ internal data class ProcessRequest(
                     "bitrate" to videoBitrate,
                     "longEdge" to longEdge,
                     "crop" to crop?.toChannelMap(),
-                    "trimStartMs" to null,
-                    "trimEndMs" to null,
+                    "trimStartMs" to trim?.startMs,
+                    "trimEndMs" to trim?.endMs,
                 ),
             "audio" to
                 linkedMapOf(
@@ -276,11 +286,7 @@ internal data class ProcessRequest(
                     }
                 }
             val crop = parseCrop(video["crop"])
-            listOf("trimStartMs", "trimEndMs").forEach { key ->
-                if (video[key] != null) {
-                    invalid("M4-A 暂不支持 video.$key，请传 null")
-                }
-            }
+            val trim = parseTrim(video["trimStartMs"], video["trimEndMs"])
 
             val audio = root["audio"].exactMap("audio 必须是完整对象", audioKeys)
             val audioMode =
@@ -298,6 +304,7 @@ internal data class ProcessRequest(
                 videoBitrate = videoBitrate,
                 longEdge = longEdge,
                 crop = crop,
+                trim = trim,
                 audioMode = audioMode,
                 audioBitrate = audioBitrate,
             )
@@ -320,6 +327,22 @@ internal data class ProcessRequest(
             } catch (error: ProcessRequestException) {
                 throw ProcessRequestException(
                     EngineFailure(EngineErrorCode.INVALID_CROP, "裁剪区域无效，请重新框选"),
+                )
+            }
+        }
+
+        private fun parseTrim(startValue: Any?, endValue: Any?): TimeTrim? {
+            if (startValue == null && endValue == null) return null
+            return try {
+                val startMs = startValue.nonNegativeChannelLong("video.trimStartMs")
+                val endMs = endValue.nonNegativeChannelLong("video.trimEndMs")
+                if (endMs <= startMs || endMs - startMs < MIN_TRIM_DURATION_MS) {
+                    invalid("时间裁剪必须至少保留 1 秒")
+                }
+                TimeTrim(startMs = startMs, endMs = endMs)
+            } catch (error: ProcessRequestException) {
+                throw ProcessRequestException(
+                    EngineFailure(EngineErrorCode.INVALID_TRIM, "时间裁剪范围无效，请重新选择"),
                 )
             }
         }
@@ -395,6 +418,21 @@ internal data class ProcessRequest(
             return value
         }
 
+        private fun Any?.nonNegativeChannelLong(fieldName: String): Long {
+            val value =
+                when (this) {
+                    is Byte -> toLong()
+                    is Short -> toLong()
+                    is Int -> toLong()
+                    is Long -> this
+                    else -> null
+                }
+            if (value == null || value < 0L) {
+                invalid("$fieldName 必须是大于等于 0 的整数")
+            }
+            return value
+        }
+
         private fun Any?.positiveChannelInt(fieldName: String): Int {
             val value =
                 when (this) {
@@ -424,6 +462,7 @@ internal data class ProcessRequest(
         private const val MP4_EXTENSION = ".mp4"
         private const val SPACE_CHARACTER_CODE = 0x20
         private const val DELETE_CHARACTER_CODE = 0x7F
+        private const val MIN_TRIM_DURATION_MS = 1_000L
     }
 }
 

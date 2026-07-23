@@ -253,13 +253,14 @@ VideoInfo _videoInfo({
   String uri = _sourceUri,
   String fileName = '旅行 视频.mp4',
   int fileSizeBytes = 100 * 1024 * 1024,
+  int durationMs = 65 * 1000,
   bool isHdr = false,
 }) {
   return VideoInfo(
     uri: uri,
     fileName: fileName,
     fileSizeBytes: fileSizeBytes,
-    durationMs: 65 * 1000,
+    durationMs: durationMs,
     container: 'video/mp4',
     videoCodec: 'video/avc',
     width: 1080,
@@ -543,6 +544,70 @@ void main() {
           .selected,
       isTrue,
     );
+  });
+
+  testWidgets('S3 time trim saves one segment and submits exact endpoints', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapVisible(
+      tester,
+      find.byKey(const ValueKey<String>('s3-add-trim')),
+    );
+    await tester.pumpAndSettle();
+
+    final sliderFinder = find.byKey(
+      const ValueKey<String>('trim-range-slider'),
+    );
+    tester.widget<RangeSlider>(sliderFinder).onChanged!(
+      const RangeValues(5000, 30000),
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey<String>('save-trim')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey<String>('trim-applied-badge')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('00:05.000–00:30.000'), findsOneWidget);
+
+    await _tapCompression(tester);
+    await _confirmCompressionIfShown(tester);
+    expect(
+      engine.lastRequest?.videoTrim,
+      const VideoTrim(startMs: 5000, endMs: 30000),
+    );
+  });
+
+  testWidgets('S3 disables time trim for a source shorter than one second', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    picker.galleryResult = _sourceUri;
+    engine.infoByUri[_sourceUri] = _videoInfo(durationMs: 999);
+    await tester.tap(find.byKey(const ValueKey<String>('pick-gallery')));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('视频不足 1 秒，无法设置时间裁剪'), findsOneWidget);
+    final addTrim = find.byKey(const ValueKey<String>('s3-add-trim'));
+    expect(tester.widget<TextButton>(addTrim).onPressed, isNull);
   });
 
   testWidgets('SAF button uses the file picker entry', (
@@ -1107,6 +1172,54 @@ void main() {
       find.byKey(const ValueKey<String>('s3-remove-crop')),
     );
     expect(find.text('裁剪区域无效，请重新框选。'), findsNothing);
+    expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
+  });
+
+  testWidgets('INVALID_TRIM keeps the saved segment editable for recovery', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    final flow = Provider.of<HomeFlowState>(
+      tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+      listen: false,
+    );
+    flow.saveTrim(const VideoTrim(startMs: 1000, endMs: 8000));
+    await tester.pump();
+    await _tapCompression(tester);
+    await _confirmCompressionIfShown(tester);
+
+    engine.progress.add(
+      const ProgressEvent(
+        taskId: 'task-1',
+        percent: 0,
+        state: TaskState.failed,
+        errorCode: 'INVALID_TRIM',
+        errorMessage: 'native detail must not be shown',
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(flow.errorText, '时间裁剪范围无效，请重新选择。');
+    expect(find.text('时间裁剪范围无效，请重新选择。'), findsOneWidget);
+    expect(find.byKey(const ValueKey<String>('s3-edit-trim')), findsOneWidget);
+    final start = find.byKey(const ValueKey<String>('start-m2-compression'));
+    expect(tester.widget<FilledButton>(start).onPressed, isNull);
+    expect(find.text('请先重新编辑或移除无效的时间区间。'), findsOneWidget);
+
+    await _tapVisible(
+      tester,
+      find.byKey(const ValueKey<String>('s3-remove-trim')),
+    );
+    expect(find.text('时间裁剪范围无效，请重新选择。'), findsNothing);
     expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
   });
 
@@ -2103,6 +2216,8 @@ void main() {
       videoDecoderMode: 'hardware',
       videoBitrate: 812345,
       longEdge: 1280,
+      trimStartMs: 2000,
+      trimEndMs: 8000,
       audioMode: 'reencode',
       audioBitrate: 96000,
     );
@@ -2146,6 +2261,7 @@ void main() {
     expect(engine.lastRequest?.outputFileName, retryRequest.outputFileName);
     expect(engine.lastRequest?.videoBitrate, retryRequest.videoBitrate);
     expect(engine.lastRequest?.longEdge, retryRequest.longEdge);
+    expect(engine.lastRequest?.videoTrim, retryRequest.videoTrim);
     expect(engine.lastRequest?.audioMode, retryRequest.audioMode);
     expect(engine.lastRequest?.audioBitrate, retryRequest.audioBitrate);
     expect(engine.lastRequest?.videoDecoderMode, 'software');

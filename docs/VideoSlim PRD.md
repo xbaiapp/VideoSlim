@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.14（记录C1a验收跳过、D1结论与M4-B授权） |
+| 文档版本 | v1.15（记录M4-B RED→GREEN与候选验证阶段） |
 | 日期 | 2026-07-23 |
-| 状态 | M3 `ACCEPTED — private scope`；`1.7.0+23 / 7c49e57...`已实现F20/C1a但所有者跳过真机验收（未记PASS）；D1确认Pixel HEVC有效配置500 kbps后运行期明显过冲；M4-B/F8连续单段时间裁剪已授权进入规划，C1b/F21/F22与M4-C仍未授权 |
+| 状态 | M3 `ACCEPTED — private scope`；`1.7.0+23 / 7c49e57...`已实现F20/C1a但所有者跳过真机验收（未记PASS）；D1确认Pixel HEVC有效配置500 kbps后运行期明显过冲；M4-B/F8连续单段时间裁剪已完成RED→GREEN和完整自动门禁，`1.8.0+24`等待唯一复审，C1b/F21/F22与M4-C仍未授权 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
@@ -644,11 +644,11 @@ class HistoryRecord {
 - 推荐顺序：M4-B（当前）→ C2 → C1b/C3决策 → M4-C；C1a与既有真机矩阵作为未测试债务保留。每项独立授权、独立候选、独立验收；详细停止条件见交接文档§7.1。
 
 ### M4-B 时间裁剪（F8）
-- 状态：`AUTHORIZED — PLANNING`。项目所有者于2026-07-23明确跳过C1a真机测试并要求继续下一步，F8连续单段trim成为当前唯一代码项。
+- 状态：`AUTOMATED VERIFIED — REVIEW PENDING`。项目所有者于2026-07-23明确跳过C1a真机测试并要求继续下一步；F8连续单段trim已按授权完成RED→GREEN和完整自动门禁，目标版本`1.8.0+24`，但唯一复审、APK静态核验与真机验收尚未完成。
 - 范围：S4起止双滑块；启用已预留的`trimStartMs/trimEndMs`；Kotlin使用Media3 `ClippingConfiguration`，与`Crop → Presentation`同一次Transformer导出。
 - 校验：`0 <= start < end <= duration`、最短保留1秒、无效值fail closed为`INVALID_TRIM`；trim必须在request/snapshot/retry/recovery中round-trip，S3估算按保留时长折算。
 - metadata：继续按源策略保留可靠拍摄时间/GPS；时间裁剪不改变拍摄语义，仍执行发布前应有/应无核验。
-- 验收目标：视频起止误差不超过1帧加设备容差，音频另允许约一个AAC frame封装差；以真机ffprobe和主观音画同步为准，不在证据前宣称已保证帧精度。
+- 验收目标：视频起止误差不超过1帧加设备容差，音频另允许约一个AAC frame封装差；以`docs/m4-b-device-acceptance.md`的真机ffprobe和主观音画同步为准，不在证据前宣称已保证帧精度。
 - 不做：多段、跨文件拼接、无损切割或时间轴缩略图带。任何可感知音画漂移、trim恢复丢失或文件安全问题立即停止。
 
 ### M4-C 同源多段时间编辑（F23）

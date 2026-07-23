@@ -44,6 +44,8 @@ internal enum class VideoEffectKind {
 internal data class TranscodePlan(
     val outputDimensions: VideoDimensions,
     val crop: MappedCrop?,
+    val trim: TimeTrim?,
+    val effectiveDurationMs: Long,
     val presentationRequired: Boolean,
     val hdrMode: HdrMode,
     val storageEstimate: StorageEstimate,
@@ -74,14 +76,32 @@ internal data class TranscodePlan(
             val effectInputDimensions = mappedCrop?.outputDimensions ?: sourceDimensions
             val outputDimensions = scaleForLongEdge(effectInputDimensions, request.longEdge)
             val hdrMode = selectHdrMode(metadata.isHdr, sdkInt)
+            val trim = validateTrim(request.trim, metadata.durationMs)
+            val effectiveDurationMs = trim?.durationMs ?: metadata.durationMs
 
             return TranscodePlan(
                 outputDimensions = outputDimensions,
                 crop = mappedCrop,
+                trim = trim,
+                effectiveDurationMs = effectiveDurationMs,
                 presentationRequired = outputDimensions != effectInputDimensions,
                 hdrMode = hdrMode,
-                storageEstimate = estimateStorage(request, metadata),
+                storageEstimate = estimateStorage(request, metadata, effectiveDurationMs),
             )
+        }
+
+        private fun validateTrim(trim: TimeTrim?, sourceDurationMs: Long): TimeTrim? {
+            if (trim == null) return null
+            if (
+                trim.startMs < 0L ||
+                trim.endMs <= trim.startMs ||
+                trim.durationMs < MIN_TRIM_DURATION_MS ||
+                sourceDurationMs <= 0L ||
+                trim.endMs > sourceDurationMs
+            ) {
+                throw TranscodePlanException(EngineFailure(EngineErrorCode.INVALID_TRIM))
+            }
+            return trim
         }
 
         private fun validateDisplayDimensions(metadata: VideoMetadata): VideoDimensions {
@@ -143,17 +163,18 @@ internal data class TranscodePlan(
         private fun estimateStorage(
             request: ProcessRequest,
             metadata: VideoMetadata,
+            effectiveDurationMs: Long,
         ): StorageEstimate {
-            val videoBytes = bitrateDurationBytes(metadata.durationMs, request.videoBitrate)
+            val videoBytes = bitrateDurationBytes(effectiveDurationMs, request.videoBitrate)
             val audioBytes =
                 when {
                     metadata.audioMime == null -> 0L
                     request.audioMode == AudioMode.REMOVE -> 0L
                     request.audioMode == AudioMode.REENCODE ->
-                        bitrateDurationBytes(metadata.durationMs, request.audioBitrate ?: 0)
+                        bitrateDurationBytes(effectiveDurationMs, request.audioBitrate ?: 0)
                     else ->
                         bitrateDurationBytes(
-                            metadata.durationMs,
+                            effectiveDurationMs,
                             metadata.audioBitrate ?: CONSERVATIVE_COPY_AUDIO_BITRATE,
                         )
                 }
@@ -233,6 +254,7 @@ internal data class TranscodePlan(
         private const val MIN_OVERHEAD_BYTES = 4L * 1024L * 1024L
         private const val STORAGE_HEADROOM_BYTES = 64L * 1024L * 1024L
         private const val OVERLAPPING_TEMP_AND_PUBLIC_OUTPUTS = 2L
+        private const val MIN_TRIM_DURATION_MS = 1_000L
 
     }
 }

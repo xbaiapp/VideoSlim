@@ -64,6 +64,69 @@ void main() {
     expect(state.interactionLocked, isFalse);
   });
 
+  test(
+    'trim editing is exclusive and saves removes and clears one segment',
+    () {
+      state.completeRestoration();
+      expect(state.beginEditingTrim, throwsStateError);
+      state.setSelectedSource(
+        uri: 'content://video',
+        info: _videoInfo(durationMs: 10000),
+      );
+
+      state.beginEditingTrim();
+      expect(state.editingTrim, isTrue);
+      expect(state.interactionPhase, HomeInteractionPhase.editingTrim);
+      expect(state.beginTaskPreparation, throwsStateError);
+
+      const trim = VideoTrim(startMs: 1000, endMs: 5000);
+      state.update(() {
+        state.completeInteraction();
+        state.saveTrim(trim);
+      });
+      expect(state.trim, trim);
+
+      state.removeTrim();
+      expect(state.trim, isNull);
+      state.saveTrim(trim);
+      state.clearTrimForNewSource();
+      expect(state.trim, isNull);
+    },
+  );
+
+  test('invalid trim mutation rolls back the previous segment', () {
+    state.completeRestoration();
+    state.setSelectedSource(
+      uri: 'content://video',
+      info: _videoInfo(durationMs: 10000),
+    );
+    const trim = VideoTrim(startMs: 1000, endMs: 5000);
+    state.saveTrim(trim);
+
+    expect(
+      () => state.saveTrim(const VideoTrim(startMs: 1000, endMs: 70000)),
+      throwsArgumentError,
+    );
+    expect(state.trim, trim);
+    expect(
+      () => state.update(() {
+        state.removeTrim();
+        throw ArgumentError('forced failure');
+      }),
+      throwsArgumentError,
+    );
+    expect(state.trim, trim);
+  });
+
+  test('native recovery can retain trim without source metadata', () {
+    const restored = VideoTrim(startMs: 2000, endMs: 8000);
+
+    state.restoreTrim(restored);
+
+    expect(state.sourceInfo, isNull);
+    expect(state.trim, restored);
+  });
+
   test('entry B saves crop and selects preserve-quality', () {
     state.completeRestoration();
     state.setSelectedSource(uri: 'content://video', info: _videoInfo());
@@ -458,11 +521,11 @@ void main() {
   });
 }
 
-VideoInfo _videoInfo() => const VideoInfo(
+VideoInfo _videoInfo({int durationMs = 1000}) => VideoInfo(
   uri: 'content://video',
   fileName: 'video.mp4',
   fileSizeBytes: 10,
-  durationMs: 1000,
+  durationMs: durationMs,
   container: 'video/mp4',
   videoCodec: 'h264',
   width: 1920,

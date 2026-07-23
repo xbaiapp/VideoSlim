@@ -1,7 +1,7 @@
 # M4-B/F8 连续单段时间裁剪实施计划
 
 > **日期：** 2026-07-23
-> **状态：** `AUTHORIZED — READY FOR RED`
+> **状态：** `AUTOMATED VERIFIED — REVIEW PENDING`
 > **基线：** `65e4dee44fe1fbeec5135b199d326ca8673174eb`（`m4a/crop`）
 > **候选版本目标：** `1.8.0+24`
 > **唯一范围：** 一条来源视频的连续单段起止时间，与现有crop、Presentation、音频策略、压缩和metadata白名单在同一次Media3 Transformer导出中完成
@@ -42,6 +42,8 @@
 - Media3 1.10.1实证API：`MediaItem.ClippingConfiguration.Builder().setStartPositionMs(long).setEndPositionMs(long).setStartsAtKeyFrame(false)`，由`MediaItem.Builder.setClippingConfiguration(...)`接入。
 
 ## 3. RED→GREEN任务
+
+Tasks 1–7已完成；实现与测试文件均已进入待冻结工作树。
 
 ### Task 1：Dart trim契约与planner RED
 
@@ -152,6 +154,8 @@
 把版本独立递增到`1.8.0+24`。不修改application ID、签名策略或权限。
 
 ## 4. 自动验证门禁
+
+当前状态：第1–6项已通过；第7项起的冻结、唯一复审、ARM64候选与静态核验尚未完成。
 
 1. focused Dart/Kotlin测试先各自证明RED，再完成GREEN；
 2. `dart format --output=none --set-exit-if-changed lib test`；

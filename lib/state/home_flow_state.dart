@@ -149,6 +149,7 @@ enum HomeInteractionPhase {
   pickingSource,
   readingSourceMetadata,
   editingCrop,
+  editingTrim,
   selectingOutputLocation,
   validatingDestination,
 }
@@ -193,6 +194,7 @@ final class HomeFlowState extends ChangeNotifier {
   String? _publishedOutputFileName;
   VideoInfo? _sourceInfo;
   CropRect? _crop;
+  VideoTrim? _trim;
   VideoInfo? _outputInfo;
   AudioInfo? _outputAudioInfo;
   DeviceCapabilities? _capabilities;
@@ -224,6 +226,7 @@ final class HomeFlowState extends ChangeNotifier {
   bool get readingMetadata =>
       _interactionPhase == HomeInteractionPhase.readingSourceMetadata;
   bool get editingCrop => _interactionPhase == HomeInteractionPhase.editingCrop;
+  bool get editingTrim => _interactionPhase == HomeInteractionPhase.editingTrim;
   bool get selectingOutputLocation =>
       _interactionPhase == HomeInteractionPhase.selectingOutputLocation;
   bool get validatingDestination =>
@@ -255,6 +258,7 @@ final class HomeFlowState extends ChangeNotifier {
   String? get publishedOutputFileName => _publishedOutputFileName;
   VideoInfo? get sourceInfo => _sourceInfo;
   CropRect? get crop => _crop;
+  VideoTrim? get trim => _trim;
   VideoInfo? get outputInfo => _outputInfo;
   AudioInfo? get outputAudioInfo => _outputAudioInfo;
   DeviceCapabilities? get capabilities => _capabilities;
@@ -322,6 +326,16 @@ final class HomeFlowState extends ChangeNotifier {
     }
     _transitionInteraction(
       HomeInteractionPhase.editingCrop,
+      allowedFrom: const <HomeInteractionPhase>{HomeInteractionPhase.idle},
+    );
+  }
+
+  void beginEditingTrim() {
+    if (_selectedUri == null || _sourceInfo == null) {
+      throw StateError('Trim editing requires a selected video.');
+    }
+    _transitionInteraction(
+      HomeInteractionPhase.editingTrim,
       allowedFrom: const <HomeInteractionPhase>{HomeInteractionPhase.idle},
     );
   }
@@ -565,6 +579,37 @@ final class HomeFlowState extends ChangeNotifier {
     });
   }
 
+  void saveTrim(VideoTrim trim) {
+    _validateTrim(trim);
+    _mutate(() {
+      _trim = trim;
+      _errorText = null;
+    });
+  }
+
+  void restoreTrim(VideoTrim? trim) {
+    if (trim != null && _sourceInfo != null) _validateTrim(trim);
+    _mutate(() => _trim = trim);
+  }
+
+  void removeTrim() {
+    _mutate(() => _trim = null);
+  }
+
+  void clearTrimForNewSource() {
+    _mutate(() => _trim = null);
+  }
+
+  void _validateTrim(VideoTrim trim) {
+    final source = _sourceInfo;
+    if (source == null ||
+        trim.startMs < 0 ||
+        trim.durationMs < 1000 ||
+        trim.endMs > source.durationMs) {
+      throw ArgumentError.value(trim, 'trim', 'Invalid source-timeline trim');
+    }
+  }
+
   void setOutputInfo(VideoInfo? info) {
     _mutate(() => _outputInfo = info);
   }
@@ -744,6 +789,7 @@ final class HomeFlowState extends ChangeNotifier {
       _audioExtractBitrate = 128000;
       _sourceInfo = null;
       _crop = null;
+      _trim = null;
       _outputInfo = null;
       _outputAudioInfo = null;
       _outputPublished = false;
@@ -811,6 +857,7 @@ final class HomeFlowState extends ChangeNotifier {
     if (_selectedPreset == CompressionPreset.preserveQuality && _crop == null) {
       throw StateError('Preserve-quality requires a crop.');
     }
+    if (_trim != null && _sourceInfo != null) _validateTrim(_trim!);
   }
 
   @override
@@ -853,6 +900,7 @@ final class _HomeFlowStateSnapshot {
     required this.publishedOutputFileName,
     required this.sourceInfo,
     required this.crop,
+    required this.trim,
     required this.outputInfo,
     required this.outputAudioInfo,
     required this.capabilities,
@@ -898,6 +946,7 @@ final class _HomeFlowStateSnapshot {
         publishedOutputFileName: state._publishedOutputFileName,
         sourceInfo: state._sourceInfo,
         crop: state._crop,
+        trim: state._trim,
         outputInfo: state._outputInfo,
         outputAudioInfo: state._outputAudioInfo,
         capabilities: state._capabilities,
@@ -941,6 +990,7 @@ final class _HomeFlowStateSnapshot {
   final String? publishedOutputFileName;
   final VideoInfo? sourceInfo;
   final CropRect? crop;
+  final VideoTrim? trim;
   final VideoInfo? outputInfo;
   final AudioInfo? outputAudioInfo;
   final DeviceCapabilities? capabilities;
@@ -984,6 +1034,7 @@ final class _HomeFlowStateSnapshot {
     state._publishedOutputFileName = publishedOutputFileName;
     state._sourceInfo = sourceInfo;
     state._crop = crop;
+    state._trim = trim;
     state._outputInfo = outputInfo;
     state._outputAudioInfo = outputAudioInfo;
     state._capabilities = capabilities;

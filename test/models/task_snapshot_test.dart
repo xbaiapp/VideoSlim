@@ -67,6 +67,38 @@ void main() {
       expect(TaskSnapshot.fromMap(snapshot.toMap()).toMap(), snapshot.toMap());
     });
 
+    test('round trips exact time trim through the retry snapshot', () {
+      const retry = ProcessRequest(
+        uri: 'content://media/video/trim-source',
+        outputFileName: 'trimmed.mp4',
+        videoCodec: 'hevc',
+        videoBitrate: 2500000,
+        trimStartMs: 1234,
+        trimEndMs: 8765,
+        audioMode: 'copy',
+      );
+      const snapshot = TaskSnapshot(
+        taskId: 'trim-task',
+        state: TaskState.failed,
+        phase: TaskPhase.finished,
+        percent: 71,
+        sourceUri: 'content://media/video/trim-source',
+        outputFileName: 'trimmed.mp4',
+        retryRequest: retry,
+        startedAtEpochMs: 1784548800000,
+        errorCode: 'VIDEO_ENCODING_FAILED',
+      );
+
+      final decoded = TaskSnapshot.fromMap(snapshot.toMap());
+
+      expect(
+        decoded.retryRequest?.videoTrim,
+        const VideoTrim(startMs: 1234, endMs: 8765),
+      );
+      expect(decoded.retryRequest?.toChannelMap(), retry.toChannelMap());
+      expect(decoded.toMap(), snapshot.toMap());
+    });
+
     test(
       'audio snapshot round trips its exact retry request and destination',
       () {

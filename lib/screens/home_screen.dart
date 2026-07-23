@@ -26,6 +26,7 @@ import '../widgets/m2_compression_card.dart';
 import '../widgets/audio_extract_card.dart';
 import '../widgets/audio_result_card.dart';
 import '../widgets/crop_editor.dart';
+import '../widgets/trim_editor.dart';
 import '../widgets/video_info_card.dart';
 import 'debug_log_screen.dart';
 
@@ -83,6 +84,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool get _picking => _flow.picking;
   bool get _readingMetadata => _flow.readingMetadata;
   bool get _editingCrop => _flow.editingCrop;
+  bool get _editingTrim => _flow.editingTrim;
   bool get _selectingOutputLocation => _flow.selectingOutputLocation;
   bool get _validatingDestination => _flow.validatingDestination;
   bool get _preparing => _flow.preparing;
@@ -117,10 +119,13 @@ class _HomeScreenState extends State<HomeScreen> {
   String? get _errorText => _flow.errorText;
   bool get _invalidCropNeedsEdit =>
       _errorText != null && _lastFailureCode == 'INVALID_CROP';
+  bool get _invalidTrimNeedsEdit =>
+      _errorText != null && _lastFailureCode == 'INVALID_TRIM';
   String? get _publishedOutputUri => _flow.publishedOutputUri;
   String? get _publishedOutputFileName => _flow.publishedOutputFileName;
   VideoInfo? get _sourceInfo => _flow.sourceInfo;
   CropRect? get _crop => _flow.crop;
+  VideoTrim? get _trim => _flow.trim;
   VideoInfo? get _outputInfo => _flow.outputInfo;
   AudioInfo? get _outputAudioInfo => _flow.outputAudioInfo;
   Duration? get _processElapsed => _flow.processElapsed;
@@ -272,6 +277,7 @@ class _HomeScreenState extends State<HomeScreen> {
       settings: _compressionSettings,
       capabilities: capabilities,
       crop: _crop,
+      trim: _trim,
     );
   }
 
@@ -426,6 +432,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _lastVideoDecoderMode = snapshot.videoDecoderMode;
       _lastProcessRequest = snapshot.retryRequest;
       _flow.restoreCrop(snapshot.retryRequest?.crop);
+      _flow.restoreTrim(snapshot.retryRequest?.videoTrim);
       _lastAudioExtractRequest = snapshot.audioRetryRequest;
       final audioRetry = snapshot.audioRetryRequest;
       if (audioRetry != null) {
@@ -557,6 +564,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _flow.beginReadingSourceMetadata();
         _flow.setSelectedSource(uri: uri, info: null);
         _flow.clearCropForNewSource();
+        _flow.clearTrimForNewSource();
         _flow.setOutputInfo(null);
         _flow.setOutputAudioInfo(null);
         _flow.setActiveTaskKind(TaskKind.videoCompression);
@@ -685,6 +693,65 @@ class _HomeScreenState extends State<HomeScreen> {
       'M4-A 裁剪已移除',
       details: <String, Object?>{'preset': _selectedPreset?.name ?? 'custom'},
     );
+  }
+
+  Future<void> _editTrim() async {
+    final info = _sourceInfo;
+    final uri = _selectedUri;
+    if (_interactionLocked || info == null || uri == null) return;
+    _flow.beginEditingTrim();
+    try {
+      final trim = await Navigator.of(context).push<VideoTrim>(
+        MaterialPageRoute<VideoTrim>(
+          builder: (_) => TrimEditor(
+            engine: widget.engine,
+            uri: uri,
+            durationMs: info.durationMs,
+            initialTrim: _trim,
+          ),
+        ),
+      );
+      if (!mounted || !_editingTrim) return;
+      _flow.update(() {
+        _flow.completeInteraction();
+        if (trim != null) {
+          _flow.saveTrim(trim);
+          if (_lastFailureCode == 'INVALID_TRIM') {
+            _flow.setErrorText(null);
+          }
+        }
+      });
+      if (trim != null) {
+        _logFlow(
+          'M4-B 时间裁剪已保存',
+          details: <String, Object?>{
+            'trimStartMs': trim.startMs,
+            'trimEndMs': trim.endMs,
+          },
+        );
+      }
+    } catch (error, stackTrace) {
+      if (mounted && _editingTrim) {
+        _flow.update(() {
+          _flow.completeInteraction();
+          _flow.setErrorText('无法打开时间裁剪编辑器，请稍后重试。');
+        });
+      }
+      _logError('M4-B 时间裁剪编辑失败', error, stackTrace);
+    } finally {
+      if (mounted && _editingTrim) _flow.completeInteraction();
+    }
+  }
+
+  void _removeTrim() {
+    if (_interactionLocked || _trim == null) return;
+    _flow.update(() {
+      _flow.removeTrim();
+      if (_lastFailureCode == 'INVALID_TRIM') {
+        _flow.setErrorText(null);
+      }
+    });
+    _logFlow('M4-B 时间裁剪已移除');
   }
 
   Future<void> _extractAudio() async {
@@ -2112,7 +2179,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       outputAudioInfo == null &&
                       !_outputPublished &&
                       (_errorText == null ||
-                          _lastFailureCode == 'INVALID_CROP') &&
+                          _lastFailureCode == 'INVALID_CROP' ||
+                          _lastFailureCode == 'INVALID_TRIM') &&
                       !_processing &&
                       !_finishing &&
                       !_preparing) ...<Widget>[
@@ -2125,6 +2193,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       customAudioMode: _customAudioMode,
                       customAudioBitrate: _customAudioBitrate,
                       crop: _crop,
+                      trim: _trim,
+                      sourceDurationMs: sourceInfo.durationMs,
                       plan: _compressionPlan,
                       capabilitiesLoading: _capabilitiesLoading,
                       hdrSource: sourceInfo.isHdr,
@@ -2132,6 +2202,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           ? '处理状态连接已中断，请重启应用后再压缩。'
                           : _invalidCropNeedsEdit
                           ? '请先重新编辑或移除无效的裁剪区域。'
+                          : _invalidTrimNeedsEdit
+                          ? '请先重新编辑或移除无效的时间区间。'
                           : !_capabilitiesLoading && _capabilities == null
                           ? '无法检查手机的处理能力，请重新选择视频或重启应用。'
                           : _compressionPlan?.isSupported == false
@@ -2165,6 +2237,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       onEditCrop: _interactionLocked ? null : _editCrop,
                       onRemoveCrop: _interactionLocked ? null : _removeCrop,
+                      onEditTrim: _interactionLocked ? null : _editTrim,
+                      onRemoveTrim: _interactionLocked ? null : _removeTrim,
                       onChooseOutputLocation: _interactionLocked
                           ? null
                           : _chooseOutputFolder,
@@ -2175,6 +2249,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           !_interactionLocked &&
                               !_progressStreamClosed &&
                               !_invalidCropNeedsEdit &&
+                              !_invalidTrimNeedsEdit &&
                               !_capabilitiesLoading &&
                               !_outputLocationLoading &&
                               _outputLocation.writable &&
@@ -3162,6 +3237,7 @@ String _messageForCode(
     'VIDEO_ENCODING_FAILED' => '手机没能按当前设置完成压缩。可按原设置重试，或返回调整格式或画质。',
     'CAPTURE_METADATA_FAILED' => '无法确认原拍摄时间或位置已保留，未保存不完整结果。',
     'INVALID_CROP' => '裁剪区域无效，请重新框选。',
+    'INVALID_TRIM' => '时间裁剪范围无效，请重新选择。',
     'AUDIO_TRACK_MISSING' => '这个视频没有可提取的音轨。',
     'AUDIO_COPY_UNSUPPORTED' => '原音轨不是 AAC，无法无损提取。请改用 AAC 转码。',
     'AUDIO_CHANNEL_LAYOUT_UNSUPPORTED' => '目前只支持单声道或双声道音轨。原视频没有被修改。',
