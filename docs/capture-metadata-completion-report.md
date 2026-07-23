@@ -2,9 +2,9 @@
 
 > **日期：** 2026-07-23
 > **版本：** `1.6.0+21`
-> **候选源代码：** `497c5d2c028213835825f1aea1df5d356450d7f2`
-> **候选 tree：** `4a51769e6764c296dbcc0ccf6e188de888d9de9c`
-> **状态：** `BLOCKED — EXACT-SHA ROUTE A FAIL; DO NOT DISTRIBUTE`
+> **候选源代码：** `a92d1cd4f5bf6b4b7dd0a7aaded199c6e0b230e8`
+> **候选 tree：** `03a0c54a80acfcee4e627ff7967e8c777743c61d`
+> **状态：** `CANDIDATE READY — DEVICE AND REAL-SOURCE ACCEPTANCE PENDING`
 
 ## 1. 交付范围
 
@@ -12,10 +12,11 @@
 
 1. 读取并规范化来源中可可靠解释的拍摄/容器创建时间与 ISO 6709 GPS；
 2. 通过 Media3 `1.10.1` 的 `InAppMp4Muxer.MetadataProvider`，在现有单次视频转码中只写入时间和位置；
-3. Transformer 完成后、公开 URI 分配前回读最终临时 MP4，按秒精度和 `0.0001°` 容差核验；
-4. 已承诺字段缺失/不匹配时返回 `CAPTURE_METADATA_FAILED`，不发布不完整结果；
-5. 默认 MediaStore 视频发布从已验证的来源时间设置 `DATE_TAKEN`；
-6. 视频和音频输出名包含最终计划、目标码率、毫秒处理时间和四位随机十六进制 token。
+3. 来源时间缺失时用1904/zero sentinel覆盖Media3缺省处理时间，但不把sentinel视为来源时间或送入 `DATE_TAKEN`；
+4. Transformer 完成后、公开 URI 分配前回读最终临时 MP4，对时间/GPS同时核验必有与必无；
+5. 应有字段缺失/不匹配或应无字段意外出现时返回 `CAPTURE_METADATA_FAILED`，不发布不完整结果；
+6. 默认 MediaStore 视频发布从已验证的来源时间设置 `DATE_TAKEN`；
+7. 视频和音频输出名包含最终计划、目标码率、毫秒处理时间和四位随机十六进制 token。
 
 明确没有增加：隐私模式、完整 metadata 复制、设备定位、反向地理编码、MOV 输出、第二次 remux/有损编码、Media3 升级、音频继承视频时间/GPS、M4-B 时间裁剪或并发/recovery重构。
 
@@ -23,7 +24,7 @@
 
 ### Android
 
-- `CaptureMetadata.kt`：安全模型、带时区日期解析、ISO 6709解析、muxer白名单 provider和输出核验器；
+- `CaptureMetadata.kt`：安全模型、带时区日期解析、ISO 6709解析、muxer白名单 provider、无时间sentinel和双向输出核验器；
 - `VideoMetadataReader.kt`：容器字段优先、MediaStore正数 `DATE_TAKEN` fallback，不把值送入 Flutter wire；
 - `TranscodeEngine.kt`：显式 `InAppMp4Muxer.Factory(policy)`、临时 MP4核验先于 publication；
 - `MediaStoreSaver.kt`：只对视频 MediaStore insert写可信 `DATE_TAKEN`，SAF保持字节发布边界；
@@ -39,12 +40,12 @@
 
 ## 3. 自动化证据
 
-候选 SHA `497c5d2...`：
+候选 SHA `a92d1cd...`：
 
 - Dart format：PASS；
 - Flutter analyze：PASS，0 issues；
 - Flutter tests：`219/219`；
-- Android JVM tests：`337/337`，0 failures/errors/skipped；
+- Android JVM tests：`341/341`，0 failures/errors/skipped；
 - Android debug/release lint：PASS；
 - Android debug/release assemble：PASS；
 - ARM64 Flutter release build：PASS；
@@ -57,7 +58,7 @@
 
 旧冻结点 `47c5448...` 的两路reviewer均超时且没有verdict，因此不计PASS；该冻结点随后又因AAC兼容重试名称仍显示copy而失效。问题通过失败测试复现并在唯一修订中修复。
 
-最终复审目标固定为：
+被阻止候选的最终复审目标为：
 
 ```text
 497c5d2c028213835825f1aea1df5d356450d7f2
@@ -68,12 +69,22 @@
 
 Route A通过本地Media3 `1.10.1`字节码确认：`Mp4Muxer.MetadataCollector`在未收到显式时间时使用 `System.currentTimeMillis()` 初始化时间戳。当前policy在来源时间缺失时不写 `Mp4TimestampData`，而verifier又不检查“必须缺失”；因此无时间或仅GPS来源可能发布带处理时间的MP4，违反“不伪造”契约。该问题阻止交付和真机验收。
 
+项目所有者随后明确授权一次只处理该blocker的额外修订。新exact-SHA：
+
+```text
+a92d1cd4f5bf6b4b7dd0a7aaded199c6e0b230e8
+```
+
+- 修订：无可靠来源时间时写 `Mp4TimestampData(0, 0)` 覆盖Media3当前时间；resolved metadata和 `DATE_TAKEN` 仍保持空。
+- 修订：verifier不再对空期望提前返回，并拒绝任何意外时间或位置。
+- focused corrective review：**PASS — no BLOCKER/IMPORTANT finding**。
+
 ## 5. APK 身份
 
-- 文件：`VideoSlim-1.6.0+21-497c5d2-arm64-v8a-release.apk`
-- 隔离路径：`/root/artifacts/videoslim/capture-metadata/blocked-497c5d2/VideoSlim-1.6.0+21-497c5d2-arm64-v8a-release.apk`
+- 文件：`VideoSlim-1.6.0+21-a92d1cd-arm64-v8a-release.apk`
+- 路径：`/root/artifacts/videoslim/capture-metadata/VideoSlim-1.6.0+21-a92d1cd-arm64-v8a-release.apk`
 - 大小：`18,378,659` bytes
-- SHA-256：`f1c035effffafafb319cedec4d1de8fe4f41c84c0009afc6f9ddb66f0e94b6b3`
+- SHA-256：`fd44a68008e89aa2a72ed9ace9db08ac0da73d651fec4e9b754047a9fb20f610`
 - package：`com.videoslim.videoslim`
 - versionName/versionCode：`1.6.0 / 21`
 - minSdk/targetSdk/compileSdk：`26 / 36 / 36`
@@ -83,11 +94,11 @@ Route A通过本地Media3 `1.10.1`字节码确认：`Mp4Muxer.MetadataCollector`
 - 权限相对旧候选：无变化；没有 `INTERNET`、`READ_MEDIA_VIDEO`、`READ_MEDIA_AUDIO` 或 `MANAGE_EXTERNAL_STORAGE`
 - 常见凭据模式扫描：PASS
 
-同目录包含 `BLOCKED.txt`、`SHA256SUMS` 和 `verification.txt`。哈希核验曾通过，但该事实不改变候选已被隔离、不得分发。
+同目录包含 `SHA256SUMS` 和 `verification.txt`；哈希核验通过。被阻止的 `497c5d2` 和已作废的 `47c5448` 分别保留在明确命名的隔离子目录，不得分发。
 
-## 6. 被阻止的真实验收
+## 6. 尚未开始的真实验收
 
-Route A blocker解除、重新完成门禁并形成新候选前，不得开始设备验收。以下均不能写为PASS：
+当前已允许开始设备验收，但以下项目在实际执行并记录证据前均不能写为PASS：
 
 - 真实 MOV/MP4 输入与输出的时间/GPS atom对照；
 - Media3单次 mux 在实际设备上的写入行为；

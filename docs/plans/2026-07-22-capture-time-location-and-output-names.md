@@ -3,7 +3,7 @@
 > **日期：** 2026-07-22
 > **授权：** 项目所有者已批准“先写规划，再开始实施”
 > **基线：** `c8c9e070ead6`（`m4a/crop`，已交付裁剪修复候选 `1.5.0+20`）
-> **状态：** CORRECTIVE REVISION AUTHORIZED — DEFAULT-TIME SENTINEL + REQUIRED-ABSENCE VERIFICATION
+> **状态：** CORRECTIVE REVISION COMPLETE — AUTOMATED GATES + FOCUSED REVIEW PASS; DEVICE ACCEPTANCE PENDING
 > **规模评级：** 中等偏小；若需要第二次 remux、专用 MOV/MP4 writer 或 Media3 升级，立即停止并重新评级
 
 ## 0. 2026-07-23 额外修订授权
@@ -428,10 +428,10 @@ CAPTURE_METADATA_FAILED
 
 ## 12. 实施结果（2026-07-23）
 
-- Android 原生层已实现来源时间/GPS解析、Media3 `InAppMp4Muxer.MetadataProvider` 白名单注入、最终临时 MP4 发布前核验、`CAPTURE_METADATA_FAILED` 和视频 MediaStore `DATE_TAKEN`。
+- Android 原生层已实现来源时间/GPS解析、Media3 `InAppMp4Muxer.MetadataProvider` 白名单注入、无来源时间sentinel、最终临时MP4必有/必无发布前核验、`CAPTURE_METADATA_FAILED` 和视频 MediaStore `DATE_TAKEN`。
 - Dart 层已实现共享输出名 builder；视频名称使用最终 codec/目标码率，音频区分 copy 与 AAC 目标码率，并包含毫秒处理时间和四位随机十六进制 token。
 - 没有新增 UI 模式、wire schema、第二服务、第二次转码/remux、Media3 升级或裁剪交互改动。
-- `flutter analyze`：0 issues；Flutter tests：`219/219`；Android JVM tests：`337/337`，0 failures/errors/skipped。
+- `flutter analyze`：0 issues；Flutter tests：`219/219`；Android JVM tests：`341/341`，0 failures/errors/skipped。
 - Android debug/release lint 与 debug/release assemble：PASS；候选版本递增为 `1.6.0+21`。
 - 构建机没有连接 Android 设备，也没有项目所有者的未加工 iPhone/Pixel样本；最终 MP4 atom、MediaStore相册排序和 SAF 行为仍须按 `docs/capture-metadata-device-acceptance.md` 真机验证，所有相关行保持 `PENDING`。
-- exact-SHA 复审、最终 APK 身份和哈希由候选完成报告记录，不在规划文档中预填。
+- 被阻止候选和focused corrective exact-SHA复审、最终APK身份与哈希均由候选完成报告记录。

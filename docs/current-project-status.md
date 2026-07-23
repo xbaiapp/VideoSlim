@@ -1,9 +1,9 @@
 # VideoSlim 当前项目状态
 
 > **更新时间：** 2026-07-23
-> **当前阶段：** 拍摄时间/GPS保留与输出命名 `BLOCKED — EXACT-SHA ROUTE A FAIL`
+> **当前阶段：** 拍摄时间/GPS保留与输出命名 `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`
 > **当前候选版本：** `1.6.0+21`
-> **当前候选源代码：** `497c5d2c028213835825f1aea1df5d356450d7f2`
+> **当前候选源代码：** `a92d1cd4f5bf6b4b7dd0a7aaded199c6e0b230e8`
 > **当前已接受发布基线：** M3 `19abfb7da2e8fa028e7200000f0dc2a114bc840e`（`1.4.3+18`）
 
 ## 1. 里程碑进度
@@ -15,7 +15,7 @@
 | M2 压缩完整化 | `ACCEPTED — private scope` | 预设/自定义、VBR、前台服务、通知、取消、恢复、SAF、兼容 Decoder 重试可用 |
 | M3 音频提取 | `ACCEPTED — private scope` | 项目所有者于 2026-07-22 明确报告当前 M3 候选测试成功 |
 | M4-A 画面裁剪 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 自动化、构建和静态 APK 检查通过；真机十项矩阵尚未执行 |
-| F7 拍摄时间/GPS与输出命名增强 | `BLOCKED — EXACT-SHA REVIEW FAIL` | Media3缺省处理时间未被覆盖或做缺失核验；当前APK已隔离，不进入真机验收 |
+| F7 拍摄时间/GPS与输出命名增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 缺省处理时间blocker已外科修订；完整门禁与focused exact-SHA review通过 |
 | M4-B 时间裁剪 | `NOT STARTED — NOT AUTHORIZED` | F8 trim 不在 M4-A 授权范围 |
 | M5 自用版打磨 | NOT STARTED | 历史、批量、目标大小等未实现 |
 | M6 上架/iOS | NOT STARTED | 生产签名、商店和 iOS 引擎未实现 |
@@ -27,15 +27,15 @@
 - 应用：VideoSlim / 视频瘦身
 - 包名：`com.videoslim.videoslim`
 - 版本：`1.6.0+21`
-- 候选源代码：`497c5d2c028213835825f1aea1df5d356450d7f2`
-- 候选 tree：`4a51769e6764c296dbcc0ccf6e188de888d9de9c`
+- 候选源代码：`a92d1cd4f5bf6b4b7dd0a7aaded199c6e0b230e8`
+- 候选 tree：`03a0c54a80acfcee4e627ff7967e8c777743c61d`
 - Android：minSdk 26、targetSdk 36、compileSdk 36
 - Media3：`1.10.1`
 - Release ABI：仅 `arm64-v8a`
 - 签名：Android Debug certificate、APK Signature Scheme v2；不是商店生产签名
-- APK：`blocked-497c5d2/VideoSlim-1.6.0+21-497c5d2-arm64-v8a-release.apk`（隔离，禁止分发）
+- APK：`VideoSlim-1.6.0+21-a92d1cd-arm64-v8a-release.apk`（仅供私有真机验收）
 - APK 大小：`18,378,659` bytes
-- APK SHA-256：`f1c035effffafafb319cedec4d1de8fe4f41c84c0009afc6f9ddb66f0e94b6b3`
+- APK SHA-256：`fd44a68008e89aa2a72ed9ace9db08ac0da73d651fec4e9b754047a9fb20f610`
 
 M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被新候选覆盖或改写。
 
@@ -56,9 +56,9 @@ M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被
 
 ### 拍摄时间、位置与输出命名
 
-- 只读取来源中存在且可可靠解释的原拍摄/容器时间和GPS；缺失或无效保持缺失，不使用处理时间、mtime或设备位置伪造；
+- 只读取来源中存在且可可靠解释的原拍摄/容器时间和GPS；无时间时用不被视为来源时间的1904/zero sentinel覆盖Media3处理时间默认值，不进入 `DATE_TAKEN`；
 - 通过Media3 `1.10.1` `InAppMp4Muxer`在现有单次转码中写入时间/GPS，不做第二次remux；
-- 临时MP4在公开URI分配前回读核验，已承诺字段不匹配时不发布；
+- 临时MP4在公开URI分配前回读核验，时间/GPS应有不匹配或应无却出现时都不发布；
 - 默认MediaStore视频写入可信 `DATE_TAKEN`；SAF只承诺文件内部metadata，音频不继承；
 - 视频名包含最终codec和目标码率；音频区分copy/AAC，copy兼容重试切换为AAC时也重新生成真实名称，并包含毫秒时间和防重名token。
 
@@ -81,23 +81,23 @@ M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被
 
 ## 4. 当前候选自动化与证据
 
-候选源代码 `497c5d2...`：
+候选源代码 `a92d1cd...`：
 
 - Dart format：PASS；
 - Flutter analyze：PASS，0 issues；
 - Flutter tests：`219/219`；
-- Android JVM tests：`337/337`，0 failures/errors/skipped；
+- Android JVM tests：`341/341`，0 failures/errors/skipped；
 - Android debug/release lint：PASS；
 - Debug/Release assemble：PASS；
 - ARM64 Flutter Release APK：PASS；
 - ZIP、zipalign、v2 签名、package/version/SDK/ABI、权限和静态凭据扫描：PASS；
-- 旧 `47c5448...` 双路复审均超时且随后失效，不计PASS；最终 `497c5d2...` Route A：FAIL（处理时间伪造成来源时间的blocker），Route B：PASS。
+- 旧 `47c5448...` 双路复审均超时且失效，不计PASS；`497c5d2...` Route A：FAIL、Route B：PASS；当前 `a92d1cd...` focused corrective review：PASS，无BLOCKER/IMPORTANT finding。
 
 构建机没有连接 Android 设备。上述证据不能替代真实时间/GPS atom、MediaStore图库排序、SAF、裁剪输出、旋转方向、codec、通知、后台、锁屏、取消、恢复或文件安全验收。
 
 ## 5. 真机验收状态
 
-`docs/capture-metadata-device-acceptance.md` 已被Route A blocker阻止，不得执行；独立的M4-A裁剪矩阵仍保持 `PENDING`，包括：
+`docs/capture-metadata-device-acceptance.md` 现可执行；独立的M4-A裁剪矩阵也仍保持 `PENDING`，包括：
 
 1. 0°/90°/180°/270° 框选与输出对齐；
 2. 五种比例与自由拖拽；
@@ -123,7 +123,7 @@ M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被
 
 ## 7. 下一步与禁止范围
 
-下一步必须由项目所有者决定是否额外授权一次外科手术式修订：在来源时间缺失时显式覆盖Media3当前时间默认值，并对时间/GPS的必有与必无同时做发布前核验。未获授权前不得修改生产代码、构建或交付 `1.6.0+21`。
+下一步是安装 `a92d1cd...` APK并执行真实iPhone/Pixel来源、MediaStore图库和SAF矩阵。不得再自动追加生产修订。
 
 - 若出现无法由显示坐标与 ≤2px 取整解释的错位，停止验收并报告；不得改用中间视频后二次有损转码。
 - 若发生源文件/旧输出丢失、覆盖、误删或修改，立即阻止候选。

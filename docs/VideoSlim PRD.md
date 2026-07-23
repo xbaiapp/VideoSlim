@@ -4,7 +4,7 @@
 |---|---|
 | 文档版本 | v1.10（增加原拍摄时间/GPS保留、发布前核验与输出命名契约） |
 | 日期 | 2026-07-23 |
-| 状态 | M3 `ACCEPTED — private scope`；M4-A `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`（`d41e21c...` / App `1.5.0+20`）；拍摄时间/GPS与命名候选 `497c5d2...` 被exact-SHA Route A blocker阻止，禁止分发/真机验收；M4-B 未授权 |
+| 状态 | M3 `ACCEPTED — private scope`；M4-A `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`（`d41e21c...` / App `1.5.0+20`）；拍摄时间/GPS与命名候选 `a92d1cd...` 已修订缺省处理时间blocker并通过完整门禁/focused review，待真实来源/设备验收；M4-B 未授权 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 

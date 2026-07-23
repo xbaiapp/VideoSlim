@@ -3,8 +3,8 @@
 > **用途：** 给新的 AI/开发者一个可验证的当前项目入口。先读本文，再决定是否需要展开 PRD 和源码。
 > **生成日期：** 2026-07-23
 > **当前候选版本：** `1.6.0+21`
-> **当前候选代码 SHA：** `497c5d2c028213835825f1aea1df5d356450d7f2`
-> **阶段：** 拍摄时间/GPS保留与命名增强 `BLOCKED — EXACT-SHA ROUTE A FAIL`；M4-A仍待完整真机矩阵；M3 `1.4.3+18` 仍是当前已接受发布基线
+> **当前候选代码 SHA：** `a92d1cd4f5bf6b4b7dd0a7aaded199c6e0b230e8`
+> **阶段：** 拍摄时间/GPS保留与命名增强候选已完成缺省处理时间修订、完整门禁和focused exact-SHA review，待真实来源/设备验收；M4-A仍待完整真机矩阵；M3 `1.4.3+18` 仍是当前已接受发布基线
 > **安全：** 凭据、用户媒体、运行时数据库和私有日志不属于本交接包；任何秘密值只能写为 `[REDACTED]`。
 
 ## 1. 先读什么
@@ -50,15 +50,15 @@ VideoSlim 是 Android 本地媒体工具：
 | M2 | `ACCEPTED — private scope` | 完整压缩、前台任务、取消、恢复、SAF 和兼容 Decoder 重试 |
 | M3 | `ACCEPTED — private scope` | AAC 无损直提和 AAC 强制重编码；所有者于 2026-07-22 报告测试成功 |
 | M4-A | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | F5 画面裁剪已实现；自动化与候选构建通过，真机矩阵未执行 |
-| F7 metadata/name增强 | `BLOCKED — EXACT-SHA REVIEW FAIL` | 无来源时间时Media3缺省处理时间未被覆盖/拒绝；当前APK禁止分发 |
+| F7 metadata/name增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 无来源时间改用unknown sentinel并增加必无核验；focused review通过 |
 | M4-B | `NOT STARTED — NOT AUTHORIZED` | F8 时间裁剪未实现、未授权 |
 | M5/M6 | NOT STARTED | 打磨、批量、目标大小、iOS/上架 |
 
-当前被隔离APK（不得分发或安装）：
+当前私有真机验收APK：
 
 ```text
-VideoSlim-1.6.0+21-497c5d2-arm64-v8a-release.apk
-SHA-256 f1c035effffafafb319cedec4d1de8fe4f41c84c0009afc6f9ddb66f0e94b6b3
+VideoSlim-1.6.0+21-a92d1cd-arm64-v8a-release.apk
+SHA-256 fd44a68008e89aa2a72ed9ace9db08ac0da73d651fec4e9b754047a9fb20f610
 package com.videoslim.videoslim
 version 1.6.0+21
 ```
@@ -178,12 +178,12 @@ M4-A 修复候选代码 `d41e21c...`：
 - 当前手势修复 diff 的唯一 focused review：PASS；慢速亚像素累计与自由模式固定对边 RED→GREEN 回归测试通过；
 - 构建机无连接设备，`docs/m4-device-acceptance.md` 全部保持 PENDING。
 
-被阻止的 metadata/name候选代码 `497c5d2...`：
+当前 metadata/name候选代码 `a92d1cd...`：
 
 - Flutter analyze：PASS；Flutter tests：219/219；
-- Android JVM tests：337/337；debug/release lint 与 assemble：PASS；
+- Android JVM tests：341/341；debug/release lint 与 assemble：PASS；
 - ARM64 APK package/version/SDK/ABI、zipalign、v2签名、权限diff与常见凭据模式扫描：PASS；
-- 旧 `47c5448...` 双路复审均超时且被AAC重试命名修订失效，不计PASS；最终 `497c5d2...` Route A：FAIL（Media3缺省处理时间伪造blocker），Route B：PASS；
+- 旧 `47c5448...` 双路复审均超时且失效，不计PASS；`497c5d2...` Route A：FAIL、Route B：PASS；当前缺省时间修订的focused exact-SHA review：PASS，无BLOCKER/IMPORTANT finding；
 - `docs/capture-metadata-device-acceptance.md` 的真实iPhone/Pixel、MediaStore与SAF矩阵全部保持PENDING。
 
 远端 CI 不是全绿：主 Flutter/Android job 全部通过，但 API 35 x86_64 instrumentation job 因 runner 中 `sdkmanager: command not found` 在该 job 的应用/instrumentation 构建前失败，emulator instrumentation 未执行。
@@ -196,7 +196,7 @@ M4-A 修复候选代码 `d41e21c...`：
 - Task 3 Slice B 未集成；其 worktree/patch 是冻结研究，不是产品代码。
 - Release 使用 Debug certificate，不是生产签名。
 - M4-A crop 已实现但尚未真机接受；M4-B trim 仍未实现、未授权。
-- `1.6.0+21` 已被静态exact-SHA复审阻止：来源时间缺失时不能让Media3的处理时间默认值进入输出；不得安装或启动metadata真机验收。
+- `a92d1cd...` 已用1904/zero sentinel覆盖Media3处理时间默认值，并对时间/GPS执行必有与必无核验；focused review通过，但真机矩阵未完成，不得提前写为ACCEPTED。
 
 ## 8. M4-A 实现边界与剩余验收
 
