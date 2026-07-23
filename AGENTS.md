@@ -10,6 +10,7 @@
 - 项目所有者已于 2026-07-22 授权拍摄时间/GPS保留和输出命名增强；范围固定为“仅保留来源中存在且可靠的时间与位置”，不增加隐私模式、完整 metadata 复制、第二次 remux 或音频继承。真机结论记录在 `docs/capture-metadata-device-acceptance.md`。
 - 项目所有者于2026-07-23在既定修订预算用尽后，额外授权一次仅用于修复Media3缺省处理时间和必无字段核验的外科手术式修订；metadata核心候选为 `a92d1cd4f5bf6b4b7dd0a7aaded199c6e0b230e8`，完整自动化门禁和focused review已通过。一条Pixel设备任务随后证明“时间存在、位置缺失”的App内核验与发布成功。
 - 同日设备测试发现约1 MiB日志复制触发Android `TransactionTooLargeException`；项目所有者明确选择小修。当前候选 `b0267a0b959ccb46785daa1c91d0be96b5a0ef98` 仅将剪贴板载荷限制为最近128 KiB完整行、保留完整文件分享并递增到 `1.6.1+22`，不修改媒体生产路径，也不自动授权其他生产改动。
+- 项目所有者于2026-07-23批准把C轨与M4-B/M4-C规划纳入仓库，并明确选择 **C1a低收益/可能变大提示** 作为首个代码项。C1a范围仅限Dart planner、S3单一提示/确认流程及测试：不改目标码率、不阻止发布、不改Kotlin/Media3/publication/recovery/版本号。C1b、C2、C3、M4-B、M4-C仍未授权，不得并行开工。
 - 未提供逐项真机证据的矩阵行不得反向预填 PASS，private-scope 接受不得扩写为生产发布或多设备保证。
 - 当前已知限制见 `docs/known-debt.md`。
 

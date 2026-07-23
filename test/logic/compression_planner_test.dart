@@ -282,21 +282,53 @@ void main() {
       expect(plan.estimatedOutputBytes, 1136250000);
     });
 
-    test('flags low savings at 90 percent of source video bitrate', () {
-      CompressionPlan planAt(int bitrate) => planner.plan(
-        source: source(videoBitrate: 10000000),
-        settings: CompressionSettings.custom(
+    test(
+      'flags low savings from the conservative output bound and known source size',
+      () {
+        const settings = CompressionSettings.custom(
           resolution: CompressionResolution.original,
           videoCodec: VideoCodec.hevc,
-          videoBitrate: bitrate,
+          videoBitrate: 2500000,
           audioMode: CompressionAudioMode.copy,
-        ),
-        capabilities: allEncoders,
-      );
+        );
+        CompressionPlan planFor({
+          required int fileSizeBytes,
+          int sourceVideoBitrate = 10000000,
+        }) => planner.plan(
+          source: source(
+            fileSizeBytes: fileSizeBytes,
+            videoBitrate: sourceVideoBitrate,
+          ),
+          settings: settings,
+          capabilities: allEncoders,
+        );
 
-      expect(planAt(8999999).hasLowSavings, isFalse);
-      expect(planAt(9000000).hasLowSavings, isTrue);
-    });
+        final probe = planFor(fileSizeBytes: 1);
+        final exactFifteenPercentSavingsSourceBytes =
+            (probe.estimatedOutputMaxBytes * 100 + 84) ~/ 85;
+
+        expect(
+          planFor(
+            fileSizeBytes: exactFifteenPercentSavingsSourceBytes,
+          ).hasLowSavings,
+          isFalse,
+        );
+        expect(
+          planFor(
+            fileSizeBytes: exactFifteenPercentSavingsSourceBytes - 1,
+          ).hasLowSavings,
+          isTrue,
+        );
+        expect(planFor(fileSizeBytes: 0).hasLowSavings, isFalse);
+        expect(
+          planFor(
+            fileSizeBytes: exactFifteenPercentSavingsSourceBytes - 1,
+            sourceVideoBitrate: 1,
+          ).hasLowSavings,
+          isTrue,
+        );
+      },
+    );
 
     test('warns only above six hours or 50 billion source bytes', () {
       CompressionPlan planFor({required int durationMs, required int bytes}) =>

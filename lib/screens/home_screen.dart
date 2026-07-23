@@ -53,6 +53,8 @@ class HomeScreen extends StatefulWidget {
 
 enum _ImportSource { gallery, files }
 
+enum _PlanConfirmation { cancel, proceed, usePreserveQuality }
+
 class _HomeScreenState extends State<HomeScreen> {
   late final StreamSubscription<ProgressEvent> _progressSubscription;
   late final HomeFlowState _flow;
@@ -1215,12 +1217,20 @@ class _HomeScreenState extends State<HomeScreen> {
         ).showSnackBar(const SnackBar(content: Text('保存文件夹权限已失效，请点“重新选择”。')));
         return;
       }
-      final confirmed = await _confirmPlan(plan, hdrSource: info.isHdr);
+      final confirmation = await _confirmPlan(plan, hdrSource: info.isHdr);
       if (!_ownsDestinationValidation(generation) ||
           _outputLocationRevision != verifiedRevision) {
         return;
       }
-      if (!confirmed) return;
+      switch (confirmation) {
+        case _PlanConfirmation.cancel:
+          return;
+        case _PlanConfirmation.usePreserveQuality:
+          _flow.selectCompressionPreset(CompressionPreset.preserveQuality);
+          return;
+        case _PlanConfirmation.proceed:
+          break;
+      }
       if (_selectedUri != uri || !identical(_sourceInfo, info)) return;
 
       final startedAt = _now();
@@ -1376,12 +1386,12 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<bool> _confirmPlan(
+  Future<_PlanConfirmation> _confirmPlan(
     CompressionPlan plan, {
     required bool hdrSource,
   }) async {
     final warnings = <String>[
-      if (plan.hasLowSavings) '该视频本身已经比较精简，压缩后可能节省不多。',
+      if (plan.hasLowSavings) '该视频已经很小，压缩收益有限，甚至可能变大。',
       if (plan.isOutsideVerifiedRange) '这个视频较大或较长，尚未经过完整验证，可能无法一次完成。',
       if (plan.usedCodecFallback && _selectedPreset != null)
         '当前手机无法使用首选格式，将调整为 H.264 格式；输出文件可能稍大。',
@@ -1389,26 +1399,54 @@ class _HomeScreenState extends State<HomeScreen> {
         '当前手机无法使用你选择的 HEVC。继续后将调整为 H.264 格式，输出文件可能稍大。',
       if (hdrSource) 'HDR 视频会转换为普通画面，颜色可能略有变化。',
     ];
-    if (warnings.isEmpty) return true;
-    final confirmed = await showDialog<bool>(
+    if (warnings.isEmpty) return _PlanConfirmation.proceed;
+    final confirmation = await showDialog<_PlanConfirmation>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('开始前请确认'),
         content: Text(warnings.join('\n\n')),
         actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('返回调整'),
-          ),
-          FilledButton(
-            key: const ValueKey<String>('confirm-compression'),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('仍然开始'),
-          ),
+          if (plan.hasLowSavings) ...<Widget>[
+            if (plan.crop != null &&
+                _selectedPreset != CompressionPreset.preserveQuality)
+              TextButton(
+                key: const ValueKey<String>(
+                  'use-preserve-quality-for-low-savings',
+                ),
+                onPressed: () => Navigator.of(
+                  context,
+                ).pop(_PlanConfirmation.usePreserveQuality),
+                child: const Text('保持画质（仅裁剪）'),
+              ),
+            TextButton(
+              key: const ValueKey<String>('cancel-low-savings-compression'),
+              onPressed: () =>
+                  Navigator.of(context).pop(_PlanConfirmation.cancel),
+              child: Text(plan.crop == null ? '暂不处理' : '取消'),
+            ),
+            FilledButton(
+              key: const ValueKey<String>('confirm-compression'),
+              onPressed: () =>
+                  Navigator.of(context).pop(_PlanConfirmation.proceed),
+              child: const Text('仍按原目标压缩'),
+            ),
+          ] else ...<Widget>[
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(context).pop(_PlanConfirmation.cancel),
+              child: const Text('返回调整'),
+            ),
+            FilledButton(
+              key: const ValueKey<String>('confirm-compression'),
+              onPressed: () =>
+                  Navigator.of(context).pop(_PlanConfirmation.proceed),
+              child: const Text('仍然开始'),
+            ),
+          ],
         ],
       ),
     );
-    return confirmed ?? false;
+    return confirmation ?? _PlanConfirmation.cancel;
   }
 
   void _onProgress(ProgressEvent event) {

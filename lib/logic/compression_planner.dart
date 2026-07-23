@@ -67,7 +67,9 @@ final class CompressionPlan {
   /// Conservative upper bound used for storage guidance.
   final int estimatedOutputMaxBytes;
 
-  /// Whether target video bitrate is at least 90% of source video bitrate.
+  /// Whether the conservative output bound leaves less than 15% savings.
+  ///
+  /// Unknown source sizes never trigger this warning.
   final bool hasLowSavings;
 
   /// Whether the source exceeds the verified 6-hour or 50-billion-byte range.
@@ -227,8 +229,13 @@ final class CompressionPlanner {
       estimatedOutputMinBytes: estimatedOutputMinBytes,
       estimatedOutputMaxBytes: estimatedOutputMaxBytes,
       hasLowSavings:
-          source.videoBitrate > 0 &&
-          _productAtLeast(videoBitrate, 10, source.videoBitrate, 9),
+          source.fileSizeBytes > 0 &&
+          _productGreater(
+            estimatedOutputMaxBytes,
+            100,
+            source.fileSizeBytes,
+            85,
+          ),
       isOutsideVerifiedRange:
           source.durationMs > verifiedDurationMs ||
           source.fileSizeBytes > verifiedSourceBytes,
@@ -385,8 +392,8 @@ int _multiplyDivideFloor(int left, int right, int divisor) {
       .toInt();
 }
 
-bool _productAtLeast(int leftA, int leftB, int rightA, int rightB) =>
-    BigInt.from(leftA) * BigInt.from(leftB) >=
+bool _productGreater(int leftA, int leftB, int rightA, int rightB) =>
+    BigInt.from(leftA) * BigInt.from(leftB) >
     BigInt.from(rightA) * BigInt.from(rightB);
 
 final class _Geometry {

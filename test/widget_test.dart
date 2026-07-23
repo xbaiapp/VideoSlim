@@ -252,7 +252,7 @@ const _audioInfo = AudioInfo(
 VideoInfo _videoInfo({
   String uri = _sourceUri,
   String fileName = '旅行 视频.mp4',
-  int fileSizeBytes = 10 * 1024 * 1024,
+  int fileSizeBytes = 100 * 1024 * 1024,
   bool isHdr = false,
 }) {
   return VideoInfo(
@@ -719,6 +719,92 @@ void main() {
   });
 
   testWidgets(
+    'low-savings plan without crop can stop or continue with the original target',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine();
+      final picker = _FakePicker()..galleryResult = _sourceUri;
+      final backend = _MemoryBackend();
+      engine.infoByUri[_sourceUri] = _videoInfo(
+        fileSizeBytes: 10 * 1024 * 1024,
+      );
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await tester.tap(find.byKey(const ValueKey<String>('pick-gallery')));
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.textContaining('甚至可能变大'), findsOneWidget);
+      await _tapCompression(tester);
+      expect(find.text('暂不处理'), findsOneWidget);
+      expect(find.text('仍按原目标压缩'), findsOneWidget);
+      expect(
+        find.byKey(
+          const ValueKey<String>('use-preserve-quality-for-low-savings'),
+        ),
+        findsNothing,
+      );
+
+      await tester.tap(find.text('暂不处理'));
+      await tester.pump();
+      expect(engine.lastRequest, isNull);
+
+      await _tapCompression(tester);
+      await tester.tap(find.text('仍按原目标压缩'));
+      await tester.pump();
+      await tester.pump();
+      expect(engine.lastRequest?.videoBitrate, 2500000);
+    },
+  );
+
+  testWidgets(
+    'low-savings plan with crop can switch to preserve quality without starting',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine();
+      final picker = _FakePicker()..galleryResult = _sourceUri;
+      final backend = _MemoryBackend();
+      engine.infoByUri[_sourceUri] = _videoInfo(
+        fileSizeBytes: 10 * 1024 * 1024,
+      );
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await tester.tap(find.byKey(const ValueKey<String>('pick-gallery')));
+      await tester.pump();
+      await tester.pump();
+      await _tapVisible(
+        tester,
+        find.byKey(const ValueKey<String>('s3-add-crop')),
+      );
+      await _saveCropFromEditor(tester);
+
+      await _tapCompression(tester);
+      expect(find.text('仍按原目标压缩'), findsOneWidget);
+      expect(find.text('取消'), findsOneWidget);
+      final usePreserve = find.byKey(
+        const ValueKey<String>('use-preserve-quality-for-low-savings'),
+      );
+      expect(usePreserve, findsOneWidget);
+      await tester.tap(usePreserve);
+      await tester.pump();
+
+      expect(engine.lastRequest, isNull);
+      expect(
+        tester
+            .widget<ChoiceChip>(
+              find.byKey(const ValueKey<String>('preset-preserveQuality')),
+            )
+            .selected,
+        isTrue,
+      );
+    },
+  );
+
+  testWidgets(
     'progress arriving before process returns is buffered by task id',
     (WidgetTester tester) async {
       final engine = _FakeEngine()..processCompleter = Completer<String>();
@@ -858,9 +944,9 @@ void main() {
         find.text('系统相册 > Movies > VideoSlim > 旅行_视频_slim.mp4'),
         findsOneWidget,
       );
-      expect(find.text('10.0 MB'), findsWidgets);
+      expect(find.text('100 MB'), findsWidgets);
       expect(find.text('6.0 MB'), findsOneWidget);
-      expect(find.text('节省 4.0 MB · 40.0%'), findsOneWidget);
+      expect(find.text('节省 94.0 MB · 94.0%'), findsOneWidget);
       expect(
         find.byKey(const ValueKey<String>('compress-another')),
         findsOneWidget,

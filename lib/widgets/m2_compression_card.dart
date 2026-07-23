@@ -519,7 +519,7 @@ class _PlanSummary extends StatelessWidget {
           const SizedBox(height: 10),
           const _Notice(
             icon: Icons.info_outline,
-            text: '该视频码率已较低，压缩收益可能有限；开始前会再次确认。',
+            text: '按保守估算，该视频压缩收益有限，甚至可能变大；开始前会再次确认。',
             warning: true,
           ),
         ],
