@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:videoslim/logging/app_logger.dart';
+import 'package:videoslim/logic/log_clipboard_payload.dart';
 import 'package:videoslim/screens/debug_log_screen.dart';
 
 class FakeScreenLogBackend implements LogBackend {
@@ -121,6 +123,75 @@ void main() {
 
     expect(clipboardText, fullText);
     expect(find.text('日志已复制'), findsOneWidget);
+  });
+
+  testWidgets('large copy sends only the recent Binder-safe log tail', (
+    tester,
+  ) async {
+    final fullText =
+        'OLDEST-${'a' * (maxClipboardLogUtf8Bytes + 1024)}\nLATEST';
+    final backend = FakeScreenLogBackend(persistedText: fullText);
+    String? clipboardText;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (
+          MethodCall call,
+        ) async {
+          if (call.method == 'Clipboard.setData') {
+            clipboardText =
+                (call.arguments as Map<Object?, Object?>)['text'] as String?;
+          }
+          return null;
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null);
+    });
+
+    await tester.pumpWidget(appFor(AppLogger(backend: backend)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('复制全部'));
+    await tester.pumpAndSettle();
+
+    expect(clipboardText, isNotNull);
+    expect(
+      utf8.encode(clipboardText!).length,
+      lessThanOrEqualTo(maxClipboardLogUtf8Bytes),
+    );
+    expect(clipboardText, startsWith(clipboardLogTruncationNotice));
+    expect(clipboardText, endsWith('LATEST'));
+    expect(clipboardText, isNot(contains('OLDEST-')));
+    expect(find.textContaining('已复制最近部分'), findsOneWidget);
+    expect(find.textContaining('分享日志'), findsOneWidget);
+  });
+
+  testWidgets('clipboard failure shows safe copy instead of a raw stack', (
+    tester,
+  ) async {
+    final backend = FakeScreenLogBackend(persistedText: 'copy this');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (
+          MethodCall call,
+        ) async {
+          if (call.method == 'Clipboard.setData') {
+            throw PlatformException(
+              code: 'error',
+              message: 'android.os.TransactionTooLargeException',
+            );
+          }
+          return null;
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null);
+    });
+
+    await tester.pumpWidget(appFor(AppLogger(backend: backend)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('复制全部'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('复制失败，请使用“分享日志”发送完整日志'), findsOneWidget);
+    expect(find.textContaining('TransactionTooLargeException'), findsNothing);
   });
 
   testWidgets('share button invokes the logger backend', (tester) async {

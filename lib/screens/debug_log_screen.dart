@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../logging/app_logger.dart';
+import '../logic/log_clipboard_payload.dart';
 
 class DebugLogScreen extends StatefulWidget {
   const DebugLogScreen({super.key, required this.logger});
@@ -57,13 +58,16 @@ class _DebugLogScreenState extends State<DebugLogScreen> {
       return;
     }
     try {
-      await Clipboard.setData(ClipboardData(text: _text));
+      final payload = buildClipboardLogPayload(_text);
+      await Clipboard.setData(ClipboardData(text: payload.text));
       if (mounted) {
-        _showSnackBar('日志已复制');
+        _showSnackBar(
+          payload.truncated ? '日志过长，已复制最近部分；完整日志请使用“分享日志”' : '日志已复制',
+        );
       }
-    } catch (error) {
+    } catch (_) {
       if (mounted) {
-        _showSnackBar('复制失败：$error');
+        _showSnackBar('复制失败，请使用“分享日志”发送完整日志');
       }
     }
   }
