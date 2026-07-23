@@ -12,6 +12,8 @@
 - 同日设备测试发现约1 MiB日志复制触发Android `TransactionTooLargeException`；项目所有者明确选择小修。上一候选 `b0267a0b959ccb46785daa1c91d0be96b5a0ef98` 仅将剪贴板载荷限制为最近128 KiB完整行、保留完整文件分享并递增到 `1.6.1+22`，不修改媒体生产路径，也不自动授权其他生产改动。
 - 项目所有者于2026-07-23批准把C轨与M4-B/M4-C规划纳入仓库，并明确选择 **C1a低收益/可能变大提示** 作为首个代码项。C1a范围仅限Dart planner、S3单一提示/确认流程及测试：不改目标码率、不阻止发布、不改Kotlin/Media3/publication/recovery；允许把新的用户可见候选版本独立递增为`1.7.0+23`，仅用于APK身份与真机验收。C1b、C2、C3、M4-B、M4-C仍未授权，不得并行开工。
 - C1a当前候选源码为`7c49e57e3b6eafeeb765f2600c17b0242bea1160`（`1.7.0+23`）。首版`d3af1c3...`的一轮并行复审为FAIL；三项IMPORTANT均在唯一修订中处置，完整自动化与APK静态核验通过。按复审预算不再发起第二轮，不得把首版FAIL写成最终SHA的PASS；当前状态是`CANDIDATE READY — DEVICE ACCEPTANCE PENDING`。
+- 项目所有者随后明确跳过C1a真机验收并要求继续下一步；C1a状态记为`IMPLEMENTED — DEVICE TEST WAIVED/NOT RUN`，不得写成PASS。D1已用此前提供的最新相关F19任务完成零代码诊断：Media3有效配置仍为500 kbps，输出`videoBitrate`实际等于容器平均码率fallback；该Pixel HEVC组合属于运行期明显过冲，C1b不得建议更低目标。
+- 同一指示构成M4-B/F8单段时间裁剪的明确开工授权。范围只允许连续单段起止时间、与crop/Presentation/压缩一次转码、现有音频模式与生命周期复用；不包含多段、乱序、跨文件、批量、hardening/refactor/migration或M4-C。M4-B仍须RED→GREEN、完整自动化、一次复审和独立候选；真机未测不得写PASS。
 - 未提供逐项真机证据的矩阵行不得反向预填 PASS，private-scope 接受不得扩写为生产发布或多设备保证。
 - 当前已知限制见 `docs/known-debt.md`。
 

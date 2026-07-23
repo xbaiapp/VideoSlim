@@ -1,7 +1,7 @@
 # C1a 低收益/可能变大提示完成报告
 
 > **日期：** 2026-07-23
-> **状态：** `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`
+> **状态：** `IMPLEMENTED — DEVICE TEST WAIVED/NOT RUN`（项目所有者于2026-07-23跳过真机矩阵；不记PASS）
 > **版本：** `1.7.0+23`
 > **候选源码：** `7c49e57e3b6eafeeb765f2600c17b0242bea1160`
 > **候选 tree：** `36c50b0d1a5a3929148d5aa6ea0aa4c31bb4c709`

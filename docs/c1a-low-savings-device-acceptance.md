@@ -1,7 +1,7 @@
 # C1a 低收益/可能变大提示真机验收
 
 > **日期：** 2026-07-23
-> **状态：** `PENDING — PHYSICAL DEVICE REQUIRED`
+> **状态：** `WAIVED BY PRODUCT OWNER — NOT TESTED`（2026-07-23；所有矩阵行继续保持PENDING，不记PASS）
 > **候选：** `1.7.0+23 / 7c49e57e3b6eafeeb765f2600c17b0242bea1160`
 > **APK：** `VideoSlim-1.7.0+23-7c49e57-arm64-v8a-release.apk`
 > **SHA-256：** `72dcce8374c3bb771cdfa1b8fddd6d2dfec8baba19f8e3b917015c221e92367f`

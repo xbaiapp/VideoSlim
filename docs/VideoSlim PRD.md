@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.13（同步C1a候选、C轨与时间编辑规划） |
+| 文档版本 | v1.14（记录C1a验收跳过、D1结论与M4-B授权） |
 | 日期 | 2026-07-23 |
-| 状态 | M3 `ACCEPTED — private scope`；当前 `1.7.0+23 / 7c49e57...` 在既有M4-A、拍摄时间/GPS、命名和日志修复上增加F20/C1a提示，自动化与APK静态核验通过、真机验收待执行；C1b/F21/F22与M4-B/M4-C仍未授权 |
+| 状态 | M3 `ACCEPTED — private scope`；`1.7.0+23 / 7c49e57...`已实现F20/C1a但所有者跳过真机验收（未记PASS）；D1确认Pixel HEVC有效配置500 kbps后运行期明显过冲；M4-B/F8连续单段时间裁剪已授权进入规划，C1b/F21/F22与M4-C仍未授权 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
@@ -287,7 +287,7 @@
 
 | 功能 | 规格要点 |
 |---|---|
-| F8 时间裁剪 | 拆为 M4-B 独立范围，尚未授权；获批后使用双滑块选择起止时间，Media3 `ClippingConfiguration` 与压缩走同一次管线。M4-A 不得实现或顺带修改 trim。 |
+| F8 时间裁剪 | M4-B已授权为当前唯一代码项；使用双滑块选择连续起止时间，Media3 `ClippingConfiguration`与crop/缩放/压缩走同一次管线。不得顺带实现多段、乱序或跨文件。 |
 | F9 历史记录 | 本地数据库（sqflite 或 drift）记录每次任务：时间、类型、参数、前后大小、输出 URI；首页展示累计节省空间。 |
 | F10 批量队列 | 多选视频 → 统一参数 → 顺序执行队列；前台服务通知显示"第 x/n 个"。 |
 | F11 目标大小压缩 | 用户输入目标大小（如 200MB），反推视频码率 = (目标大小×8 ÷ 时长) − 音频码率；低于 0.5 Mbps 时提示不可行并建议降分辨率。 |
@@ -635,16 +635,16 @@ class HistoryRecord {
 - 复审预算：按 `AGENTS.md` B 节，最多 1 次实现 + 1 次修订 + 1 轮复审。
 
 ### C 轨：低码率源膨胀应对（D1 / F20–F22）
-- 状态：F20/C1a `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`；D1待指定日志，C1b/F21/F22仍未授权。当前候选保持既有硬件VBR行为，不按体积拒绝发布。
-- D1：先读取既有F19 `actual video encoder ... configurationFormat`，区分Media3 fallback配置期夹高与有效配置约500kbps后硬件运行期明显过冲；第一步零代码。`configurationFormat`是Media3 `Format`，不是原始Android `MediaFormat`。
+- 状态：F20/C1a `IMPLEMENTED — DEVICE TEST WAIVED/NOT RUN`；D1 `COMPLETE — ONE DEVICE/CODEC PATH`；C1b/F21/F22仍未授权。当前候选保持既有硬件VBR行为，不按体积拒绝发布。
+- D1：已读取既有F19 `actual video encoder ... configurationFormat`；Pixel 10 Pro的`c2.google.hevc.encoder`有效Media3 `Format`仍为500 kbps，排除fallback配置期夹高，归类为运行期明显过冲。输出`videoBitrate`等于容器平均码率fallback，不是独立视频轨证据；该组合下C1b不得建议更低目标。`configurationFormat`仍只是Media3 `Format`，不是原始Android `MediaFormat`。
 - F20/C1a：以保守输出上界和已知源文件大小替换现有单一低收益提示判定；只提示、不改值，`fileSizeBytes <= 0`不触发；有crop时可选“保持画质（仅裁剪）”，无crop时可选“暂不处理”，始终允许用户继续。
 - F20/C1b：后置条件项。只有显式码率来源契约、D1结论、F21声明范围和逐codec真机校准齐备时才显示建议值；建议值由用户显式采用，不支持的codec组合或低于产品下限时不生成。
 - F21/C2：F19只读编码器能力页；查询mime、VBR/CBR/CQ、QP bounds、bitrate/complexity range及软硬件属性，不创建转码任务。
 - F22/C3：F21真机证据后，所有者从QP钳制、CQ、AV1、都不做中选择，至多实施一个。软件CRF默认不做。
-- 推荐顺序：完成C1a与既有真机验收 → D1 → M4-B → C2 → C1b/C3决策 → M4-C。每项独立授权、独立候选、独立验收；详细停止条件见交接文档§7.1。
+- 推荐顺序：M4-B（当前）→ C2 → C1b/C3决策 → M4-C；C1a与既有真机矩阵作为未测试债务保留。每项独立授权、独立候选、独立验收；详细停止条件见交接文档§7.1。
 
 ### M4-B 时间裁剪（F8）
-- 状态：`PLANNED — NOT AUTHORIZED`。M4-A 的批准不包含 F8 trim。
+- 状态：`AUTHORIZED — PLANNING`。项目所有者于2026-07-23明确跳过C1a真机测试并要求继续下一步，F8连续单段trim成为当前唯一代码项。
 - 范围：S4起止双滑块；启用已预留的`trimStartMs/trimEndMs`；Kotlin使用Media3 `ClippingConfiguration`，与`Crop → Presentation`同一次Transformer导出。
 - 校验：`0 <= start < end <= duration`、最短保留1秒、无效值fail closed为`INVALID_TRIM`；trim必须在request/snapshot/retry/recovery中round-trip，S3估算按保留时长折算。
 - metadata：继续按源策略保留可靠拍摄时间/GPS；时间裁剪不改变拍摄语义，仍执行发布前应有/应无核验。

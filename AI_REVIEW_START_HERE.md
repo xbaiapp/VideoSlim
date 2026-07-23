@@ -4,7 +4,7 @@
 > **生成日期：** 2026-07-23
 > **当前候选版本：** `1.7.0+23`
 > **当前候选代码 SHA：** `7c49e57e3b6eafeeb765f2600c17b0242bea1160`
-> **阶段：** C1a低收益/可能变大提示候选已完成自动化与APK静态核验，真机验收PENDING；M4-A、真实来源metadata/图库/SAF和新剪贴板行为仍待完整矩阵；M3 `1.4.3+18` 仍是当前已接受发布基线
+> **阶段：** C1a已实现但项目所有者跳过真机验收（未记PASS）；D1已完成并确认Pixel HEVC运行期明显过冲；M4-B/F8单段时间裁剪已获准进入规划；M3 `1.4.3+18`仍是当前已接受发布基线
 > **安全：** 凭据、用户媒体、运行时数据库和私有日志不属于本交接包；任何秘密值只能写为 `[REDACTED]`。
 
 ## 1. 先读什么
@@ -13,13 +13,14 @@
 2. `AI_REVIEW_START_HERE.md`（本文）
 3. `docs/current-project-status.md`（当前进度与证据）
 4. `README.md`（当前用户能力）
-5. `docs/c1a-low-savings-completion-report.md` / `docs/c1a-low-savings-device-acceptance.md`（当前候选证据与PENDING矩阵）
-6. `docs/VideoSlim PRD.md`（产品和权威 contract）
-7. `docs/capture-metadata-completion-report.md` / `docs/capture-metadata-device-acceptance.md`（仍保留的metadata证据与矩阵）
-8. `docs/m4-a-completion-report.md` / `docs/m4-device-acceptance.md`（仍保留的裁剪候选与PENDING矩阵）
-9. `docs/known-debt.md`（冻结 Slice B 与已知限制）
-10. `AGENTS.md`（项目治理、复审预算、真机优先规则）
-11. 之后再读下方“关键源码”。
+5. `docs/d1-bitrate-diagnosis-2026-07-23.md`（当前已完成的码率诊断）
+6. `docs/c1a-low-savings-completion-report.md` / `docs/c1a-low-savings-device-acceptance.md`（已实现功能与跳过的PENDING矩阵）
+7. `docs/VideoSlim PRD.md`（产品和权威 contract）
+8. `docs/capture-metadata-completion-report.md` / `docs/capture-metadata-device-acceptance.md`（仍保留的metadata证据与矩阵）
+9. `docs/m4-a-completion-report.md` / `docs/m4-device-acceptance.md`（仍保留的裁剪候选与PENDING矩阵）
+10. `docs/known-debt.md`（冻结 Slice B 与已知限制）
+11. `AGENTS.md`（项目治理、复审预算、真机优先规则）
+12. 之后再读下方“关键源码”。
 
 ## 2. 产品边界
 
@@ -52,8 +53,8 @@ VideoSlim 是 Android 本地媒体工具：
 | M3 | `ACCEPTED — private scope` | AAC 无损直提和 AAC 强制重编码；所有者于 2026-07-22 报告测试成功 |
 | M4-A | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | F5 画面裁剪已实现；自动化与候选构建通过，真机矩阵未执行 |
 | F7 metadata/name增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 无来源时间改用unknown sentinel并增加必无核验；focused review通过 |
-| C轨 D1/F20–F22 | `C1a CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | C1a只提示且不改目标；D1待指定日志，C1b/C2/C3未授权 |
-| M4-B | `PLANNED — NOT AUTHORIZED` | F8 时间裁剪已有规划，未实现、未授权 |
+| C轨 D1/F20–F22 | `C1a IMPLEMENTED — DEVICE TEST WAIVED；D1 COMPLETE` | D1有效配置500 kbps，Pixel HEVC运行期明显过冲；C1b/C2/C3未授权 |
+| M4-B | `AUTHORIZED — PLANNING` | F8连续单段时间裁剪是当前唯一代码项 |
 | M4-C | `PLANNED — NOT AUTHORIZED` | F23同源多段依赖M4-B真机接受 |
 | M5/M6 | NOT STARTED | 打磨、批量、目标大小、iOS/上架 |
 
@@ -196,7 +197,9 @@ M4-A 修复候选代码 `d41e21c...`：
 - Android JVM tests：`341/341`；debug/release lint与debug assemble：PASS；
 - ARM64 APK的ZIP、zipalign、v2签名、证书连续性、package/version/SDK/ABI、权限与凭据模式扫描：PASS；
 - 首版`d3af1c3...`一轮并行复审两路均FAIL；三项IMPORTANT已在唯一修订`7c49e57...`中处置。按预算未二次复审，不得表述为最终SHA review PASS；
-- 构建机无连接设备；`docs/c1a-low-savings-device-acceptance.md`全部保持PENDING。
+- 构建机无连接设备；项目所有者跳过`docs/c1a-low-savings-device-acceptance.md`，全部行仍保持PENDING而非PASS。
+
+D1已从此前提供的最新相关F19任务完成零代码诊断：Media3有效encoder `Format`仍记录500 kbps，输出metadata的`2,307,117 bps`与`文件字节×8÷时长`完全一致，实际是容器平均码率fallback。结论是该Pixel/HEVC组合运行期明显过冲，而非Media3 fallback配置期夹高；完整脱敏证据见`docs/d1-bitrate-diagnosis-2026-07-23.md`。
 
 远端 CI 不是全绿：主 Flutter/Android job 全部通过，但 API 35 x86_64 instrumentation job 因 runner 中 `sdkmanager: command not found` 在该 job 的应用/instrumentation 构建前失败，emulator instrumentation 未执行。
 
@@ -230,7 +233,7 @@ M4-A 已按下列一次转码链路实现：
 ## 9. 已知债务和下一 AI 的工作规则
 
 - 先读 `docs/known-debt.md`；不要恢复或合并冻结的 Slice B。
-- 当前C1a及既有真机验收优先；C1b/C2/C3、M4-B/F8、M4-C/F23或任何hardening/refactor/migration不得因规划入库而自动并行开工。
+- 当前只实施已获准的M4-B/F8连续单段时间裁剪；C1b/C2/C3、M4-C/F23或任何hardening/refactor/migration不得并行开工。
 - 当前候选只保留可靠来源时间/GPS；不要增加隐私模式、完整metadata复制、设备定位、音频继承、第二次remux或自定义MP4 writer。真实单次mux失败时停止并报告规模升级。
 - “分析”意味着只读，不得自动编辑代码。
 - 每任务默认最多一次实现、一次修订、一轮 exact-SHA 复审。
