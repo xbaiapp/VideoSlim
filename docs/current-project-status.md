@@ -1,10 +1,9 @@
 # VideoSlim 当前项目状态
 
 > **更新时间：** 2026-07-23
-> **当前阶段：** 拍摄时间/GPS保留与输出命名 `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`
-> **当前候选版本：** `1.6.1+22`
-> **当前候选源代码：** `b0267a0b959ccb46785daa1c91d0be96b5a0ef98`
-> **C1a开发候选：** `1.7.0+23`；一次复审发现的crop既选保持画质分支与文档冲突正在唯一修订，尚未构建或替代上述可安装候选
+> **当前阶段：** C1a低收益/可能变大提示 `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`
+> **当前候选版本：** `1.7.0+23`
+> **当前候选源代码：** `7c49e57e3b6eafeeb765f2600c17b0242bea1160`
 > **当前已接受发布基线：** M3 `19abfb7da2e8fa028e7200000f0dc2a114bc840e`（`1.4.3+18`）
 
 ## 1. 里程碑进度
@@ -17,7 +16,7 @@
 | M3 音频提取 | `ACCEPTED — private scope` | 项目所有者于 2026-07-22 明确报告当前 M3 候选测试成功 |
 | M4-A 画面裁剪 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 自动化、构建和静态 APK 检查通过；真机十项矩阵尚未执行 |
 | F7 拍摄时间/GPS与输出命名增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 缺省处理时间blocker已修订；一条Pixel设备“仅时间”任务成功，完整来源/图库/SAF矩阵仍待执行 |
-| C轨 D1/F20–F22 | `C1a AUTHORIZED — REVISION IN PROGRESS` | 首轮实现自动化通过；唯一复审指出crop既选保持画质分支与交接状态两项冲突，正在唯一修订；D1待指定日志，C1b/C2/C3仍未授权 |
+| C轨 D1/F20–F22 | `C1a CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 唯一修订、完整自动化、ARM64 APK与静态核验完成；D1待指定日志，C1b/C2/C3仍未授权 |
 | M4-B 时间裁剪 | `PLANNED — NOT AUTHORIZED` | F8 trim已有书面范围，但不在M4-A授权范围 |
 | M4-C 多段时间编辑 | `PLANNED — NOT AUTHORIZED` | F23同源多段依赖M4-B真机接受；跨文件拼接归F16 |
 | M5 自用版打磨 | NOT STARTED | 历史、批量、目标大小等未实现 |
@@ -25,24 +24,22 @@
 
 `ACCEPTED — private scope` 只表示项目所有者接受已测试的自用设备/素材范围，不表示生产发布或多设备保证。`CANDIDATE READY` 也不等于真机通过。
 
-## 2. 当前可安装候选身份
+## 2. 当前候选身份
 
 - 应用：VideoSlim / 视频瘦身
 - 包名：`com.videoslim.videoslim`
-- 版本：`1.6.1+22`
-- 候选源代码：`b0267a0b959ccb46785daa1c91d0be96b5a0ef98`
-- 候选 tree：`aa218a23dac1bbf0f69eb5dc2ff6e633eedd1ceb`
+- 版本：`1.7.0+23`
+- 候选源代码：`7c49e57e3b6eafeeb765f2600c17b0242bea1160`
+- 候选 tree：`36c50b0d1a5a3929148d5aa6ea0aa4c31bb4c709`
 - Android：minSdk 26、targetSdk 36、compileSdk 36
 - Media3：`1.10.1`
 - Release ABI：仅 `arm64-v8a`
 - 签名：Android Debug certificate、APK Signature Scheme v2；不是商店生产签名
-- APK：`VideoSlim-1.6.1+22-b0267a0-arm64-v8a-release.apk`（仅供私有真机验收）
+- APK：`VideoSlim-1.7.0+23-7c49e57-arm64-v8a-release.apk`（仅供私有真机验收）
 - APK 大小：`18,378,659` bytes
-- APK SHA-256：`21ac3df44e8afa116cc9bb7c5f8ca7db94bacc45830f2dd373e4b9d4b0570409`
+- APK SHA-256：`72dcce8374c3bb771cdfa1b8fddd6d2dfec8baba19f8e3b917015c221e92367f`
 
-M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被新候选覆盖或改写。
-
-`pubspec.yaml`中的`1.7.0+23`是C1a开发候选身份；只有唯一修订、完整门禁、exact-revision复审结论处置、APK构建与独立静态核验完成后，才会在文档证据提交中替代本节的`1.6.1+22`可安装候选。
+M3已接受APK、旧`1.5.0+20`M4-A候选、`1.6.1+22 / b0267a0...`日志修复候选及各自证据继续保留，不被新候选覆盖或改写。
 
 ## 3. 当前已实现功能
 
@@ -58,6 +55,7 @@ M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被
 - crop 进入 request、snapshot 和 retry；`INVALID_CROP` 可编辑/移除恢复；
 - 原音轨复制、AAC 重编码或移除；
 - 输出大小预估、空间检查、真实文件名/位置、打开和分享。
+- C1a：仅在源大小已知且保守输出上界意味着预计节省低于15%时提示“收益有限、甚至可能变大”；无crop可暂不处理，有crop始终可选保持画质；提示不改目标、不阻止继续或发布。
 
 ### 拍摄时间、位置与输出命名
 
@@ -86,23 +84,22 @@ M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被
 
 ## 4. 当前候选自动化与证据
 
-候选源代码 `b0267a0...`（metadata核心仍来自已复审的 `a92d1cd...`）：
+候选源代码`7c49e57...`（Android媒体生产源码与`b0267a0...`一致；C1a仅改Dart planner/UI/test和候选版本）：
 
 - Dart format：PASS；
 - Flutter analyze：PASS，0 issues；
-- Flutter tests：`224/224`；
+- Flutter tests：`227/227`；
 - Android JVM tests：`341/341`，0 failures/errors/skipped；
 - Android debug/release lint：PASS；
-- Debug/Release assemble：PASS；
-- ARM64 Flutter Release APK：PASS；
-- ZIP、zipalign、v2 签名、package/version/SDK/ABI、权限和静态凭据扫描：PASS；
-- 旧 `47c5448...` 双路复审均超时且失效，不计PASS；`497c5d2...` Route A：FAIL、Route B：PASS；metadata缺省时间修订 `a92d1cd...` focused review：PASS。设备发现的超长日志复制问题已在 `b0267a0...` 收窄修复，focused exact-SHA review：PASS，无BLOCKER/IMPORTANT finding。
+- Debug assemble与Flutter ARM64 Release APK：PASS；
+- C1a首版`d3af1c3...`的一轮并行复审两路均为FAIL，共三项IMPORTANT；全部在唯一修订`7c49e57...`中用新增回归测试、条件动作修正和文档/版本身份分层处置。按每任务一轮复审预算未再发起第二轮，因此不得表述为最终SHA外部review PASS；完整处置见`docs/c1a-low-savings-completion-report.md`。
+- APK ZIP、zipalign、v2签名、证书连续性、package/version/SDK/ABI、权限和静态凭据扫描：PASS；build output与durable copy哈希一致。
 
 构建机没有连接 Android 设备。项目所有者提供的Pixel 10 Pro / Android 17最后一次任务日志证明：来源解析为“时间存在、位置缺失”，最终MP4同样通过该状态核验并成功发布；但来源原文件谱系、外部atom对照、`DATE_TAKEN`查询、图库排序和SAF仍未验证，因此不能把该单次成功扩写为完整设备验收。
 
 ## 5. 真机验收状态
 
-`docs/capture-metadata-device-acceptance.md` 现可执行；独立的M4-A裁剪矩阵也仍保持 `PENDING`，包括：
+`docs/c1a-low-savings-device-acceptance.md`、`docs/capture-metadata-device-acceptance.md`和独立M4-A裁剪矩阵均保持`PENDING`，包括：
 
 1. 0°/90°/180°/270° 框选与输出对齐；
 2. 五种比例与自由拖拽；
@@ -124,32 +121,34 @@ M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被
 3. Release 使用 Android Debug certificate，只适合私有安装。
 4. M4-A 默认假设 Media3 effects 作用于按旋转元数据转正后的画面；必须以四种 rotation 真机样本确认。
 5. 单次 `InAppMp4Muxer` 已有一条Pixel设备“时间存在、位置缺失”的App内核验成功证据，但尚无未加工来源谱系、外部atom与图库索引对照；失败时必须停止并重新评级，不得自动增加remux。
-6. C轨、M4-B/F8、M4-C/F23、M5 历史/批量/目标大小和 M6 iOS/上架均未开始；书面规划不得误写为已实现。
+6. C1b/C2/C3、M4-B/F8、M4-C/F23、M5历史/批量/目标大小和M6 iOS/上架均未开始；书面规划不得误写为已实现。
 
 ## 7. 已批准的规划基线
 
 - `docs/VideoSlim-AI-Handoff-2026-07-23.md` 已整合项目所有者批准的C轨和时间编辑规划；
-- `docs/VideoSlim PRD.md` v1.12 将C1a/C1b、C2、C3分别映射为F20、F21、F22，将同源多段编辑映射为F23；
-- 项目所有者已明确选择C1a作为唯一代码项；其实施计划见`docs/plans/2026-07-23-c1a-low-savings-warning.md`。C1b/C2/C3/M4-B/M4-C仍不得开工；
+- `docs/VideoSlim PRD.md` v1.13 将C1a/C1b、C2、C3分别映射为F20、F21、F22，将同源多段编辑映射为F23；
+- C1a候选已完成；实施计划、完成证据和真机矩阵分别见`docs/plans/2026-07-23-c1a-low-savings-warning.md`、`docs/c1a-low-savings-completion-report.md`、`docs/c1a-low-savings-device-acceptance.md`。C1b/C2/C3/M4-B/M4-C仍不得开工；
 - 每个代码项遵守一次实现、一次修订、一轮复审和真机证据优先规则。
 
 ## 8. 下一步与禁止范围
 
-下一步是安装 `b0267a0...` APK，先复测超长日志复制，再执行真实iPhone/Pixel来源、MediaStore图库和SAF矩阵。不得再自动追加生产修订。
+下一步是覆盖安装`1.7.0+23 / 7c49e57...`APK，先执行C1a矩阵并复测超长日志复制，再执行真实iPhone/Pixel来源、MediaStore图库、SAF和M4-A矩阵。不得再自动追加生产修订。
 
 - 若出现无法由显示坐标与 ≤2px 取整解释的错位，停止验收并报告；不得改用中间视频后二次有损转码。
 - 若发生源文件/旧输出丢失、覆盖、误删或修改，立即阻止候选。
-- 当前只实施已明确选择的C1a最小范围；不得并行启动M4-B、C1b、C2/C3、hardening、refactor、migration或其他生产改动。C1a不能把尚未完成的`1.6.1+22`真机矩阵改写为PASS。
+- C1a现在只进入真机验收；不得并行启动M4-B、C1b、C2/C3、hardening、refactor、migration或其他生产改动。新候选不能把既有真机矩阵改写为PASS。
 
 ## 9. 阅读顺序
 
 1. `docs/VideoSlim-AI-Handoff-2026-07-23.md`
 2. `AI_REVIEW_START_HERE.md`
 3. `docs/current-project-status.md`
-4. `docs/capture-metadata-completion-report.md`
-5. `docs/capture-metadata-device-acceptance.md`
-6. `docs/m4-a-completion-report.md`
-7. `docs/m4-device-acceptance.md`
-8. `docs/VideoSlim PRD.md`
-9. `docs/known-debt.md`
-10. `AGENTS.md`
+4. `docs/c1a-low-savings-completion-report.md`
+5. `docs/c1a-low-savings-device-acceptance.md`
+6. `docs/capture-metadata-completion-report.md`
+7. `docs/capture-metadata-device-acceptance.md`
+8. `docs/m4-a-completion-report.md`
+9. `docs/m4-device-acceptance.md`
+10. `docs/VideoSlim PRD.md`
+11. `docs/known-debt.md`
+12. `AGENTS.md`

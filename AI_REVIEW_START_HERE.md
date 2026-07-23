@@ -2,9 +2,9 @@
 
 > **用途：** 给新的 AI/开发者一个可验证的当前项目入口。先读本文，再决定是否需要展开 PRD 和源码。
 > **生成日期：** 2026-07-23
-> **当前候选版本：** `1.6.1+22`
-> **当前候选代码 SHA：** `b0267a0b959ccb46785daa1c91d0be96b5a0ef98`
-> **阶段：** 已复审的拍摄时间/GPS核心之上增加设备发现的超长日志复制小修；一条Pixel设备“时间存在、位置缺失”任务成功，完整真实来源/图库/SAF和新剪贴板行为仍待真机验收；M4-A仍待完整矩阵；M3 `1.4.3+18` 仍是当前已接受发布基线
+> **当前候选版本：** `1.7.0+23`
+> **当前候选代码 SHA：** `7c49e57e3b6eafeeb765f2600c17b0242bea1160`
+> **阶段：** C1a低收益/可能变大提示候选已完成自动化与APK静态核验，真机验收PENDING；M4-A、真实来源metadata/图库/SAF和新剪贴板行为仍待完整矩阵；M3 `1.4.3+18` 仍是当前已接受发布基线
 > **安全：** 凭据、用户媒体、运行时数据库和私有日志不属于本交接包；任何秘密值只能写为 `[REDACTED]`。
 
 ## 1. 先读什么
@@ -13,9 +13,9 @@
 2. `AI_REVIEW_START_HERE.md`（本文）
 3. `docs/current-project-status.md`（当前进度与证据）
 4. `README.md`（当前用户能力）
-5. `docs/VideoSlim PRD.md`（产品和权威 contract）
-6. `docs/capture-metadata-completion-report.md`（当前候选实现、APK和证据边界）
-7. `docs/capture-metadata-device-acceptance.md`（当前功能的真实来源/设备矩阵）
+5. `docs/c1a-low-savings-completion-report.md` / `docs/c1a-low-savings-device-acceptance.md`（当前候选证据与PENDING矩阵）
+6. `docs/VideoSlim PRD.md`（产品和权威 contract）
+7. `docs/capture-metadata-completion-report.md` / `docs/capture-metadata-device-acceptance.md`（仍保留的metadata证据与矩阵）
 8. `docs/m4-a-completion-report.md` / `docs/m4-device-acceptance.md`（仍保留的裁剪候选与PENDING矩阵）
 9. `docs/known-debt.md`（冻结 Slice B 与已知限制）
 10. `AGENTS.md`（项目治理、复审预算、真机优先规则）
@@ -52,7 +52,7 @@ VideoSlim 是 Android 本地媒体工具：
 | M3 | `ACCEPTED — private scope` | AAC 无损直提和 AAC 强制重编码；所有者于 2026-07-22 报告测试成功 |
 | M4-A | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | F5 画面裁剪已实现；自动化与候选构建通过，真机矩阵未执行 |
 | F7 metadata/name增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 无来源时间改用unknown sentinel并增加必无核验；focused review通过 |
-| C轨 D1/F20–F22 | `PLANNED — NOT AUTHORIZED` | D1只读诊断先行；低收益提示、条件建议、能力页和高级编码档均未实现 |
+| C轨 D1/F20–F22 | `C1a CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | C1a只提示且不改目标；D1待指定日志，C1b/C2/C3未授权 |
 | M4-B | `PLANNED — NOT AUTHORIZED` | F8 时间裁剪已有规划，未实现、未授权 |
 | M4-C | `PLANNED — NOT AUTHORIZED` | F23同源多段依赖M4-B真机接受 |
 | M5/M6 | NOT STARTED | 打磨、批量、目标大小、iOS/上架 |
@@ -60,10 +60,10 @@ VideoSlim 是 Android 本地媒体工具：
 当前私有真机验收APK：
 
 ```text
-VideoSlim-1.6.1+22-b0267a0-arm64-v8a-release.apk
-SHA-256 21ac3df44e8afa116cc9bb7c5f8ca7db94bacc45830f2dd373e4b9d4b0570409
+VideoSlim-1.7.0+23-7c49e57-arm64-v8a-release.apk
+SHA-256 72dcce8374c3bb771cdfa1b8fddd6d2dfec8baba19f8e3b917015c221e92367f
 package com.videoslim.videoslim
-version 1.6.1+22
+version 1.7.0+23
 ```
 
 ## 4. 技术架构
@@ -190,6 +190,14 @@ M4-A 修复候选代码 `d41e21c...`：
 - 旧 `47c5448...` 双路复审均超时且失效，不计PASS；`497c5d2...` Route A：FAIL、Route B：PASS；缺省时间修订 `a92d1cd...` 的focused review：PASS；超长日志复制 `b0267a0...` 的focused exact-SHA review：PASS，无BLOCKER/IMPORTANT finding；
 - 一条Pixel设备任务完成时间存在/位置缺失核验和MediaStore发布；来源谱系、外部atom、`DATE_TAKEN`/图库排序、SAF和其他字段矩阵仍保持PENDING。
 
+当前C1a候选代码`7c49e57...`：
+
+- Dart format、Flutter analyze：PASS；Flutter tests：`227/227`；
+- Android JVM tests：`341/341`；debug/release lint与debug assemble：PASS；
+- ARM64 APK的ZIP、zipalign、v2签名、证书连续性、package/version/SDK/ABI、权限与凭据模式扫描：PASS；
+- 首版`d3af1c3...`一轮并行复审两路均FAIL；三项IMPORTANT已在唯一修订`7c49e57...`中处置。按预算未二次复审，不得表述为最终SHA review PASS；
+- 构建机无连接设备；`docs/c1a-low-savings-device-acceptance.md`全部保持PENDING。
+
 远端 CI 不是全绿：主 Flutter/Android job 全部通过，但 API 35 x86_64 instrumentation job 因 runner 中 `sdkmanager: command not found` 在该 job 的应用/instrumentation 构建前失败，emulator instrumentation 未执行。
 
 ## 7. 不要误读的事实
@@ -199,7 +207,7 @@ M4-A 修复候选代码 `d41e21c...`：
 - `1.4.3+18` 只消除成功后 `getAudioInfo` 的重复扫描，不删除发布前完整校验。
 - Task 3 Slice B 未集成；其 worktree/patch 是冻结研究，不是产品代码。
 - Release 使用 Debug certificate，不是生产签名。
-- M4-A crop 已实现但尚未真机接受；C轨、M4-B trim与M4-C多段均只有规划，未实现、未授权。
+- M4-A crop与C1a提示已实现但尚未真机接受；C1b/C2/C3、M4-B trim与M4-C多段仍未实现、未授权。
 - `a92d1cd...` 已用1904/zero sentinel覆盖Media3处理时间默认值，并对时间/GPS执行必有与必无核验；`b0267a0...` 只增加日志复制边界。单次Pixel成功不能替代真机矩阵，不得提前写为ACCEPTED。
 
 ## 8. M4-A 实现边界与剩余验收
@@ -222,7 +230,7 @@ M4-A 已按下列一次转码链路实现：
 ## 9. 已知债务和下一 AI 的工作规则
 
 - 先读 `docs/known-debt.md`；不要恢复或合并冻结的 Slice B。
-- 当前候选真机验收仍优先；如所有者明确选择新代码项，只启动该最小范围。C轨、M4-B/F8、M4-C/F23或任何hardening/refactor/migration不得因规划入库而自动并行开工。
+- 当前C1a及既有真机验收优先；C1b/C2/C3、M4-B/F8、M4-C/F23或任何hardening/refactor/migration不得因规划入库而自动并行开工。
 - 当前候选只保留可靠来源时间/GPS；不要增加隐私模式、完整metadata复制、设备定位、音频继承、第二次remux或自定义MP4 writer。真实单次mux失败时停止并报告规模升级。
 - “分析”意味着只读，不得自动编辑代码。
 - 每任务默认最多一次实现、一次修订、一轮 exact-SHA 复审。

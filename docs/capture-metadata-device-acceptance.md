@@ -1,10 +1,10 @@
 # VideoSlim 拍摄时间、位置与输出命名真机验收
 
 > **日期：** 2026-07-23
-> **候选版本：** `1.6.1+22`
-> **候选源代码：** `b0267a0b959ccb46785daa1c91d0be96b5a0ef98`
-> **候选APK：** `VideoSlim-1.6.1+22-b0267a0-arm64-v8a-release.apk`
-> **APK SHA-256：** `21ac3df44e8afa116cc9bb7c5f8ca7db94bacc45830f2dd373e4b9d4b0570409`
+> **执行候选版本：** `1.7.0+23`
+> **执行候选源代码：** `7c49e57e3b6eafeeb765f2600c17b0242bea1160`
+> **执行APK：** `VideoSlim-1.7.0+23-7c49e57-arm64-v8a-release.apk`
+> **APK SHA-256：** `72dcce8374c3bb771cdfa1b8fddd6d2dfec8baba19f8e3b917015c221e92367f`
 > **状态：** `PENDING — DEVICE AND REAL-SOURCE ACCEPTANCE REQUIRED`
 > **范围：** 仅原拍摄时间/GPS保留、MediaStore `DATE_TAKEN`、输出命名及现有视频链路回归
 
@@ -12,7 +12,7 @@
 
 自动化测试、静态 APK 检查和桌面端容器工具不能替代真实 Android 设备上的 Media3 mux、MediaStore 和 SAF 行为。没有未加工原始素材或没有实际执行的行必须保持 `PENDING`，不得推断为 PASS。
 
-**候选门禁：** metadata核心 `a92d1cd...` 已覆盖Media3 `System.currentTimeMillis()`缺省时间并增加时间/GPS必无核验；当前 `b0267a0...` 只增加超长日志的Binder安全复制修复和版本递增，不修改转码、metadata、publication或recovery路径。本清单现在可以执行，但未执行行必须保持 `PENDING`。
+**候选门禁：** metadata核心`a92d1cd...`已覆盖Media3 `System.currentTimeMillis()`缺省时间并增加时间/GPS必无核验；`b0267a0...`只增加超长日志安全复制；当前`7c49e57...`再增加纯Dart C1a提示。后二者都不修改Android转码、metadata、publication或recovery路径。本清单现在使用最新APK执行，但未执行行必须保持`PENDING`。
 
 验收期间不得：
 
@@ -153,7 +153,7 @@ ffprobe -v error -show_format -show_streams OUTPUT.mp4
 - 发布：MediaStore分配、写入、recovery record清除和终态全部成功，`errorCode/errorMessage`均为空；
 - 命名：`_slim_h265_target500k_<处理时间>_<4hex>.mp4`，与最终HEVC计划一致；
 - 体积：输入 `279,277,518` bytes，输出 `754,489,009` bytes，实测视频码率约 `2,307,117` bps，高于500 kbps目标。硬件VBR允许偏离目标，项目已明确不改CBR或增加严格体积拒绝，因此该现象记录但不在本修订中改变策略；
-- 日志复制：视频完成后，约1 MiB整份日志送入Android剪贴板时触发 `TransactionTooLargeException`。这是独立UI问题，不影响视频输出；当前 `1.6.1+22 / b0267a0...` 已将复制限制为最近128 KiB完整行，完整日志继续通过文件分享，但仍需真机复测。
+- 日志复制：视频完成后，约1MiB整份日志送入Android剪贴板时触发`TransactionTooLargeException`。这是独立UI问题，不影响视频输出；`1.6.1+22 / b0267a0...`起已将复制限制为最近128KiB完整行，当前`1.7.0+23`继续包含该修复，但仍需真机复测。
 
 仍未证明：来源原文件的外部 `exiftool/ffprobe` 基线、输出atom外部对照、MediaStore `DATE_TAKEN`查询、具体图库显示/排序、SAF行为、GPS存在或双缺失场景。以上项目继续保持 `PENDING`。
 
