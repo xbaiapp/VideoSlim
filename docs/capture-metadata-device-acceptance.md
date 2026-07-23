@@ -1,10 +1,10 @@
 # VideoSlim 拍摄时间、位置与输出命名真机验收
 
 > **日期：** 2026-07-23
-> **候选版本：** `1.6.0+21`
-> **候选源代码：** `a92d1cd4f5bf6b4b7dd0a7aaded199c6e0b230e8`
-> **候选APK：** `VideoSlim-1.6.0+21-a92d1cd-arm64-v8a-release.apk`
-> **APK SHA-256：** `fd44a68008e89aa2a72ed9ace9db08ac0da73d651fec4e9b754047a9fb20f610`
+> **候选版本：** `1.6.1+22`
+> **候选源代码：** `b0267a0b959ccb46785daa1c91d0be96b5a0ef98`
+> **候选APK：** `VideoSlim-1.6.1+22-b0267a0-arm64-v8a-release.apk`
+> **APK SHA-256：** `21ac3df44e8afa116cc9bb7c5f8ca7db94bacc45830f2dd373e4b9d4b0570409`
 > **状态：** `PENDING — DEVICE AND REAL-SOURCE ACCEPTANCE REQUIRED`
 > **范围：** 仅原拍摄时间/GPS保留、MediaStore `DATE_TAKEN`、输出命名及现有视频链路回归
 
@@ -12,7 +12,7 @@
 
 自动化测试、静态 APK 检查和桌面端容器工具不能替代真实 Android 设备上的 Media3 mux、MediaStore 和 SAF 行为。没有未加工原始素材或没有实际执行的行必须保持 `PENDING`，不得推断为 PASS。
 
-**候选门禁：** `a92d1cd...`已覆盖Media3 `System.currentTimeMillis()`缺省时间并增加时间/GPS必无核验；完整自动化门禁和focused exact-SHA复审均通过。本清单现在可以执行，但未执行行必须保持 `PENDING`。
+**候选门禁：** metadata核心 `a92d1cd...` 已覆盖Media3 `System.currentTimeMillis()`缺省时间并增加时间/GPS必无核验；当前 `b0267a0...` 只增加超长日志的Binder安全复制修复和版本递增，不修改转码、metadata、publication或recovery路径。本清单现在可以执行，但未执行行必须保持 `PENDING`。
 
 验收期间不得：
 
@@ -31,7 +31,7 @@
 - [ ] APK 文件名与交付记录一致
 - [ ] APK SHA-256 与交付记录一致
 - [ ] package：`com.videoslim.videoslim`
-- [ ] versionName/versionCode：`1.6.0 / 21`
+- [ ] versionName/versionCode：`1.6.1 / 22`
 - [ ] 目标设备可正常覆盖安装或干净安装
 
 设备记录：
@@ -118,7 +118,7 @@ ffprobe -v error -show_format -show_streams OUTPUT.mp4
 
 | 场景 | 期望 | 状态 |
 |---|---|---|
-| HEVC 最终计划 | `_slim_h265_target<kbps>k_<yyyyMMdd_HHmmssSSS>_<4hex>.mp4` | PENDING |
+| HEVC 最终计划 | `_slim_h265_target<kbps>k_<yyyyMMdd_HHmmssSSS>_<4hex>.mp4` | PARTIAL — 一条设备任务名称匹配 |
 | HEVC 不可用后 H.264 fallback | 名称使用 `h264`，不保留原始 `h265` 选择 | PENDING |
 | AAC 音轨直提 | `_audio_copy_<yyyyMMdd_HHmmssSSS>_<4hex>.m4a` | PENDING |
 | AAC 重编码 | `_audio_aac_target<kbps>k_<yyyyMMdd_HHmmssSSS>_<4hex>.m4a` | PENDING |
@@ -142,7 +142,22 @@ ffprobe -v error -show_format -show_streams OUTPUT.mp4
 
 任何用户文件丢失/覆盖、不可解释裁剪错位、方向回归或单次 mux 无法保留字段，均阻止接受。
 
-## 7. 接受记录
+## 7. 已收到的单次设备证据（不等于矩阵接受）
+
+项目所有者于2026-07-23提供了上一候选 `1.6.0+21 / a92d1cd...` 在Pixel 10 Pro、Android 17上的完整日志，并明确只要求分析最后一次任务。该任务事实如下：
+
+- 输入：普通SDR MP4，AVC、1280×720、24 fps；原文件是否为Pixel相机未加工原件无法从日志证明，因此不把S5预填为PASS；
+- 来源解析：`captureTimePresent=true`、`locationPresent=false`；
+- 执行：硬件AVC解码、硬件HEVC编码，单次任务从0%运行到100%；
+- 发布前：`capture metadata verified captureTimePresent=true locationPresent=false`；
+- 发布：MediaStore分配、写入、recovery record清除和终态全部成功，`errorCode/errorMessage`均为空；
+- 命名：`_slim_h265_target500k_<处理时间>_<4hex>.mp4`，与最终HEVC计划一致；
+- 体积：输入 `279,277,518` bytes，输出 `754,489,009` bytes，实测视频码率约 `2,307,117` bps，高于500 kbps目标。硬件VBR允许偏离目标，项目已明确不改CBR或增加严格体积拒绝，因此该现象记录但不在本修订中改变策略；
+- 日志复制：视频完成后，约1 MiB整份日志送入Android剪贴板时触发 `TransactionTooLargeException`。这是独立UI问题，不影响视频输出；当前 `1.6.1+22 / b0267a0...` 已将复制限制为最近128 KiB完整行，完整日志继续通过文件分享，但仍需真机复测。
+
+仍未证明：来源原文件的外部 `exiftool/ffprobe` 基线、输出atom外部对照、MediaStore `DATE_TAKEN`查询、具体图库显示/排序、SAF行为、GPS存在或双缺失场景。以上项目继续保持 `PENDING`。
+
+## 8. 接受记录
 
 | 决策 | 结果 |
 |---|---|

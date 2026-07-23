@@ -8,7 +8,8 @@
 - `hardening/task3-engine-io`（Slice B）保留但冻结：不集成、不删除、不作为当前候选的一部分。
 - M4-A/F5 画面裁剪已由项目所有者于 2026-07-22 明确授权实施，当前进入候选与真机验收阶段；M4-B/F8 时间裁剪仍未开始、未授权。该授权不包含 hardening、refactor 或 migration。
 - 项目所有者已于 2026-07-22 授权拍摄时间/GPS保留和输出命名增强；范围固定为“仅保留来源中存在且可靠的时间与位置”，不增加隐私模式、完整 metadata 复制、第二次 remux 或音频继承。真机结论记录在 `docs/capture-metadata-device-acceptance.md`。
-- 项目所有者于2026-07-23在既定修订预算用尽后，额外授权一次仅用于修复Media3缺省处理时间和必无字段核验的外科手术式修订；修订候选为 `a92d1cd4f5bf6b4b7dd0a7aaded199c6e0b230e8`，完整自动化门禁和focused review已通过，真实来源/设备验收仍为PENDING。该例外不授权其他生产改动，也不自动增加后续修订预算。
+- 项目所有者于2026-07-23在既定修订预算用尽后，额外授权一次仅用于修复Media3缺省处理时间和必无字段核验的外科手术式修订；metadata核心候选为 `a92d1cd4f5bf6b4b7dd0a7aaded199c6e0b230e8`，完整自动化门禁和focused review已通过。一条Pixel设备任务随后证明“时间存在、位置缺失”的App内核验与发布成功。
+- 同日设备测试发现约1 MiB日志复制触发Android `TransactionTooLargeException`；项目所有者明确选择小修。当前候选 `b0267a0b959ccb46785daa1c91d0be96b5a0ef98` 仅将剪贴板载荷限制为最近128 KiB完整行、保留完整文件分享并递增到 `1.6.1+22`，不修改媒体生产路径，也不自动授权其他生产改动。
 - 未提供逐项真机证据的矩阵行不得反向预填 PASS，private-scope 接受不得扩写为生产发布或多设备保证。
 - 当前已知限制见 `docs/known-debt.md`。
 

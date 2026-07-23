@@ -2,8 +2,8 @@
 
 > **更新时间：** 2026-07-23
 > **当前阶段：** 拍摄时间/GPS保留与输出命名 `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`
-> **当前候选版本：** `1.6.0+21`
-> **当前候选源代码：** `a92d1cd4f5bf6b4b7dd0a7aaded199c6e0b230e8`
+> **当前候选版本：** `1.6.1+22`
+> **当前候选源代码：** `b0267a0b959ccb46785daa1c91d0be96b5a0ef98`
 > **当前已接受发布基线：** M3 `19abfb7da2e8fa028e7200000f0dc2a114bc840e`（`1.4.3+18`）
 
 ## 1. 里程碑进度
@@ -15,7 +15,7 @@
 | M2 压缩完整化 | `ACCEPTED — private scope` | 预设/自定义、VBR、前台服务、通知、取消、恢复、SAF、兼容 Decoder 重试可用 |
 | M3 音频提取 | `ACCEPTED — private scope` | 项目所有者于 2026-07-22 明确报告当前 M3 候选测试成功 |
 | M4-A 画面裁剪 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 自动化、构建和静态 APK 检查通过；真机十项矩阵尚未执行 |
-| F7 拍摄时间/GPS与输出命名增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 缺省处理时间blocker已外科修订；完整门禁与focused exact-SHA review通过 |
+| F7 拍摄时间/GPS与输出命名增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 缺省处理时间blocker已修订；一条Pixel设备“仅时间”任务成功，完整来源/图库/SAF矩阵仍待执行 |
 | M4-B 时间裁剪 | `NOT STARTED — NOT AUTHORIZED` | F8 trim 不在 M4-A 授权范围 |
 | M5 自用版打磨 | NOT STARTED | 历史、批量、目标大小等未实现 |
 | M6 上架/iOS | NOT STARTED | 生产签名、商店和 iOS 引擎未实现 |
@@ -26,16 +26,16 @@
 
 - 应用：VideoSlim / 视频瘦身
 - 包名：`com.videoslim.videoslim`
-- 版本：`1.6.0+21`
-- 候选源代码：`a92d1cd4f5bf6b4b7dd0a7aaded199c6e0b230e8`
-- 候选 tree：`03a0c54a80acfcee4e627ff7967e8c777743c61d`
+- 版本：`1.6.1+22`
+- 候选源代码：`b0267a0b959ccb46785daa1c91d0be96b5a0ef98`
+- 候选 tree：`aa218a23dac1bbf0f69eb5dc2ff6e633eedd1ceb`
 - Android：minSdk 26、targetSdk 36、compileSdk 36
 - Media3：`1.10.1`
 - Release ABI：仅 `arm64-v8a`
 - 签名：Android Debug certificate、APK Signature Scheme v2；不是商店生产签名
-- APK：`VideoSlim-1.6.0+21-a92d1cd-arm64-v8a-release.apk`（仅供私有真机验收）
+- APK：`VideoSlim-1.6.1+22-b0267a0-arm64-v8a-release.apk`（仅供私有真机验收）
 - APK 大小：`18,378,659` bytes
-- APK SHA-256：`fd44a68008e89aa2a72ed9ace9db08ac0da73d651fec4e9b754047a9fb20f610`
+- APK SHA-256：`21ac3df44e8afa116cc9bb7c5f8ca7db94bacc45830f2dd373e4b9d4b0570409`
 
 M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被新候选覆盖或改写。
 
@@ -76,24 +76,24 @@ M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被
 - 通知、进度、取消、snapshot 重连和明确终态；
 - 私有临时输出 → 完整校验 → MediaStore/SAF 发布；
 - recovery journal、启动 reconciliation 和有所有权证据的精确清理；
-- F19 本地调试日志；
+- F19 本地调试日志；复制操作对超长日志只取最近128 KiB完整行，完整文件继续走系统“分享日志”，避免Android Binder超限；
 - 无 `INTERNET`、`READ_MEDIA_VIDEO`、`READ_MEDIA_AUDIO` 或 `MANAGE_EXTERNAL_STORAGE` 权限。
 
 ## 4. 当前候选自动化与证据
 
-候选源代码 `a92d1cd...`：
+候选源代码 `b0267a0...`（metadata核心仍来自已复审的 `a92d1cd...`）：
 
 - Dart format：PASS；
 - Flutter analyze：PASS，0 issues；
-- Flutter tests：`219/219`；
+- Flutter tests：`224/224`；
 - Android JVM tests：`341/341`，0 failures/errors/skipped；
 - Android debug/release lint：PASS；
 - Debug/Release assemble：PASS；
 - ARM64 Flutter Release APK：PASS；
 - ZIP、zipalign、v2 签名、package/version/SDK/ABI、权限和静态凭据扫描：PASS；
-- 旧 `47c5448...` 双路复审均超时且失效，不计PASS；`497c5d2...` Route A：FAIL、Route B：PASS；当前 `a92d1cd...` focused corrective review：PASS，无BLOCKER/IMPORTANT finding。
+- 旧 `47c5448...` 双路复审均超时且失效，不计PASS；`497c5d2...` Route A：FAIL、Route B：PASS；metadata缺省时间修订 `a92d1cd...` focused review：PASS。设备发现的超长日志复制问题已在 `b0267a0...` 收窄修复，focused exact-SHA review：PASS，无BLOCKER/IMPORTANT finding。
 
-构建机没有连接 Android 设备。上述证据不能替代真实时间/GPS atom、MediaStore图库排序、SAF、裁剪输出、旋转方向、codec、通知、后台、锁屏、取消、恢复或文件安全验收。
+构建机没有连接 Android 设备。项目所有者提供的Pixel 10 Pro / Android 17最后一次任务日志证明：来源解析为“时间存在、位置缺失”，最终MP4同样通过该状态核验并成功发布；但来源原文件谱系、外部atom对照、`DATE_TAKEN`查询、图库排序和SAF仍未验证，因此不能把该单次成功扩写为完整设备验收。
 
 ## 5. 真机验收状态
 
@@ -118,12 +118,12 @@ M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被
 2. API 35 x86_64 instrumentation CI 的历史 `sdkmanager` PATH 问题仍未补跑；这不是当前真机验收替代品。
 3. Release 使用 Android Debug certificate，只适合私有安装。
 4. M4-A 默认假设 Media3 effects 作用于按旋转元数据转正后的画面；必须以四种 rotation 真机样本确认。
-5. 单次 `InAppMp4Muxer` 时间/GPS写入尚无真实设备和未加工来源样本证据；失败时必须停止并重新评级，不得自动增加remux。
+5. 单次 `InAppMp4Muxer` 已有一条Pixel设备“时间存在、位置缺失”的App内核验成功证据，但尚无未加工来源谱系、外部atom与图库索引对照；失败时必须停止并重新评级，不得自动增加remux。
 6. M4-B/F8 时间裁剪、M5 历史/批量/目标大小和 M6 iOS/上架均未开始。
 
 ## 7. 下一步与禁止范围
 
-下一步是安装 `a92d1cd...` APK并执行真实iPhone/Pixel来源、MediaStore图库和SAF矩阵。不得再自动追加生产修订。
+下一步是安装 `b0267a0...` APK，先复测超长日志复制，再执行真实iPhone/Pixel来源、MediaStore图库和SAF矩阵。不得再自动追加生产修订。
 
 - 若出现无法由显示坐标与 ≤2px 取整解释的错位，停止验收并报告；不得改用中间视频后二次有损转码。
 - 若发生源文件/旧输出丢失、覆盖、误删或修改，立即阻止候选。

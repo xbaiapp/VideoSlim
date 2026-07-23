@@ -2,9 +2,9 @@
 
 > **用途：** 给新的 AI/开发者一个可验证的当前项目入口。先读本文，再决定是否需要展开 PRD 和源码。
 > **生成日期：** 2026-07-23
-> **当前候选版本：** `1.6.0+21`
-> **当前候选代码 SHA：** `a92d1cd4f5bf6b4b7dd0a7aaded199c6e0b230e8`
-> **阶段：** 拍摄时间/GPS保留与命名增强候选已完成缺省处理时间修订、完整门禁和focused exact-SHA review，待真实来源/设备验收；M4-A仍待完整真机矩阵；M3 `1.4.3+18` 仍是当前已接受发布基线
+> **当前候选版本：** `1.6.1+22`
+> **当前候选代码 SHA：** `b0267a0b959ccb46785daa1c91d0be96b5a0ef98`
+> **阶段：** 已复审的拍摄时间/GPS核心之上增加设备发现的超长日志复制小修；一条Pixel设备“时间存在、位置缺失”任务成功，完整真实来源/图库/SAF和新剪贴板行为仍待真机验收；M4-A仍待完整矩阵；M3 `1.4.3+18` 仍是当前已接受发布基线
 > **安全：** 凭据、用户媒体、运行时数据库和私有日志不属于本交接包；任何秘密值只能写为 `[REDACTED]`。
 
 ## 1. 先读什么
@@ -57,10 +57,10 @@ VideoSlim 是 Android 本地媒体工具：
 当前私有真机验收APK：
 
 ```text
-VideoSlim-1.6.0+21-a92d1cd-arm64-v8a-release.apk
-SHA-256 fd44a68008e89aa2a72ed9ace9db08ac0da73d651fec4e9b754047a9fb20f610
+VideoSlim-1.6.1+22-b0267a0-arm64-v8a-release.apk
+SHA-256 21ac3df44e8afa116cc9bb7c5f8ca7db94bacc45830f2dd373e4b9d4b0570409
 package com.videoslim.videoslim
-version 1.6.0+21
+version 1.6.1+22
 ```
 
 ## 4. 技术架构
@@ -142,6 +142,7 @@ Picker URI
 - `lib/models/audio_extract_request.dart` — M3 音频请求
 - `lib/logic/compression_planner.dart` — 输出尺寸、码率、估算和 capability fallback
 - `lib/logic/audio_extract_planner.dart` / `lib/logic/output_file_name_builder.dart` — M3模式、最终计划命名和估算
+- `lib/logic/log_clipboard_payload.dart` / `lib/screens/debug_log_screen.dart` — Android Binder安全的最近128 KiB日志复制与完整文件分享边界
 
 ### Android/Kotlin
 
@@ -178,13 +179,13 @@ M4-A 修复候选代码 `d41e21c...`：
 - 当前手势修复 diff 的唯一 focused review：PASS；慢速亚像素累计与自由模式固定对边 RED→GREEN 回归测试通过；
 - 构建机无连接设备，`docs/m4-device-acceptance.md` 全部保持 PENDING。
 
-当前 metadata/name候选代码 `a92d1cd...`：
+当前 metadata/name/clipboard候选代码 `b0267a0...`（metadata核心祖先 `a92d1cd...`）：
 
-- Flutter analyze：PASS；Flutter tests：219/219；
+- Flutter analyze：PASS；Flutter tests：224/224；
 - Android JVM tests：341/341；debug/release lint 与 assemble：PASS；
 - ARM64 APK package/version/SDK/ABI、zipalign、v2签名、权限diff与常见凭据模式扫描：PASS；
-- 旧 `47c5448...` 双路复审均超时且失效，不计PASS；`497c5d2...` Route A：FAIL、Route B：PASS；当前缺省时间修订的focused exact-SHA review：PASS，无BLOCKER/IMPORTANT finding；
-- `docs/capture-metadata-device-acceptance.md` 的真实iPhone/Pixel、MediaStore与SAF矩阵全部保持PENDING。
+- 旧 `47c5448...` 双路复审均超时且失效，不计PASS；`497c5d2...` Route A：FAIL、Route B：PASS；缺省时间修订 `a92d1cd...` 的focused review：PASS；超长日志复制 `b0267a0...` 的focused exact-SHA review：PASS，无BLOCKER/IMPORTANT finding；
+- 一条Pixel设备任务完成时间存在/位置缺失核验和MediaStore发布；来源谱系、外部atom、`DATE_TAKEN`/图库排序、SAF和其他字段矩阵仍保持PENDING。
 
 远端 CI 不是全绿：主 Flutter/Android job 全部通过，但 API 35 x86_64 instrumentation job 因 runner 中 `sdkmanager: command not found` 在该 job 的应用/instrumentation 构建前失败，emulator instrumentation 未执行。
 
@@ -196,7 +197,7 @@ M4-A 修复候选代码 `d41e21c...`：
 - Task 3 Slice B 未集成；其 worktree/patch 是冻结研究，不是产品代码。
 - Release 使用 Debug certificate，不是生产签名。
 - M4-A crop 已实现但尚未真机接受；M4-B trim 仍未实现、未授权。
-- `a92d1cd...` 已用1904/zero sentinel覆盖Media3处理时间默认值，并对时间/GPS执行必有与必无核验；focused review通过，但真机矩阵未完成，不得提前写为ACCEPTED。
+- `a92d1cd...` 已用1904/zero sentinel覆盖Media3处理时间默认值，并对时间/GPS执行必有与必无核验；`b0267a0...` 只增加日志复制边界。单次Pixel成功不能替代真机矩阵，不得提前写为ACCEPTED。
 
 ## 8. M4-A 实现边界与剩余验收
 
