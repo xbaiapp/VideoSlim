@@ -1,7 +1,7 @@
 # C2/F21 本机编码器能力诊断实施计划
 
 > **日期：** 2026-07-23
-> **状态：** `IMPLEMENTED — SOURCE FREEZE PENDING`
+> **状态：** `COMPLETE — PRIVATE ARM64 CANDIDATE, DEVICE REPORT PENDING`
 > **基线：** `de1b33f8a64fc56d8690397ba85b54669d60f469`（M4-B private-scope接受记录）
 > **候选版本目标：** `1.9.0+25`
 > **唯一范围：** F19调试区新增只读“编码器能力”页，查询并展示Android系统声明的目标视频编码器能力；不configure codec、不创建媒体任务、不改变任何转码行为
@@ -140,6 +140,8 @@ getEncoderCapabilities(arguments = {})
 8. 冻结exact source SHA并执行唯一一次双路复审；最多一个纠正修订，不无限复审；
 9. 构建并独立核验`1.9.0+25` ARM64 Debug-certificate内部APK；
 10. 文档、提交、推送、远端SHA一致性。
+
+完成结果：纠正候选源码为`11f169ca9f30b2f05eeeec777dbaaaf71a01f7ff`。Flutter `257/257`、Android JVM `350/350`、debug/release lint、debug assemble、ARM64 release build和APK静态核验均PASS。唯一双路复审绑定首个SHA `85e2497...`且两路均在600秒后无裁决；controller门禁随后发现并纠正API 29 lint blocker。按预算未复审纠正SHA，因此不得宣称独立exact-SHA review PASS。完整证据见`docs/c2-encoder-capabilities-completion-report.md`与`docs/c2-exact-sha-review-disposition.md`。
 
 ## 7. 真机边界与停止条件
 

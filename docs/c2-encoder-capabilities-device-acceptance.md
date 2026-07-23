@@ -3,8 +3,9 @@
 > **日期：** 2026-07-23
 > **状态：** `PENDING — NO DEVICE CAPABILITY REPORT`
 > **目标版本：** `1.9.0+25`
-> **候选源码：** 冻结后填写
-> **APK身份：** 构建核验后填写
+> **候选源码：** `11f169ca9f30b2f05eeeec777dbaaaf71a01f7ff`（tree `bcc2cbed2fe44027ea38c4d6973f126a7661faaf`）
+> **APK身份：** `VideoSlim-1.9.0+25-11f169c-arm64-v8a-release.apk`，SHA-256 `fe9e0e70b90dd5ae3bd6aace327b3a636b365a112689cd7a1f994927ccb6b2ed`
+> **自动证据：** exact gates与APK静态核验PASS；纠正SHA无独立exact-SHA review PASS，见`docs/c2-exact-sha-review-disposition.md`
 > **边界：** 本页验证只读能力查询与展示，不授权或验证C1b/C3编码策略。系统capabilities声明也不能替代实际编码测试。
 
 ## 1. 测试前记录
