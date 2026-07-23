@@ -3,8 +3,20 @@
 > **日期：** 2026-07-22
 > **授权：** 项目所有者已批准“先写规划，再开始实施”
 > **基线：** `c8c9e070ead6`（`m4a/crop`，已交付裁剪修复候选 `1.5.0+20`）
-> **状态：** BLOCKED — EXACT-SHA ROUTE A FAIL; OWNER DECISION REQUIRED
+> **状态：** CORRECTIVE REVISION AUTHORIZED — DEFAULT-TIME SENTINEL + REQUIRED-ABSENCE VERIFICATION
 > **规模评级：** 中等偏小；若需要第二次 remux、专用 MOV/MP4 writer 或 Media3 升级，立即停止并重新评级
+
+## 0. 2026-07-23 额外修订授权
+
+最终exact-SHA Route A通过本地Media3 `1.10.1`字节码确认：`Mp4Muxer.MetadataCollector`在没有显式 `Mp4TimestampData` 时，以 `System.currentTimeMillis()` 初始化MP4时间。现有policy在来源时间缺失时删除所有时间条目但不覆盖该默认值，verifier又只核验来源中存在的字段；因此无时间或仅GPS来源可能得到处理时间，违反§2.1“不伪造”。
+
+项目所有者已明确授权一次额外且仅限本blocker的外科手术式修订：
+
+1. 来源和Media3输入均无可靠时间时，显式写 `Mp4TimestampData(0, 0)` 覆盖Media3当前时间默认值；该1904 sentinel只代表“未知”，不得进入 `resolvedMetadata`、`DATE_TAKEN`或用户日志。
+2. 输出verifier不得因期望为空而跳过读取；时间和位置都必须同时核验“应存在则匹配、应缺失则实际解析结果为空”。
+3. 若Media3忽略sentinel、写入处理时间或出现任何意外时间/位置，必须在公开URI分配前返回 `CAPTURE_METADATA_FAILED`。
+4. 先增加policy/verifier失败测试，再修改生产代码；随后重跑全部Flutter/Android门禁、冻结新SHA并构建新APK。
+5. 不修改mux/transcode数量、Media3版本、service/task、publication/recovery、裁剪、音频、权限或其他产品范围；不得借此开启新的功能修订。
 
 ## 1. 目标
 
@@ -136,7 +148,7 @@ CaptureLocation
 1. 接收来源读取阶段得到的初始时间和位置。
 2. provider 调用时，从输入 metadata Set 中选择有效的 `Mp4TimestampData` / `Mp4LocationData` 作为缺失字段 fallback。
 3. 清空可传播的来源 metadata Set，避免无意承诺保留任意 mdta/XMP/厂商字段。
-4. 只添加规范化后的 `Mp4TimestampData` 和 `Mp4LocationData`。
+4. 有可靠时间时添加规范化后的 `Mp4TimestampData`；无可靠时间时添加 `Mp4TimestampData(0, 0)`，只用于覆盖Media3的当前时间默认值。位置仅在可靠来源存在时添加。
 5. 保存实际选定的不可变 `resolvedMetadata`，供 Transformer 完成后的验证和 MediaStore publication 使用。
 
 输出方向不从来源 metadata 盲目复制。`InAppMp4Muxer` 仍由最终视频 track `Format.rotationDegrees` 写入输出方向；当前裁剪和显示方向逻辑保持原样。
@@ -147,11 +159,11 @@ Transformer 成功回调后、分配任何公开 URI 前，在现有 media I/O e
 
 1. 用 `MediaMetadataRetriever` 读取临时 MP4。
 2. 用同一纯解析器得到实际时间和位置。
-3. 对 `resolvedMetadata` 中存在的字段逐项验证：
-   - 时间按 epoch seconds 相等；
-   - 位置按每轴 `0.0001°` 容差。
-4. 若期望字段缺失或不匹配，抛出 `CAPTURE_METADATA_FAILED`，删除临时文件并清理 recovery；不得创建 MediaStore/SAF 可见输出。
-5. 若来源没有可靠字段，则不要求输出出现该字段。
+3. 对时间和位置逐项双向验证：
+   - 期望时间存在时按 epoch seconds 相等；期望时间缺失时，实际解析结果也必须缺失；
+   - 期望位置存在时按每轴 `0.0001°` 容差；期望位置缺失时，实际解析结果也必须缺失。
+4. 若应有字段缺失/不匹配，或应无字段意外出现，抛出 `CAPTURE_METADATA_FAILED`，删除临时文件并清理 recovery；不得创建 MediaStore/SAF 可见输出。
+5. 即使来源两个字段均缺失，也必须回读最终临时MP4，证明没有处理时间或意外位置进入输出。
 
 此验证发生在现有 publication boundary 内，不新增服务、任务或第二阶段公共 API。
 
