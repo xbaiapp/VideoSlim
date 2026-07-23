@@ -4,8 +4,8 @@
 > **生成日期：** 2026-07-23
 > **当前候选版本：** `1.7.0+23`
 > **当前候选代码 SHA：** `7c49e57e3b6eafeeb765f2600c17b0242bea1160`
-> **M4-B目标版本：** `1.8.0+24`（RED→GREEN和完整自动门禁已通过，等待冻结后的唯一复审）
-> **阶段：** C1a已实现但项目所有者跳过真机验收（未记PASS）；D1已完成并确认Pixel HEVC运行期明显过冲；M4-B/F8单段时间裁剪等待exact-SHA复审；M3 `1.4.3+18`仍是当前已接受发布基线
+> **M4-B目标版本：** `1.8.0+24`（首个冻结SHA的唯一双路复审已完成并发现一项阻断；唯一纠正修订正在执行exact-SHA门禁）
+> **阶段：** C1a已实现但项目所有者跳过真机验收（未记PASS）；D1已完成并确认Pixel HEVC运行期明显过冲；M4-B/F8正在验证`INVALID_TRIM`恢复纠正；M3 `1.4.3+18`仍是当前已接受发布基线
 > **安全：** 凭据、用户媒体、运行时数据库和私有日志不属于本交接包；任何秘密值只能写为 `[REDACTED]`。
 
 ## 1. 先读什么
@@ -14,15 +14,16 @@
 2. `AI_REVIEW_START_HERE.md`（本文）
 3. `docs/current-project-status.md`（当前进度与证据）
 4. `README.md`（当前用户能力）
-5. `docs/m4-b-device-acceptance.md`（M4-B真机矩阵；当前全部PENDING）
-6. `docs/d1-bitrate-diagnosis-2026-07-23.md`（当前已完成的码率诊断）
-7. `docs/c1a-low-savings-completion-report.md` / `docs/c1a-low-savings-device-acceptance.md`（已实现功能与跳过的PENDING矩阵）
-8. `docs/VideoSlim PRD.md`（产品和权威 contract）
-9. `docs/capture-metadata-completion-report.md` / `docs/capture-metadata-device-acceptance.md`（仍保留的metadata证据与矩阵）
-10. `docs/m4-a-completion-report.md` / `docs/m4-device-acceptance.md`（仍保留的画面裁剪候选与PENDING矩阵）
-11. `docs/known-debt.md`（冻结 Slice B 与已知限制）
-12. `AGENTS.md`（项目治理、复审预算、真机优先规则）
-13. 之后再读下方“关键源码”。
+5. `docs/m4-b-exact-sha-review-disposition.md`（M4-B唯一双路复审、阻断与纠正边界）
+6. `docs/m4-b-device-acceptance.md`（M4-B真机矩阵；当前全部PENDING）
+7. `docs/d1-bitrate-diagnosis-2026-07-23.md`（当前已完成的码率诊断）
+8. `docs/c1a-low-savings-completion-report.md` / `docs/c1a-low-savings-device-acceptance.md`（已实现功能与跳过的PENDING矩阵）
+9. `docs/VideoSlim PRD.md`（产品和权威 contract）
+10. `docs/capture-metadata-completion-report.md` / `docs/capture-metadata-device-acceptance.md`（仍保留的metadata证据与矩阵）
+11. `docs/m4-a-completion-report.md` / `docs/m4-device-acceptance.md`（仍保留的画面裁剪候选与PENDING矩阵）
+12. `docs/known-debt.md`（冻结 Slice B 与已知限制）
+13. `AGENTS.md`（项目治理、复审预算、真机优先规则）
+14. 之后再读下方“关键源码”。
 
 ## 2. 产品边界
 
@@ -56,7 +57,7 @@ VideoSlim 是 Android 本地媒体工具：
 | M4-A | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | F5 画面裁剪已实现；自动化与候选构建通过，真机矩阵未执行 |
 | F7 metadata/name增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 无来源时间改用unknown sentinel并增加必无核验；focused review通过 |
 | C轨 D1/F20–F22 | `C1a IMPLEMENTED — DEVICE TEST WAIVED；D1 COMPLETE` | D1有效配置500 kbps，Pixel HEVC运行期明显过冲；C1b/C2/C3未授权 |
-| M4-B | `AUTOMATED VERIFIED — REVIEW PENDING` | F8连续单段时间裁剪已完成RED→GREEN和完整门禁；候选冻结、唯一复审、APK和真机证据尚未完成 |
+| M4-B | `CORRECTIVE REVISION — EXACT-SHA GATES PENDING` | 首个冻结SHA的一次双路复审为一路PASS、一路BLOCKERS；唯一纠正修订正在验证，APK和真机证据尚未完成 |
 | M4-C | `PLANNED — NOT AUTHORIZED` | F23同源多段依赖M4-B真机接受 |
 | M5/M6 | NOT STARTED | 打磨、批量、目标大小、iOS/上架 |
 

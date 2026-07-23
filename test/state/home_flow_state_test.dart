@@ -125,6 +125,41 @@ void main() {
 
     expect(state.sourceInfo, isNull);
     expect(state.trim, restored);
+    expect(state.trimNeedsRepair, isFalse);
+
+    state.setSelectedSource(
+      uri: 'content://video',
+      info: _videoInfo(durationMs: 5000),
+    );
+    expect(state.trim, restored);
+    expect(state.trimNeedsRepair, isTrue);
+  });
+
+  test('native recovery retains a source-out-of-bounds trim for repair', () {
+    const restored = VideoTrim(startMs: 2000, endMs: 8000);
+    state.setSelectedSource(
+      uri: 'content://video',
+      info: _videoInfo(durationMs: 5000),
+    );
+
+    state.restoreTrim(restored);
+
+    expect(state.trim, restored);
+    expect(state.trimNeedsRepair, isTrue);
+    expect(() => state.saveTrim(restored), throwsArgumentError);
+    expect(
+      () => state.update(() {
+        state.removeTrim();
+        throw ArgumentError('forced failure');
+      }),
+      throwsArgumentError,
+    );
+    expect(state.trim, restored);
+    expect(state.trimNeedsRepair, isTrue);
+
+    state.resetWorkflow();
+    expect(state.trim, isNull);
+    expect(state.trimNeedsRepair, isFalse);
   });
 
   test('entry B saves crop and selects preserve-quality', () {

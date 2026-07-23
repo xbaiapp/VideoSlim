@@ -644,7 +644,7 @@ class HistoryRecord {
 - 推荐顺序：M4-B（当前）→ C2 → C1b/C3决策 → M4-C；C1a与既有真机矩阵作为未测试债务保留。每项独立授权、独立候选、独立验收；详细停止条件见交接文档§7.1。
 
 ### M4-B 时间裁剪（F8）
-- 状态：`AUTOMATED VERIFIED — REVIEW PENDING`。项目所有者于2026-07-23明确跳过C1a真机测试并要求继续下一步；F8连续单段trim已按授权完成RED→GREEN和完整自动门禁，目标版本`1.8.0+24`，但唯一复审、APK静态核验与真机验收尚未完成。
+- 状态：`CORRECTIVE REVISION — EXACT-SHA GATES PENDING`。F8首个冻结SHA `9c9ca887...`的一次双路复审为一路PASS、一路BLOCKERS；接受的`INVALID_TRIM`恢复锁定问题已在唯一纠正修订中修复并通过Flutter `244/244`，仍需冻结纠正SHA、完成完整门禁和APK静态核验。按每任务一轮复审预算不追加第二轮，不得把旧SHA的混合裁决写成纠正SHA的PASS；真机验收尚未执行。
 - 范围：S4起止双滑块；启用已预留的`trimStartMs/trimEndMs`；Kotlin使用Media3 `ClippingConfiguration`，与`Crop → Presentation`同一次Transformer导出。
 - 校验：`0 <= start < end <= duration`、最短保留1秒、无效值fail closed为`INVALID_TRIM`；trim必须在request/snapshot/retry/recovery中round-trip，S3估算按保留时长折算。
 - metadata：继续按源策略保留可靠拍摄时间/GPS；时间裁剪不改变拍摄语义，仍执行发布前应有/应无核验。

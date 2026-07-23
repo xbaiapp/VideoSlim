@@ -2267,6 +2267,76 @@ void main() {
     expect(engine.lastRequest?.videoDecoderMode, 'software');
   });
 
+  testWidgets('restored INVALID_TRIM remains editable when metadata shrinks', (
+    WidgetTester tester,
+  ) async {
+    const retryRequest = ProcessRequest(
+      uri: _sourceUri,
+      outputFileName: 'persisted_invalid_trim.mp4',
+      videoCodec: 'hevc',
+      videoBitrate: 800000,
+      trimStartMs: 2000,
+      trimEndMs: 8000,
+      audioMode: 'copy',
+    );
+    final engine = _FakeEngine()
+      ..snapshot = TaskSnapshot(
+        taskId: 'restored-invalid-trim',
+        sourceUri: _sourceUri,
+        outputFileName: retryRequest.outputFileName,
+        retryRequest: retryRequest,
+        state: TaskState.failed,
+        phase: TaskPhase.finished,
+        percent: 0,
+        errorCode: 'INVALID_TRIM',
+        errorMessage: 'native detail',
+        startedAtEpochMs: DateTime(2026, 7, 23).millisecondsSinceEpoch,
+      )
+      ..infoByUri[_sourceUri] = _videoInfo(durationMs: 5000);
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
+    addTearDown(engine.close);
+
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+
+    final flow = Provider.of<HomeFlowState>(
+      tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+      listen: false,
+    );
+    expect(flow.nativeOwnershipUncertain, isFalse);
+    expect(flow.trim, retryRequest.videoTrim);
+    expect(flow.trimNeedsRepair, isTrue);
+    expect(flow.errorText, '时间裁剪范围无效，请重新选择。');
+    expect(find.byKey(const ValueKey<String>('s3-edit-trim')), findsOneWidget);
+
+    flow.setErrorText(null);
+    await tester.pump();
+    expect(find.text('请先重新编辑或移除无效的时间区间。'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey<String>('start-m2-compression')),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    await _tapVisible(
+      tester,
+      find.byKey(const ValueKey<String>('s3-edit-trim')),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey<String>('invalid-initial-trim-warning')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('running native task snapshot reconnects the progress page', (
     WidgetTester tester,
   ) async {

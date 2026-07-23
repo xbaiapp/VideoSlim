@@ -35,6 +35,7 @@ class _TrimEditorState extends State<TrimEditor> {
   Uint8List? _previewBytes;
   Object? _previewError;
   bool _previewLoading = false;
+  bool _invalidInitialTrim = false;
   Timer? _previewTimer;
   int _previewGeneration = 0;
 
@@ -42,17 +43,18 @@ class _TrimEditorState extends State<TrimEditor> {
   void initState() {
     super.initState();
     final initial = widget.initialTrim;
-    if (initial != null &&
-        (initial.startMs < 0 ||
-            initial.durationMs < TrimEditor.minimumTrimDurationMs ||
-            initial.endMs > widget.durationMs)) {
-      throw ArgumentError.value(initial, 'initialTrim', 'Invalid trim range');
-    }
+    final initialIsValid =
+        initial == null ||
+        (initial.startMs >= 0 &&
+            initial.durationMs >= TrimEditor.minimumTrimDurationMs &&
+            initial.endMs <= widget.durationMs);
+    _invalidInitialTrim = initial != null && !initialIsValid;
+    final editableInitial = initialIsValid ? initial : null;
     _range = RangeValues(
-      (initial?.startMs ?? 0).toDouble(),
-      (initial?.endMs ?? widget.durationMs).toDouble(),
+      (editableInitial?.startMs ?? 0).toDouble(),
+      (editableInitial?.endMs ?? widget.durationMs).toDouble(),
     );
-    _previewTimeMs = initial?.startMs ?? widget.durationMs ~/ 2;
+    _previewTimeMs = editableInitial?.startMs ?? widget.durationMs ~/ 2;
     _loadPreview(_previewTimeMs);
   }
 
@@ -106,6 +108,7 @@ class _TrimEditorState extends State<TrimEditor> {
     setState(() {
       _range = next;
       _previewTimeMs = previewTime;
+      _invalidInitialTrim = false;
     });
     _previewTimer?.cancel();
     _previewGeneration += 1;
@@ -173,6 +176,23 @@ class _TrimEditorState extends State<TrimEditor> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
+              if (_invalidInitialTrim) ...<Widget>[
+                Container(
+                  key: const ValueKey<String>('invalid-initial-trim-warning'),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.errorContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '原裁剪区间已失效，请重新选择，或返回后移除时间裁剪。',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onErrorContainer,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
               AspectRatio(
                 aspectRatio: 16 / 9,
                 child: ColoredBox(

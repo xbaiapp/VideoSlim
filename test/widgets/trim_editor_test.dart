@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:videoslim/engine/video_engine.dart';
+import 'package:videoslim/models/process_request.dart';
 import 'package:videoslim/widgets/trim_editor.dart';
 
 final class _ControlledPreviewEngine extends Fake implements VideoEngine {
@@ -23,11 +24,16 @@ Uint8List _png() => base64Decode(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
 );
 
-Widget _app(_ControlledPreviewEngine engine) => MaterialApp(
+Widget _app(
+  _ControlledPreviewEngine engine, {
+  int durationMs = 10000,
+  VideoTrim? initialTrim,
+}) => MaterialApp(
   home: TrimEditor(
     engine: engine,
     uri: 'content://video/source',
-    durationMs: 10000,
+    durationMs: durationMs,
+    initialTrim: initialTrim,
   ),
 );
 
@@ -131,5 +137,47 @@ void main() {
 
     image = tester.widget<Image>(find.byType(Image));
     expect((image.image as MemoryImage).bytes, same(newest));
+  });
+
+  testWidgets('invalid restored range opens an explicit reselection state', (
+    WidgetTester tester,
+  ) async {
+    final engine = _ControlledPreviewEngine();
+    await tester.pumpWidget(
+      _app(
+        engine,
+        durationMs: 5000,
+        initialTrim: const VideoTrim(startMs: 2000, endMs: 8000),
+      ),
+    );
+
+    expect(
+      find.byKey(const ValueKey<String>('invalid-initial-trim-warning')),
+      findsOneWidget,
+    );
+    final initialSlider = tester.widget<RangeSlider>(
+      find.byKey(const ValueKey<String>('trim-range-slider')),
+    );
+    expect(initialSlider.values, const RangeValues(0, 5000));
+    expect(
+      tester
+          .widget<TextButton>(find.byKey(const ValueKey<String>('save-trim')))
+          .onPressed,
+      isNull,
+    );
+
+    initialSlider.onChanged!(const RangeValues(1000, 4000));
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey<String>('invalid-initial-trim-warning')),
+      findsNothing,
+    );
+    expect(
+      tester
+          .widget<TextButton>(find.byKey(const ValueKey<String>('save-trim')))
+          .onPressed,
+      isNotNull,
+    );
   });
 }

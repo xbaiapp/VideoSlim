@@ -1,7 +1,7 @@
 # M4-B/F8 连续单段时间裁剪实施计划
 
 > **日期：** 2026-07-23
-> **状态：** `AUTOMATED VERIFIED — REVIEW PENDING`
+> **状态：** `CORRECTIVE REVISION — EXACT-SHA GATES PENDING`
 > **基线：** `65e4dee44fe1fbeec5135b199d326ca8673174eb`（`m4a/crop`）
 > **候选版本目标：** `1.8.0+24`
 > **唯一范围：** 一条来源视频的连续单段起止时间，与现有crop、Presentation、音频策略、压缩和metadata白名单在同一次Media3 Transformer导出中完成
@@ -155,7 +155,7 @@ Tasks 1–7已完成；实现与测试文件均已进入待冻结工作树。
 
 ## 4. 自动验证门禁
 
-当前状态：第1–6项已通过；第7项起的冻结、唯一复审、ARM64候选与静态核验尚未完成。
+当前状态：首个冻结SHA已完成第1–8项；唯一双路复审为一路PASS、一路BLOCKERS并触发唯一纠正修订。纠正工作树已通过Flutter `244/244`，仍需冻结纠正SHA并完成第9–11项；按预算不发起第二轮复审。
 
 1. focused Dart/Kotlin测试先各自证明RED，再完成GREEN；
 2. `dart format --output=none --set-exit-if-changed lib test`；

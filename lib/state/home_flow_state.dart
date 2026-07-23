@@ -195,6 +195,7 @@ final class HomeFlowState extends ChangeNotifier {
   VideoInfo? _sourceInfo;
   CropRect? _crop;
   VideoTrim? _trim;
+  bool _trimNeedsRepair = false;
   VideoInfo? _outputInfo;
   AudioInfo? _outputAudioInfo;
   DeviceCapabilities? _capabilities;
@@ -259,6 +260,7 @@ final class HomeFlowState extends ChangeNotifier {
   VideoInfo? get sourceInfo => _sourceInfo;
   CropRect? get crop => _crop;
   VideoTrim? get trim => _trim;
+  bool get trimNeedsRepair => _trimNeedsRepair;
   VideoInfo? get outputInfo => _outputInfo;
   AudioInfo? get outputAudioInfo => _outputAudioInfo;
   DeviceCapabilities? get capabilities => _capabilities;
@@ -524,6 +526,10 @@ final class HomeFlowState extends ChangeNotifier {
     _mutate(() {
       _selectedUri = uri;
       _sourceInfo = info;
+      _trimNeedsRepair =
+          _trim != null &&
+          _sourceInfo != null &&
+          !_isTrimValidForSource(_trim!);
     });
   }
 
@@ -532,7 +538,13 @@ final class HomeFlowState extends ChangeNotifier {
   }
 
   void setSourceInfo(VideoInfo? info) {
-    _mutate(() => _sourceInfo = info);
+    _mutate(() {
+      _sourceInfo = info;
+      _trimNeedsRepair =
+          _trim != null &&
+          _sourceInfo != null &&
+          !_isTrimValidForSource(_trim!);
+    });
   }
 
   void saveCrop(CropRect crop, {bool selectPreserveQuality = false}) {
@@ -583,31 +595,49 @@ final class HomeFlowState extends ChangeNotifier {
     _validateTrim(trim);
     _mutate(() {
       _trim = trim;
+      _trimNeedsRepair = false;
       _errorText = null;
     });
   }
 
   void restoreTrim(VideoTrim? trim) {
-    if (trim != null && _sourceInfo != null) _validateTrim(trim);
-    _mutate(() => _trim = trim);
+    // A native terminal snapshot is authoritative recovery state. Its source
+    // metadata can have changed since the request was accepted, which is the
+    // exact case INVALID_TRIM must leave editable/removable instead of turning
+    // into an ownership-uncertain lock. New saves still validate fail-closed.
+    _mutate(() {
+      _trim = trim;
+      _trimNeedsRepair =
+          trim != null && _sourceInfo != null && !_isTrimValidForSource(trim);
+    });
   }
 
   void removeTrim() {
-    _mutate(() => _trim = null);
+    _mutate(() {
+      _trim = null;
+      _trimNeedsRepair = false;
+    });
   }
 
   void clearTrimForNewSource() {
-    _mutate(() => _trim = null);
+    _mutate(() {
+      _trim = null;
+      _trimNeedsRepair = false;
+    });
   }
 
   void _validateTrim(VideoTrim trim) {
-    final source = _sourceInfo;
-    if (source == null ||
-        trim.startMs < 0 ||
-        trim.durationMs < 1000 ||
-        trim.endMs > source.durationMs) {
+    if (!_isTrimValidForSource(trim)) {
       throw ArgumentError.value(trim, 'trim', 'Invalid source-timeline trim');
     }
+  }
+
+  bool _isTrimValidForSource(VideoTrim trim) {
+    final source = _sourceInfo;
+    return source != null &&
+        trim.startMs >= 0 &&
+        trim.durationMs >= 1000 &&
+        trim.endMs <= source.durationMs;
   }
 
   void setOutputInfo(VideoInfo? info) {
@@ -790,6 +820,7 @@ final class HomeFlowState extends ChangeNotifier {
       _sourceInfo = null;
       _crop = null;
       _trim = null;
+      _trimNeedsRepair = false;
       _outputInfo = null;
       _outputAudioInfo = null;
       _outputPublished = false;
@@ -857,7 +888,17 @@ final class HomeFlowState extends ChangeNotifier {
     if (_selectedPreset == CompressionPreset.preserveQuality && _crop == null) {
       throw StateError('Preserve-quality requires a crop.');
     }
-    if (_trim != null && _sourceInfo != null) _validateTrim(_trim!);
+    if (_trimNeedsRepair) {
+      if (_trim == null ||
+          _sourceInfo == null ||
+          _isTrimValidForSource(_trim!)) {
+        throw StateError(
+          'Trim repair state requires an invalid source-bound trim.',
+        );
+      }
+    } else if (_trim != null && _sourceInfo != null) {
+      _validateTrim(_trim!);
+    }
   }
 
   @override
@@ -901,6 +942,7 @@ final class _HomeFlowStateSnapshot {
     required this.sourceInfo,
     required this.crop,
     required this.trim,
+    required this.trimNeedsRepair,
     required this.outputInfo,
     required this.outputAudioInfo,
     required this.capabilities,
@@ -947,6 +989,7 @@ final class _HomeFlowStateSnapshot {
         sourceInfo: state._sourceInfo,
         crop: state._crop,
         trim: state._trim,
+        trimNeedsRepair: state._trimNeedsRepair,
         outputInfo: state._outputInfo,
         outputAudioInfo: state._outputAudioInfo,
         capabilities: state._capabilities,
@@ -991,6 +1034,7 @@ final class _HomeFlowStateSnapshot {
   final VideoInfo? sourceInfo;
   final CropRect? crop;
   final VideoTrim? trim;
+  final bool trimNeedsRepair;
   final VideoInfo? outputInfo;
   final AudioInfo? outputAudioInfo;
   final DeviceCapabilities? capabilities;
@@ -1035,6 +1079,7 @@ final class _HomeFlowStateSnapshot {
     state._sourceInfo = sourceInfo;
     state._crop = crop;
     state._trim = trim;
+    state._trimNeedsRepair = trimNeedsRepair;
     state._outputInfo = outputInfo;
     state._outputAudioInfo = outputAudioInfo;
     state._capabilities = capabilities;

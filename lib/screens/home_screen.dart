@@ -120,7 +120,8 @@ class _HomeScreenState extends State<HomeScreen> {
   bool get _invalidCropNeedsEdit =>
       _errorText != null && _lastFailureCode == 'INVALID_CROP';
   bool get _invalidTrimNeedsEdit =>
-      _errorText != null && _lastFailureCode == 'INVALID_TRIM';
+      _flow.trimNeedsRepair ||
+      (_errorText != null && _lastFailureCode == 'INVALID_TRIM');
   String? get _publishedOutputUri => _flow.publishedOutputUri;
   String? get _publishedOutputFileName => _flow.publishedOutputFileName;
   VideoInfo? get _sourceInfo => _flow.sourceInfo;
