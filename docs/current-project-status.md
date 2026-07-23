@@ -16,7 +16,9 @@
 | M3 音频提取 | `ACCEPTED — private scope` | 项目所有者于 2026-07-22 明确报告当前 M3 候选测试成功 |
 | M4-A 画面裁剪 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 自动化、构建和静态 APK 检查通过；真机十项矩阵尚未执行 |
 | F7 拍摄时间/GPS与输出命名增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 缺省处理时间blocker已修订；一条Pixel设备“仅时间”任务成功，完整来源/图库/SAF矩阵仍待执行 |
-| M4-B 时间裁剪 | `NOT STARTED — NOT AUTHORIZED` | F8 trim 不在 M4-A 授权范围 |
+| C轨 D1/F20–F22 | `PLANNED — NOT AUTHORIZED` | D1先读既有F19；C1a提示、C1b建议目标、C2能力诊断、C3条件增强均尚未实施 |
+| M4-B 时间裁剪 | `PLANNED — NOT AUTHORIZED` | F8 trim已有书面范围，但不在M4-A授权范围 |
+| M4-C 多段时间编辑 | `PLANNED — NOT AUTHORIZED` | F23同源多段依赖M4-B真机接受；跨文件拼接归F16 |
 | M5 自用版打磨 | NOT STARTED | 历史、批量、目标大小等未实现 |
 | M6 上架/iOS | NOT STARTED | 生产签名、商店和 iOS 引擎未实现 |
 
@@ -119,17 +121,23 @@ M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被
 3. Release 使用 Android Debug certificate，只适合私有安装。
 4. M4-A 默认假设 Media3 effects 作用于按旋转元数据转正后的画面；必须以四种 rotation 真机样本确认。
 5. 单次 `InAppMp4Muxer` 已有一条Pixel设备“时间存在、位置缺失”的App内核验成功证据，但尚无未加工来源谱系、外部atom与图库索引对照；失败时必须停止并重新评级，不得自动增加remux。
-6. M4-B/F8 时间裁剪、M5 历史/批量/目标大小和 M6 iOS/上架均未开始。
+6. C轨、M4-B/F8、M4-C/F23、M5 历史/批量/目标大小和 M6 iOS/上架均未开始；书面规划不得误写为已实现。
 
-## 7. 下一步与禁止范围
+## 7. 已批准的规划基线
+
+- `docs/VideoSlim-AI-Handoff-2026-07-23.md` 已整合项目所有者批准的C轨和时间编辑规划；
+- `docs/VideoSlim PRD.md` v1.12 将C1a/C1b、C2、C3分别映射为F20、F21、F22，将同源多段编辑映射为F23；
+- 规划入库不等于全部条目同时开工。每个代码项仍需明确选择范围，并遵守一次实现、一次修订、一轮复审和真机证据优先规则。
+
+## 8. 下一步与禁止范围
 
 下一步是安装 `b0267a0...` APK，先复测超长日志复制，再执行真实iPhone/Pixel来源、MediaStore图库和SAF矩阵。不得再自动追加生产修订。
 
 - 若出现无法由显示坐标与 ≤2px 取整解释的错位，停止验收并报告；不得改用中间视频后二次有损转码。
 - 若发生源文件/旧输出丢失、覆盖、误删或修改，立即阻止候选。
-- 真机结论前不启动 M4-B/F8、hardening、refactor、migration 或其他生产改动。
+- 当前候选真机验收仍是第一优先。若项目所有者明确选择一个新代码项，应只启动该最小范围；不得并行启动M4-B、C2/C3、hardening、refactor、migration或其他生产改动。
 
-## 8. 阅读顺序
+## 9. 阅读顺序
 
 1. `docs/VideoSlim-AI-Handoff-2026-07-23.md`
 2. `AI_REVIEW_START_HERE.md`

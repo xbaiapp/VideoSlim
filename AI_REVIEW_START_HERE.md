@@ -52,7 +52,9 @@ VideoSlim 是 Android 本地媒体工具：
 | M3 | `ACCEPTED — private scope` | AAC 无损直提和 AAC 强制重编码；所有者于 2026-07-22 报告测试成功 |
 | M4-A | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | F5 画面裁剪已实现；自动化与候选构建通过，真机矩阵未执行 |
 | F7 metadata/name增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 无来源时间改用unknown sentinel并增加必无核验；focused review通过 |
-| M4-B | `NOT STARTED — NOT AUTHORIZED` | F8 时间裁剪未实现、未授权 |
+| C轨 D1/F20–F22 | `PLANNED — NOT AUTHORIZED` | D1只读诊断先行；低收益提示、条件建议、能力页和高级编码档均未实现 |
+| M4-B | `PLANNED — NOT AUTHORIZED` | F8 时间裁剪已有规划，未实现、未授权 |
+| M4-C | `PLANNED — NOT AUTHORIZED` | F23同源多段依赖M4-B真机接受 |
 | M5/M6 | NOT STARTED | 打磨、批量、目标大小、iOS/上架 |
 
 当前私有真机验收APK：
@@ -197,7 +199,7 @@ M4-A 修复候选代码 `d41e21c...`：
 - `1.4.3+18` 只消除成功后 `getAudioInfo` 的重复扫描，不删除发布前完整校验。
 - Task 3 Slice B 未集成；其 worktree/patch 是冻结研究，不是产品代码。
 - Release 使用 Debug certificate，不是生产签名。
-- M4-A crop 已实现但尚未真机接受；M4-B trim 仍未实现、未授权。
+- M4-A crop 已实现但尚未真机接受；C轨、M4-B trim与M4-C多段均只有规划，未实现、未授权。
 - `a92d1cd...` 已用1904/zero sentinel覆盖Media3处理时间默认值，并对时间/GPS执行必有与必无核验；`b0267a0...` 只增加日志复制边界。单次Pixel成功不能替代真机矩阵，不得提前写为ACCEPTED。
 
 ## 8. M4-A 实现边界与剩余验收
@@ -220,7 +222,7 @@ M4-A 已按下列一次转码链路实现：
 ## 9. 已知债务和下一 AI 的工作规则
 
 - 先读 `docs/known-debt.md`；不要恢复或合并冻结的 Slice B。
-- M4-A 只允许继续既定真机验收；M4-B/F8 或任何新 hardening/refactor/migration 仍需项目所有者明确批准。
+- 当前候选真机验收仍优先；如所有者明确选择新代码项，只启动该最小范围。C轨、M4-B/F8、M4-C/F23或任何hardening/refactor/migration不得因规划入库而自动并行开工。
 - 当前候选只保留可靠来源时间/GPS；不要增加隐私模式、完整metadata复制、设备定位、音频继承、第二次remux或自定义MP4 writer。真实单次mux失败时停止并报告规模升级。
 - “分析”意味着只读，不得自动编辑代码。
 - 每任务默认最多一次实现、一次修订、一轮 exact-SHA 复审。

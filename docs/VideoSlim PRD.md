@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.11（同步当前候选、M4-A状态与超长日志复制契约） |
+| 文档版本 | v1.12（同步当前候选、C轨与时间编辑规划） |
 | 日期 | 2026-07-23 |
-| 状态 | M3 `ACCEPTED — private scope`；当前 `1.6.1+22 / b0267a0...` 已包含M4-A画面裁剪、拍摄时间/GPS与命名增强及超长日志复制修复，自动化/静态APK门禁与focused review通过；M4-A、真实来源metadata、MediaStore/SAF及新剪贴板行为仍待真机验收；M4-B 未授权 |
+| 状态 | M3 `ACCEPTED — private scope`；当前 `1.6.1+22 / b0267a0...` 已包含M4-A画面裁剪、拍摄时间/GPS与命名增强及超长日志复制修复，自动化/静态APK门禁与focused review通过；M4-A、真实来源metadata、MediaStore/SAF及新剪贴板行为仍待真机验收；C轨与M4-B/M4-C已规划但未授权实施 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
@@ -85,6 +85,10 @@
 | F16 | 视频合并、变速、GIF 导出 | P2 | 远期 |
 | F17 | HDR 视频处理 ⚠️ | P2 | 远期 |
 | F18 | iOS 版本 | P2 | M6 |
+| F20 | 低收益/可能变大提示与条件式建议目标 | P1 | C轨 C1a/C1b |
+| F21 | 本机编码器能力诊断 | P1 | C轨 C2 |
+| F22 | 条件式高级编码档（QP/CQ/AV1/都不做） | P2 | C轨 C3 |
+| F23 | 同源多段时间编辑 | P1 | M4-C |
 
 ---
 
@@ -144,6 +148,7 @@
 
 **3.3 智能行为**：
 - **无压缩空间提示**：若目标视频码率 ≥ 原视频码率 × 0.9，弹提示"该视频码率已较低，压缩收益有限"，允许用户坚持继续；
+- **F20 规划（未实施）**：C1a 获批后用保守输出上界与已知源文件大小比较，替换上述单一提示判定，不新增第二个弹窗、不静默改写码率；`fileSizeBytes <= 0` 时不触发低收益提示。C1b 只有在 D1、显式码率来源契约和逐 codec 真机校准满足后才允许显示建议值，且必须由用户显式采用；完整边界见 `docs/VideoSlim-AI-Handoff-2026-07-23.md` §7.1；
 - **预估输出大小**：`预估大小(字节) ≈ (视频码率 + 音频码率)(bps) × 时长(秒) ÷ 8`，参数变化时实时刷新显示；
 - **HEVC 编码器降级**：初始化时探测设备是否有 HEVC 硬件编码器；没有则自动降级 H.264 并把目标码率 × 1.5，同时提示用户；
 - 处理前检查剩余存储空间 ≥ 预估输出大小 × 1.5，不足则报错并说明。
@@ -293,6 +298,10 @@
 | F16 合并/变速/GIF | 远期，架构上由引擎接口扩展方法支持，本期不设计细节。 |
 | F17 HDR 处理 | 远期。本期策略见 5.7-R4（检测 + 提示 + 色调映射到 SDR）。 |
 | F18 iOS | UI/业务层复用，新增 AVFoundation 引擎实现（AVAssetExportSession / AVAssetWriter），接口契约见 5.4。 |
+| F20 低收益提示/建议目标 | C1a 仅提示、不改值：用保守输出上界与已知源大小判断预计节省是否低于15%；C1b为后置条件项，要求显式码率来源、D1/C2证据、合法码率范围与逐codec真机校准。不得承诺或强制输出一定小于源文件。 |
+| F21 编码器能力诊断 | F19调试区只读枚举硬件编码器的mime、VBR/CBR/CQ、QP bounds、bitrate/complexity range等；不创建任务、不改变转码行为，但仍按完整小型代码任务构建、测试、复审和真机验证。 |
+| F22 条件式高级编码档 | 仅在F21本机证据后由所有者从QP钳制、CQ、AV1、都不做中选择，至多实施一个；CQ需明示修订VBR产品不变量，AV1按独立格式功能评估。软件x264/x265/SVT-AV1 CRF默认不做。 |
+| F23 同源多段时间编辑 | 依赖M4-B真机通过；Media3 `Composition + EditedMediaItemSequence`一次导出有序、不重叠的同源片段，不支持段乱序。跨文件拼接归F16，不在F23默认范围。 |
 
 ---
 
@@ -625,9 +634,28 @@ class HistoryRecord {
 - 验收：严格执行 F5 的 10 项真机矩阵。旋转样本若出现无法解释的错位，停止并报告；不得用二次编码绕过。未获得逐项真机证据不得标为 PASS。
 - 复审预算：按 `AGENTS.md` B 节，最多 1 次实现 + 1 次修订 + 1 轮复审。
 
+### C 轨：低码率源膨胀应对（D1 / F20–F22）
+- 状态：`PLANNED — NOT AUTHORIZED`。当前候选仍保持既有硬件VBR行为，不按体积拒绝发布。
+- D1：先读取既有F19 `actual video encoder ... configurationFormat`，区分Media3 fallback配置期夹高与有效配置约500kbps后硬件运行期明显过冲；第一步零代码。`configurationFormat`是Media3 `Format`，不是原始Android `MediaFormat`。
+- F20/C1a：以保守输出上界和已知源文件大小替换现有单一低收益提示判定；只提示、不改值，`fileSizeBytes <= 0`不触发；有crop时可选“保持画质（仅裁剪）”，无crop时可选“暂不处理”，始终允许用户继续。
+- F20/C1b：后置条件项。只有显式码率来源契约、D1结论、F21声明范围和逐codec真机校准齐备时才显示建议值；建议值由用户显式采用，不支持的codec组合或低于产品下限时不生成。
+- F21/C2：F19只读编码器能力页；查询mime、VBR/CBR/CQ、QP bounds、bitrate/complexity range及软硬件属性，不创建转码任务。
+- F22/C3：F21真机证据后，所有者从QP钳制、CQ、AV1、都不做中选择，至多实施一个。软件CRF默认不做。
+- 推荐顺序：完成当前真机验收 → D1 → C1a → M4-B → C2 → C1b/C3决策 → M4-C。每项独立授权、独立候选、独立验收；详细停止条件见交接文档§7.1。
+
 ### M4-B 时间裁剪（F8）
-- 状态：`NOT STARTED — NOT AUTHORIZED`。M4-A 的批准不包含 F8 trim。
-- 计划范围：双滑块起止时间 + Media3 `ClippingConfiguration`，与压缩走同一次管线；必须由项目所有者另行批准后才能规划或实施。
+- 状态：`PLANNED — NOT AUTHORIZED`。M4-A 的批准不包含 F8 trim。
+- 范围：S4起止双滑块；启用已预留的`trimStartMs/trimEndMs`；Kotlin使用Media3 `ClippingConfiguration`，与`Crop → Presentation`同一次Transformer导出。
+- 校验：`0 <= start < end <= duration`、最短保留1秒、无效值fail closed为`INVALID_TRIM`；trim必须在request/snapshot/retry/recovery中round-trip，S3估算按保留时长折算。
+- metadata：继续按源策略保留可靠拍摄时间/GPS；时间裁剪不改变拍摄语义，仍执行发布前应有/应无核验。
+- 验收目标：视频起止误差不超过1帧加设备容差，音频另允许约一个AAC frame封装差；以真机ffprobe和主观音画同步为准，不在证据前宣称已保证帧精度。
+- 不做：多段、跨文件拼接、无损切割或时间轴缩略图带。任何可感知音画漂移、trim恢复丢失或文件安全问题立即停止。
+
+### M4-C 同源多段时间编辑（F23）
+- 状态：`PLANNED — NOT AUTHORIZED`，依赖M4-B真机接受。
+- 范围：`Composition + EditedMediaItemSequence`将同一来源拆为有序、不重叠的多个片段，共享`Crop → Presentation`效果并一次导出；`segments[{startMs,endMs}]`长度1与M4-B等价。
+- 不支持段乱序重排。跨文件拼接属于F16，长视频切成多个独立输出由F10批量队列与M4-B组合覆盖。
+- 验收：段边界PTS连续、无卡顿/闪帧、音画同步、进度单调、估算按各段时长求和、取消/恢复完整round-trip、metadata及文件安全不回归。
 
 ### M5 打磨（自用版完成）
 - 任务：F9 历史、F10 批量、F11 目标大小、F13 去音轨、F14 旋转；F12/F15 按 5.7-R6 评估后决定做或砍；整体 UI 打磨与空态/异常态完善。
@@ -680,4 +708,4 @@ class HistoryRecord {
 
 ---
 
-*文档结束。开发从 M0 开始，逐里程碑推进。*
+*文档结束。后续开发按当前候选真机验收与上述逐项授权顺序推进。*
