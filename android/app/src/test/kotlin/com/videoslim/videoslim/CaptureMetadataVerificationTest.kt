@@ -55,7 +55,7 @@ class CaptureMetadataVerificationTest {
     }
 
     @Test
-    fun `empty expectations do not read the output file`() {
+    fun `empty expectations still read and accept a metadata-empty output`() {
         var reads = 0
         val verifier =
             CaptureMetadataFileVerifier {
@@ -65,7 +65,51 @@ class CaptureMetadataVerificationTest {
 
         verifier.verify(File("missing.mp4"), SourceCaptureMetadata.EMPTY)
 
-        assertEquals(0, reads)
+        assertEquals(1, reads)
+    }
+
+    @Test
+    fun `empty expectations reject processing time and unexpected location`() {
+        val actual =
+            SourceCaptureMetadata(
+                captureTimeEpochMs = Instant.parse("2026-07-23T01:02:03Z").toEpochMilli(),
+                location = CaptureLocation(51.5074, -0.1278),
+            )
+        val verifier = CaptureMetadataFileVerifier { actual }
+
+        val error =
+            try {
+                verifier.verify(File("unused.mp4"), SourceCaptureMetadata.EMPTY)
+                fail("Expected verification to fail")
+                error("unreachable")
+            } catch (exception: CaptureMetadataVerificationException) {
+                exception
+            }
+
+        assertEquals(setOf("captureTime", "location"), error.mismatchFields)
+    }
+
+    @Test
+    fun `location-only expectation rejects an unexpected timestamp`() {
+        val location = CaptureLocation(-33.8688, 151.2093)
+        val expected = SourceCaptureMetadata(captureTimeEpochMs = null, location = location)
+        val actual =
+            SourceCaptureMetadata(
+                captureTimeEpochMs = Instant.parse("2026-07-23T01:02:03Z").toEpochMilli(),
+                location = location,
+            )
+        val verifier = CaptureMetadataFileVerifier { actual }
+
+        val error =
+            try {
+                verifier.verify(File("unused.mp4"), expected)
+                fail("Expected verification to fail")
+                error("unreachable")
+            } catch (exception: CaptureMetadataVerificationException) {
+                exception
+            }
+
+        assertEquals(setOf("captureTime"), error.mismatchFields)
     }
 
     @Test
@@ -86,7 +130,7 @@ class CaptureMetadataVerificationTest {
                 exception
             }
 
-        assertEquals(setOf("location"), error.mismatchFields)
+        assertEquals(setOf("captureTime", "location"), error.mismatchFields)
         assertTrue(!error.message!!.contains("-33.8688"))
         assertTrue(!error.message!!.contains("151.2093"))
     }

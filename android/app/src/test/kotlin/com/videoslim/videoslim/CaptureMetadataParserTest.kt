@@ -68,6 +68,13 @@ class CaptureMetadataParserTest {
     }
 
     @Test
+    fun `1904 MP4 sentinel is never interpreted as source capture time`() {
+        assertNull(CaptureMetadataParser.unixTimeFromMp4Seconds(0L))
+        assertNull(CaptureMetadataParser.parseCaptureTime("1904-01-01T00:00:00Z"))
+        assertNull(CaptureMetadataParser.parseCaptureTime("19040101T000000Z"))
+    }
+
+    @Test
     fun `parses ISO 6709 latitude longitude and optional altitude`() {
         assertEquals(
             CaptureLocation(latitude = 37.421998, longitude = -122.084),

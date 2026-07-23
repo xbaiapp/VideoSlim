@@ -42,9 +42,6 @@ internal data class SourceCaptureMetadata(
     val hasLocation: Boolean
         get() = location != null
 
-    val isEmpty: Boolean
-        get() = !hasCaptureTime && !hasLocation
-
     override fun toString(): String =
         "SourceCaptureMetadata(" +
             "captureTimePresent=$hasCaptureTime, " +
@@ -155,10 +152,10 @@ internal class CaptureMetadataPolicy(
         resolved = selected
 
         metadataEntries.clear()
-        selected.captureTimeEpochMs?.let { epochMs ->
-            val mp4Seconds = Mp4TimestampData.unixTimeToMp4TimeSeconds(epochMs)
-            metadataEntries += Mp4TimestampData(mp4Seconds, mp4Seconds)
-        }
+        val mp4Seconds =
+            selected.captureTimeEpochMs?.let(Mp4TimestampData::unixTimeToMp4TimeSeconds)
+                ?: UNKNOWN_CAPTURE_TIME_MP4_SECONDS
+        metadataEntries += Mp4TimestampData(mp4Seconds, mp4Seconds)
         selected.location?.let { location ->
             metadataEntries +=
                 Mp4LocationData(
@@ -171,6 +168,10 @@ internal class CaptureMetadataPolicy(
     fun resolvedMetadata(): SourceCaptureMetadata = resolved
 
     private companion object {
+        // Mp4Muxer defaults to System.currentTimeMillis(). A 1904 sentinel
+        // explicitly preserves "unknown" without fabricating processing time.
+        const val UNKNOWN_CAPTURE_TIME_MP4_SECONDS = 0L
+
         fun sanitize(metadata: SourceCaptureMetadata): SourceCaptureMetadata =
             SourceCaptureMetadata(
                 captureTimeEpochMs =
@@ -188,23 +189,27 @@ internal object CaptureMetadataVerification {
         actual: SourceCaptureMetadata,
     ): Set<String> =
         buildSet {
-            expected.captureTimeEpochMs?.let { expectedTime ->
-                val actualTime = actual.captureTimeEpochMs
-                if (actualTime == null || expectedTime / 1_000L != actualTime / 1_000L) {
-                    add("captureTime")
-                }
+            val expectedTime = expected.captureTimeEpochMs
+            val actualTime = actual.captureTimeEpochMs
+            if (
+                (expectedTime == null && actualTime != null) ||
+                (expectedTime != null &&
+                    (actualTime == null || expectedTime / 1_000L != actualTime / 1_000L))
+            ) {
+                add("captureTime")
             }
-            expected.location?.let { expectedLocation ->
-                val actualLocation = actual.location
-                if (
-                    actualLocation == null ||
-                    abs(expectedLocation.latitude - actualLocation.latitude) >
+            val expectedLocation = expected.location
+            val actualLocation = actual.location
+            if (
+                (expectedLocation == null && actualLocation != null) ||
+                (expectedLocation != null &&
+                    (actualLocation == null ||
+                        abs(expectedLocation.latitude - actualLocation.latitude) >
                         LOCATION_TOLERANCE_DEGREES ||
-                    abs(expectedLocation.longitude - actualLocation.longitude) >
-                        LOCATION_TOLERANCE_DEGREES
-                ) {
-                    add("location")
-                }
+                        abs(expectedLocation.longitude - actualLocation.longitude) >
+                        LOCATION_TOLERANCE_DEGREES))
+            ) {
+                add("location")
             }
         }
 }
@@ -225,13 +230,11 @@ internal class CaptureMetadataFileVerifier(
         outputFile: File,
         expected: SourceCaptureMetadata,
     ) {
-        if (expected.isEmpty) return
-        val expectedFields = expected.fieldNames()
         val actual =
             try {
                 reader(outputFile)
             } catch (error: Throwable) {
-                throw CaptureMetadataVerificationException(expectedFields, error)
+                throw CaptureMetadataVerificationException(CAPTURE_METADATA_FIELD_NAMES, error)
             }
         val mismatches = CaptureMetadataVerification.mismatchFields(expected, actual)
         if (mismatches.isNotEmpty()) {
@@ -240,11 +243,7 @@ internal class CaptureMetadataFileVerifier(
     }
 }
 
-private fun SourceCaptureMetadata.fieldNames(): Set<String> =
-    buildSet {
-        if (hasCaptureTime) add("captureTime")
-        if (hasLocation) add("location")
-    }
+private val CAPTURE_METADATA_FIELD_NAMES = setOf("captureTime", "location")
 
 private fun readCaptureMetadataFromFile(file: File): SourceCaptureMetadata {
     val retriever = MediaMetadataRetriever()

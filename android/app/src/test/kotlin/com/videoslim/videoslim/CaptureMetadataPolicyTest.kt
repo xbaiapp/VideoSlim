@@ -4,6 +4,7 @@ import androidx.media3.common.Metadata
 import androidx.media3.container.Mp4LocationData
 import androidx.media3.container.Mp4OrientationData
 import androidx.media3.container.Mp4TimestampData
+import androidx.media3.muxer.MuxerUtil
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -62,7 +63,7 @@ class CaptureMetadataPolicyTest {
     }
 
     @Test
-    fun `invalid MP4 sentinel and invalid location are omitted without fabrication`() {
+    fun `missing capture time writes only the 1904 sentinel and omits invalid location`() {
         val policy =
             CaptureMetadataPolicy(
                 SourceCaptureMetadata(
@@ -74,9 +75,38 @@ class CaptureMetadataPolicyTest {
 
         policy.updateMetadataEntries(entries)
 
-        assertTrue(entries.isEmpty())
+        assertEquals(1, entries.size)
+        val sentinel = entries.filterIsInstance<Mp4TimestampData>().single()
+        assertEquals(0L, sentinel.creationTimestampSeconds)
+        assertEquals(0L, sentinel.modificationTimestampSeconds)
+        assertTrue(MuxerUtil.isMetadataSupported(sentinel))
         assertNull(policy.resolvedMetadata().captureTimeEpochMs)
         assertNull(policy.resolvedMetadata().location)
+    }
+
+    @Test
+    fun `location-only source also writes the 1904 sentinel instead of processing time`() {
+        val location = CaptureLocation(51.5074, -0.1278)
+        val policy =
+            CaptureMetadataPolicy(
+                SourceCaptureMetadata(
+                    captureTimeEpochMs = null,
+                    location = location,
+                ),
+            )
+        val entries = linkedSetOf<Metadata.Entry>()
+
+        policy.updateMetadataEntries(entries)
+
+        assertEquals(2, entries.size)
+        val sentinel = entries.filterIsInstance<Mp4TimestampData>().single()
+        assertEquals(0L, sentinel.creationTimestampSeconds)
+        assertEquals(0L, sentinel.modificationTimestampSeconds)
+        assertTrue(MuxerUtil.isMetadataSupported(sentinel))
+        val writtenLocation = entries.filterIsInstance<Mp4LocationData>().single()
+        assertEquals(location.latitude, writtenLocation.latitude.toDouble(), 0.000001)
+        assertEquals(location.longitude, writtenLocation.longitude.toDouble(), 0.000001)
+        assertEquals(SourceCaptureMetadata(null, location), policy.resolvedMetadata())
     }
 
     @Test
