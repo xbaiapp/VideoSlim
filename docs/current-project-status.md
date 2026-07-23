@@ -1,10 +1,10 @@
 # VideoSlim 当前项目状态
 
 > **更新时间：** 2026-07-23
-> **当前阶段：** M4-B/F8单段时间裁剪 `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`
+> **当前阶段：** C2/F21编码器能力诊断 `AUTHORIZED — IMPLEMENTATION IN PROGRESS`
 > **上一C1a候选：** `1.7.0+23 / 7c49e57e3b6eafeeb765f2600c17b0242bea1160`（设备测试由所有者跳过）
-> **当前M4-B内部候选：** `1.8.0+24 / 9351e75bcc43c71a6e7caf03093fe27b0072b061`
-> **当前已接受发布基线：** M3 `19abfb7da2e8fa028e7200000f0dc2a114bc840e`（`1.4.3+18`）
+> **当前已接受私有基线：** M4-B `1.8.0+24 / 9351e75bcc43c71a6e7caf03093fe27b0072b061`（所有者报告测试成功；详细矩阵未提供）
+> **上一已接受基线：** M3 `19abfb7da2e8fa028e7200000f0dc2a114bc840e`（`1.4.3+18`）
 
 ## 1. 里程碑进度
 
@@ -16,9 +16,9 @@
 | M3 音频提取 | `ACCEPTED — private scope` | 项目所有者于 2026-07-22 明确报告当前 M3 候选测试成功 |
 | M4-A 画面裁剪 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 自动化、构建和静态 APK 检查通过；真机十项矩阵尚未执行 |
 | F7 拍摄时间/GPS与输出命名增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 缺省处理时间blocker已修订；一条Pixel设备“仅时间”任务成功，完整来源/图库/SAF矩阵仍待执行 |
-| C轨 D1/F20–F22 | `C1a IMPLEMENTED — DEVICE TEST WAIVED；D1 COMPLETE` | C1a矩阵由所有者跳过、未记PASS；D1确认Pixel HEVC有效配置仍为500 kbps但运行期明显过冲；C1b/C2/C3仍未授权 |
-| M4-B 时间裁剪 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 唯一纠正SHA通过Flutter `244/244`、Android JVM `346/346`、完整lint/build和APK核验；真机矩阵仍为`NOT RUN` |
-| M4-C 多段时间编辑 | `PLANNED — NOT AUTHORIZED` | F23同源多段依赖M4-B真机接受；跨文件拼接归F16 |
+| C轨 D1/F20–F22 | `C2/F21 AUTHORIZED — IN PROGRESS` | C1a矩阵由所有者跳过、未记PASS；D1确认Pixel HEVC运行期明显过冲；C2只读能力诊断已获准，C1b/C3仍未授权 |
+| M4-B 时间裁剪 | `ACCEPTED — private scope` | `1.8.0+24`由所有者报告测试成功；详细设备/素材/PTS/日志和逐项矩阵未提供，未填行继续PENDING |
+| M4-C 多段时间编辑 | `PLANNED — NOT AUTHORIZED` | M4-B依赖已满足，但F23仍需独立授权；跨文件拼接归F16 |
 | M5 自用版打磨 | NOT STARTED | 历史、批量、目标大小等未实现 |
 | M6 上架/iOS | NOT STARTED | 生产签名、商店和 iOS 引擎未实现 |
 
@@ -99,13 +99,13 @@ M4-B首个冻结SHA `9c9ca887ec4a8a26a6eb892077f88d333eb2a0da`通过当时的自
 - APK ZIP、16 KiB zipalign、v2签名、证书连续性、package/version/SDK/仅ARM64 ABI、权限和静态凭据扫描：PASS；
 - APK：`18,509,915` bytes，SHA-256 `ac85d84e0a69185b3e73180737918fb98326f3899db9264991c0a9c681351567`。
 
-按每任务一轮复审预算没有发起第二轮；旧SHA的混合裁决不等于纠正SHA的独立PASS。完整处置与候选证据见`docs/m4-b-exact-sha-review-disposition.md`和`docs/m4-b-completion-report.md`。这些自动化与静态结果仍不是M4-B真机PASS。
+按每任务一轮复审预算没有发起第二轮；旧SHA的混合裁决不等于纠正SHA的独立PASS。完整处置与候选证据见`docs/m4-b-exact-sha-review-disposition.md`和`docs/m4-b-completion-report.md`。这些自动化与静态结果本身不是M4-B真机PASS；后续接受来自项目所有者的独立测试成功报告。
 
 构建机没有连接 Android 设备。项目所有者提供的Pixel 10 Pro / Android 17最后一次任务日志证明：来源解析为“时间存在、位置缺失”，最终MP4同样通过该状态核验并成功发布；但来源原文件谱系、外部atom对照、`DATE_TAKEN`查询、图库排序和SAF仍未验证，因此不能把该单次成功扩写为完整设备验收。
 
 ## 5. 真机验收状态
 
-`docs/c1a-low-savings-device-acceptance.md`已由所有者明确跳过且所有行仍为`PENDING`；`docs/m4-b-device-acceptance.md`尚未执行，`docs/capture-metadata-device-acceptance.md`和独立M4-A裁剪矩阵也保持`PENDING`，包括：
+项目所有者已报告M4-B测试成功并接受private scope；由于没有提供设备、素材、PTS、截图或逐项日志，`docs/m4-b-device-acceptance.md`未报告的矩阵行继续保持`PENDING`。`docs/c1a-low-savings-device-acceptance.md`已由所有者明确跳过且所有行仍为`PENDING`；`docs/capture-metadata-device-acceptance.md`和独立M4-A裁剪矩阵也保持`PENDING`，包括：
 
 1. 0°/90°/180°/270° 框选与输出对齐；
 2. 五种比例与自由拖拽；
@@ -118,7 +118,7 @@ M4-B首个冻结SHA `9c9ca887ec4a8a26a6eb892077f88d333eb2a0da`通过当时的自
 9. MediaStore `DATE_TAKEN`、图库排序和SAF内部metadata；
 10. 新视频/音频文件名及provider碰撞处理。
 
-项目所有者完成对应清单并明确接受前，M4-A、M4-B和拍摄时间/GPS增强都不得写为 `ACCEPTED`。
+M4-B只在所有者实际测试的私有范围内记为`ACCEPTED`；未报告矩阵不得补写PASS。M4-A和拍摄时间/GPS增强在完成对应证据与明确接受前仍不得写为`ACCEPTED`。
 
 ## 6. 已知限制与冻结债务
 
@@ -127,22 +127,22 @@ M4-B首个冻结SHA `9c9ca887ec4a8a26a6eb892077f88d333eb2a0da`通过当时的自
 3. Release 使用 Android Debug certificate，只适合私有安装。
 4. M4-A 默认假设 Media3 effects 作用于按旋转元数据转正后的画面；必须以四种 rotation 真机样本确认。
 5. 单次 `InAppMp4Muxer` 已有一条Pixel设备“时间存在、位置缺失”的App内核验成功证据，但尚无未加工来源谱系、外部atom与图库索引对照；失败时必须停止并重新评级，不得自动增加remux。
-6. C1b/C2/C3、M4-C/F23、M5历史/批量/目标大小和M6 iOS/上架均未开始；M4-B已完成纠正SHA门禁和APK静态核验，但真机验收尚未执行。
+6. C2/F21现在是唯一获准代码项；C1b/C3、M4-C/F23、M5历史/批量/目标大小和M6 iOS/上架均未开始。
 
 ## 7. 已批准的规划基线
 
 - `docs/VideoSlim-AI-Handoff-2026-07-23.md` 已整合项目所有者批准的C轨和时间编辑规划；
-- `docs/VideoSlim PRD.md` v1.16 将C1a/C1b、C2、C3分别映射为F20、F21、F22，将同源多段编辑映射为F23，并记录M4-B内部候选；
-- C1a实现已完成、真机矩阵由所有者跳过但不记PASS；D1结论见`docs/d1-bitrate-diagnosis-2026-07-23.md`；M4-B代码项已完成并等待设备验收。C1b/C2/C3/M4-C仍不得开工；
+- `docs/VideoSlim PRD.md` v1.17 将C1a/C1b、C2、C3分别映射为F20、F21、F22，将同源多段编辑映射为F23，并记录M4-B私有接受与C2授权；
+- C1a实现已完成、真机矩阵由所有者跳过但不记PASS；D1结论见`docs/d1-bitrate-diagnosis-2026-07-23.md`；M4-B已由所有者报告测试成功并接受private scope；C2/F21已获准作为唯一代码项。C1b/C3/M4-C仍不得开工；
 - 每个代码项遵守一次实现、一次修订、一轮复审和真机证据优先规则。
 
 ## 8. 下一步与禁止范围
 
-下一步只执行`docs/m4-b-device-acceptance.md`中的`1.8.0+24`真机矩阵；唯一双路复审和唯一修订预算均已使用，不得自动追加第二轮。C1a与既有真机矩阵保留为未测试债务，不得改写为PASS。
+下一步只实施C2/F21编码器能力诊断：F19新增只读能力页面，查询本机target video encoders，不创建媒体任务、不configure codec、不改变现有VBR/codec选择、publication或recovery。该小候选独立走RED→GREEN、版本、自动化、一次复审与真机证据。
 
 - 若出现无法由显示坐标与 ≤2px 取整解释的错位，停止验收并报告；不得改用中间视频后二次有损转码。
 - 若发生源文件/旧输出丢失、覆盖、误删或修改，立即阻止候选。
-- 当前只执行M4-B真机验收，不再修改生产代码；不得并行启动C1b、C2/C3、M4-C、hardening、refactor、migration或其他生产改动。新候选不能把既有真机矩阵改写为PASS。
+- 当前只实施C2；不得并行启动C1b、C3、M4-C、hardening、refactor、migration或其他生产改动。新候选不能把既有真机矩阵改写为PASS。
 
 ## 9. 阅读顺序
 

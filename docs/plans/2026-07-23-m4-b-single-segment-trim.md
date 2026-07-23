@@ -1,7 +1,7 @@
 # M4-B/F8 连续单段时间裁剪实施计划
 
 > **日期：** 2026-07-23
-> **状态：** `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`
+> **状态：** `ACCEPTED — private scope (OWNER-REPORTED SUCCESS)`
 > **基线：** `65e4dee44fe1fbeec5135b199d326ca8673174eb`（`m4a/crop`）
 > **候选版本目标：** `1.8.0+24`
 > **唯一范围：** 一条来源视频的连续单段起止时间，与现有crop、Presentation、音频策略、压缩和metadata白名单在同一次Media3 Transformer导出中完成
@@ -155,7 +155,7 @@ Tasks 1–7已完成；实现与测试文件均已进入待冻结工作树。
 
 ## 4. 自动验证门禁
 
-当前状态：首个冻结SHA已完成第1–8项；唯一双路复审为一路PASS、一路BLOCKERS并触发唯一纠正修订。纠正SHA `9351e75bcc43c71a6e7caf03093fe27b0072b061`已完成第9–11项：Flutter `244/244`、Android JVM `346/346`、完整lint/build与`1.8.0+24` ARM64 APK独立核验均PASS；按预算不发起第二轮复审，设备矩阵仍全部PENDING。
+当前状态：首个冻结SHA已完成第1–8项；唯一双路复审为一路PASS、一路BLOCKERS并触发唯一纠正修订。纠正SHA `9351e75bcc43c71a6e7caf03093fe27b0072b061`已完成第9–11项：Flutter `244/244`、Android JVM `346/346`、完整lint/build与`1.8.0+24` ARM64 APK独立核验均PASS；按预算不发起第二轮复审。项目所有者随后报告测试成功并接受private scope，但未提供逐项矩阵证据，因此详细设备行继续PENDING。
 
 1. focused Dart/Kotlin测试先各自证明RED，再完成GREEN；
 2. `dart format --output=none --set-exit-if-changed lib test`；
@@ -169,7 +169,7 @@ Tasks 1–7已完成；实现与测试文件均已进入待冻结工作树。
 10. 构建ARM64 release APK，核验SHA-256、package/version、ABI、ZIP、zipalign、v2签名、证书连续性、权限和秘密模式；
 11. 文档必须区分自动化PASS与真机`NOT RUN/PENDING`，不得把用户跳过C1a测试外推为M4-B设备PASS。
 
-## 5. 真机验收矩阵（候选完成后保持PENDING）
+## 5. 真机验收矩阵（所有者已接受；未提供的逐项证据保持PENDING）
 
 - 0°：{无crop,crop} × {掐头,去尾,两端}；
 - 90°：crop + 两端trim抽查；

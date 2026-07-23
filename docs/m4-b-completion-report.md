@@ -1,12 +1,12 @@
 # VideoSlim M4-B/F8完成报告
 
 > **日期：** 2026-07-23
-> **状态：** `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`
+> **状态：** `ACCEPTED — private scope (OWNER-REPORTED SUCCESS)`
 > **版本：** `1.8.0+24`
 > **纠正候选源码SHA：** `9351e75bcc43c71a6e7caf03093fe27b0072b061`
 > **源码tree：** `c9807183c59bbce7fdf47ac79fac2fde24c179ed`
 > **分支：** `m4a/crop`
-> **设备证据：** `NOT RUN — NO DEVICE EVIDENCE`
+> **设备证据：** 所有者报告测试成功；详细矩阵、PTS与日志未提供
 
 ## 1. 交付范围
 
@@ -100,8 +100,8 @@
 
 证据包含exact gates、构建日志、APK/manifest/badging/permissions、zipalign、签名、上一APK对照、秘密扫描、source archive与哈希清单；不包含用户媒体、精确GPS、运行时数据库或凭据。
 
-## 6. 设备边界与下一步
+## 6. 设备边界与后续接受
 
-`docs/m4-b-device-acceptance.md`全部设备行仍为`PENDING`，总状态为`NOT RUN — NO DEVICE EVIDENCE`。本报告没有把自动化或静态APK检查写成真机PASS。
+项目所有者于2026-07-23通过Telegram报告`1.8.0+24`“测试成功，继续进行下一步”，据此将M4-B记录为`ACCEPTED — private scope`。该报告没有附带设备型号、素材、逐项步骤、PTS、截图或日志，因此`docs/m4-b-device-acceptance.md`中的详细矩阵仍保持`PENDING`；不能把所有者接受扩写为逐行PASS、多设备保证、production签名或商店发布证明。
 
-下一步仅是使用本SHA和本APK执行M4-B真机矩阵，重点确认实际起止段、A/V同步、trim与crop/缩放/codec/音频组合、后台/取消/恢复/retry、metadata/发布安全以及源文件不变。出现错误片段、明显不同步、源文件或旧输出丢失/覆盖/修改时必须停止。
+后续唯一获准代码项为C2/F21本机编码器能力诊断。M4-C多段、C1b建议目标、C3高级编码档及hardening/refactor/migration仍未授权。

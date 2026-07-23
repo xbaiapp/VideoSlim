@@ -1,11 +1,19 @@
 # VideoSlim M4-B 单段时间裁剪真机验收清单
 
 > **日期：** 2026-07-23
-> **状态：** `NOT RUN — NO DEVICE EVIDENCE`
+> **状态：** `ACCEPTED — private scope (OWNER-REPORTED SUCCESS; DETAILED MATRIX NOT PROVIDED)`
 > **目标版本：** `1.8.0+24`
 > **源码身份：** `9351e75bcc43c71a6e7caf03093fe27b0072b061`（tree `c9807183c59bbce7fdf47ac79fac2fde24c179ed`）
 > **APK身份：** `VideoSlim-1.8.0+24-9351e75-arm64-v8a-release.apk`，SHA-256 `ac85d84e0a69185b3e73180737918fb98326f3899db9264991c0a9c681351567`
-> **证据边界：** 自动化、静态检查和APK验证不能替代真机安装、播放、时间边界、音画同步、后台恢复或文件安全验收。下列项目在真实证据写入前全部保持`PENDING`。
+> **证据边界：** 项目所有者于2026-07-23通过Telegram明确报告“测试成功，继续进行下一步”。该报告足以记录其私有范围接受决定，但没有提供设备型号、素材、逐项步骤、PTS、截图或日志；因此下列矩阵行继续保持`PENDING`，不得反向预填PASS或外推为多设备保证。
+
+## 0. 所有者报告
+
+- 报告渠道：Telegram当前项目会话；
+- 原文：`测试成功，继续进行下一步，要求同上`；
+- 处置：M4-B `1.8.0+24`接受为`ACCEPTED — private scope`；
+- 未提供：设备/系统身份、逐项矩阵、时间边界PTS、音画同步记录、后台/retry/SAF逐项证据；
+- 边界：所有未提供细节的行保持`PENDING`，本决定不表示production、多设备或商店发布验证。
 
 ## 1. 测试前记录
 
@@ -91,7 +99,7 @@
 - [ ] 快速连续操作不启动两个任务；
 - [ ] F19能够区分请求端点、实际codec/decoder/encoder和最终终态。
 
-状态：`PENDING`
+状态：`PENDING — per-row details not provided; owner acceptance recorded separately`
 
 ## 7. 停止条件
 
@@ -109,10 +117,10 @@
 
 ## 8. 最终结论
 
-- [ ] `ACCEPTED — private scope`
+- [x] `ACCEPTED — private scope`
 - [ ] `REJECTED — blocker found`
-- [x] `PENDING — not yet executed`
+- [ ] `PENDING — not yet executed`
 
-项目所有者结论：____________________________________________________
+项目所有者结论：2026-07-23报告“测试成功，继续进行下一步”；接受`1.8.0+24`私有自用范围。逐项矩阵未提供，继续保留PENDING。
 
-日期：____________________
+日期：2026-07-23

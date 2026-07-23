@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.16（记录M4-B纠正候选、完整门禁与APK静态核验） |
+| 文档版本 | v1.17（记录M4-B私有接受与C2/F21实施授权） |
 | 日期 | 2026-07-23 |
-| 状态 | M3 `ACCEPTED — private scope`；`1.7.0+23 / 7c49e57...`已实现F20/C1a但所有者跳过真机验收（未记PASS）；D1确认Pixel HEVC有效配置500 kbps后运行期明显过冲；M4-B/F8纠正SHA `9351e75...`与`1.8.0+24` ARM64内部候选已完成自动化和APK静态核验，真机状态为`NOT RUN`；C1b/F21/F22与M4-C仍未授权 |
+| 状态 | M3 `ACCEPTED — private scope`；`1.7.0+23 / 7c49e57...`已实现F20/C1a但所有者跳过真机验收（未记PASS）；D1确认Pixel HEVC运行期明显过冲；M4-B/F8 `1.8.0+24 / 9351e75...`由所有者报告测试成功并接受private scope，未提供的逐项矩阵仍PENDING；C2/F21已获准作为唯一代码项，C1b/F22与M4-C仍未授权 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
@@ -287,7 +287,7 @@
 
 | 功能 | 规格要点 |
 |---|---|
-| F8 时间裁剪 | M4-B已授权为当前唯一代码项；使用双滑块选择连续起止时间，Media3 `ClippingConfiguration`与crop/缩放/压缩走同一次管线。不得顺带实现多段、乱序或跨文件。 |
+| F8 时间裁剪 | M4-B已由项目所有者报告测试成功并接受private scope；使用双滑块选择连续起止时间，Media3 `ClippingConfiguration`与crop/缩放/压缩走同一次管线。不得顺带扩展到多段、乱序或跨文件。 |
 | F9 历史记录 | 本地数据库（sqflite 或 drift）记录每次任务：时间、类型、参数、前后大小、输出 URI；首页展示累计节省空间。 |
 | F10 批量队列 | 多选视频 → 统一参数 → 顺序执行队列；前台服务通知显示"第 x/n 个"。 |
 | F11 目标大小压缩 | 用户输入目标大小（如 200MB），反推视频码率 = (目标大小×8 ÷ 时长) − 音频码率；低于 0.5 Mbps 时提示不可行并建议降分辨率。 |
@@ -299,9 +299,9 @@
 | F17 HDR 处理 | 远期。本期策略见 5.7-R4（检测 + 提示 + 色调映射到 SDR）。 |
 | F18 iOS | UI/业务层复用，新增 AVFoundation 引擎实现（AVAssetExportSession / AVAssetWriter），接口契约见 5.4。 |
 | F20 低收益提示/建议目标 | C1a 仅提示、不改值：用保守输出上界与已知源大小判断预计节省是否低于15%；C1b为后置条件项，要求显式码率来源、D1/C2证据、合法码率范围与逐codec真机校准。不得承诺或强制输出一定小于源文件。 |
-| F21 编码器能力诊断 | F19调试区只读枚举硬件编码器的mime、VBR/CBR/CQ、QP bounds、bitrate/complexity range等；不创建任务、不改变转码行为，但仍按完整小型代码任务构建、测试、复审和真机验证。 |
+| F21 编码器能力诊断 | **当前唯一获准代码项。** F19调试区只读枚举目标视频编码器的mime、VBR/CBR/CQ、QP bounds、bitrate/complexity range及软/硬件属性；不configure codec、不创建任务、不改变转码行为，但仍按完整小型代码任务构建、测试、复审和真机验证。 |
 | F22 条件式高级编码档 | 仅在F21本机证据后由所有者从QP钳制、CQ、AV1、都不做中选择，至多实施一个；CQ需明示修订VBR产品不变量，AV1按独立格式功能评估。软件x264/x265/SVT-AV1 CRF默认不做。 |
-| F23 同源多段时间编辑 | 依赖M4-B真机通过；Media3 `Composition + EditedMediaItemSequence`一次导出有序、不重叠的同源片段，不支持段乱序。跨文件拼接归F16，不在F23默认范围。 |
+| F23 同源多段时间编辑 | M4-B依赖已满足但仍未授权；Media3 `Composition + EditedMediaItemSequence`一次导出有序、不重叠的同源片段，不支持段乱序。跨文件拼接归F16，不在F23默认范围。 |
 
 ---
 
@@ -652,7 +652,7 @@ class HistoryRecord {
 - 不做：多段、跨文件拼接、无损切割或时间轴缩略图带。任何可感知音画漂移、trim恢复丢失或文件安全问题立即停止。
 
 ### M4-C 同源多段时间编辑（F23）
-- 状态：`PLANNED — NOT AUTHORIZED`，依赖M4-B真机接受。
+- 状态：`PLANNED — NOT AUTHORIZED`。M4-B依赖已满足，但本功能仍需独立授权。
 - 范围：`Composition + EditedMediaItemSequence`将同一来源拆为有序、不重叠的多个片段，共享`Crop → Presentation`效果并一次导出；`segments[{startMs,endMs}]`长度1与M4-B等价。
 - 不支持段乱序重排。跨文件拼接属于F16，长视频切成多个独立输出由F10批量队列与M4-B组合覆盖。
 - 验收：段边界PTS连续、无卡顿/闪帧、音画同步、进度单调、估算按各段时长求和、取消/恢复完整round-trip、metadata及文件安全不回归。

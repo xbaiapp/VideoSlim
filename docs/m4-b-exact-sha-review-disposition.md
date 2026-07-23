@@ -55,4 +55,4 @@
 
 ## 5. 设备边界
 
-本处置没有新增任何真机证据。M4-B真机矩阵仍为`NOT RUN — NO DEVICE EVIDENCE`；C1a仍为`NOT RUN — USER DECLINED`，两者都不得改写为PASS。
+本处置当时没有新增任何真机证据。项目所有者后来于2026-07-23报告M4-B测试成功并接受private scope，见`docs/m4-b-device-acceptance.md`；未提供的逐项矩阵仍为PENDING。C1a仍为`NOT RUN — USER DECLINED`，不得改写为PASS。
