@@ -131,6 +131,23 @@ class ProcessingNotificationTextTest {
     }
 
     @Test
+    fun `capture metadata verification failure does not claim a saved output`() {
+        val failed =
+            ProcessingNotificationText.from(
+                snapshot(
+                    state = "failed",
+                    percent = 99.0,
+                    phase = TaskRuntimeSnapshot.PHASE_FINISHED,
+                    errorCode = EngineErrorCode.CAPTURE_METADATA_FAILED.wireName,
+                ),
+            )
+
+        assertTrue(failed.body.contains("拍摄时间或位置"))
+        assertTrue(failed.body.contains("没有保存"))
+        assertFalse(failed.body.contains("已保存"))
+    }
+
+    @Test
     fun `cancelled state remains readable`() {
         val cancelled =
             ProcessingNotificationText.from(

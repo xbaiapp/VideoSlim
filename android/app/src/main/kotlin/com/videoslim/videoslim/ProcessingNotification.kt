@@ -184,6 +184,8 @@ internal data class ProcessingNotificationText(
                 EngineErrorCode.COMPATIBILITY_DECODER_UNAVAILABLE.wireName ->
                     "这台手机没有可用于此视频的软件读取方式"
                 EngineErrorCode.VIDEO_ENCODING_FAILED.wireName -> "当前设置未能完成，可打开 VideoSlim 重试或调整格式和画质"
+                EngineErrorCode.CAPTURE_METADATA_FAILED.wireName ->
+                    "无法确认原拍摄时间或位置已保留，没有保存不完整结果"
                 EngineErrorCode.ENCODER_UNAVAILABLE.wireName -> "当前手机没有可用的视频压缩方式"
                 EngineErrorCode.OUTPUT_PERMISSION_LOST.wireName ->
                     "保存文件夹权限已失效，请打开 VideoSlim 重新选择"

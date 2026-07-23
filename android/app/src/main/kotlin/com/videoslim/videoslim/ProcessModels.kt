@@ -55,6 +55,10 @@ enum class EngineErrorCode(
         "这台手机没有可用于此视频的软件读取方式，原视频没有被修改",
     ),
     VIDEO_ENCODING_FAILED("VIDEO_ENCODING_FAILED", "手机没能按当前设置完成压缩，可按原设置重试或调整格式和画质"),
+    CAPTURE_METADATA_FAILED(
+        "CAPTURE_METADATA_FAILED",
+        "无法确认原拍摄时间或位置已保留，未保存不完整结果",
+    ),
     AUDIO_TRACK_MISSING("AUDIO_TRACK_MISSING", "这个视频没有可提取的音轨"),
     AUDIO_COPY_UNSUPPORTED("AUDIO_COPY_UNSUPPORTED", "源音轨不是 AAC，请改用 AAC 转码"),
     AUDIO_CHANNEL_LAYOUT_UNSUPPORTED(

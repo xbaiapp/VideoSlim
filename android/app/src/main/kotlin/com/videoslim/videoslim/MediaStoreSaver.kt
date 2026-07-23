@@ -49,6 +49,18 @@ interface PublicationObserver {
     }
 }
 
+internal object PublicationCaptureMetadataPolicy {
+    fun dateTakenEpochMs(
+        mediaKind: OutputMediaKind,
+        candidateEpochMs: Long?,
+    ): Long? =
+        if (mediaKind == OutputMediaKind.VIDEO_MP4) {
+            candidateEpochMs?.takeIf(CaptureMetadataParser::isWritableCaptureTime)
+        } else {
+            null
+        }
+}
+
 internal class MediaStoreSaver(
     context: Context,
     private val publicationObserver: PublicationObserver = PublicationObserver.NONE,
@@ -59,6 +71,7 @@ internal class MediaStoreSaver(
         tempFile: File,
         requestedName: String,
         outputTreeUri: String? = null,
+        dateTakenEpochMs: Long? = null,
         shouldCancel: () -> Boolean = { false },
     ): String =
         publishMedia(
@@ -66,6 +79,7 @@ internal class MediaStoreSaver(
             requestedName = requestedName,
             mediaKind = OutputMediaKind.VIDEO_MP4,
             outputTreeUri = outputTreeUri,
+            dateTakenEpochMs = dateTakenEpochMs,
             shouldCancel = shouldCancel,
         )
 
@@ -88,6 +102,7 @@ internal class MediaStoreSaver(
         requestedName: String,
         mediaKind: OutputMediaKind,
         outputTreeUri: String? = null,
+        dateTakenEpochMs: Long? = null,
         shouldCancel: () -> Boolean = { false },
     ): String {
         if (!tempFile.isFile || tempFile.length() <= 0L) {
@@ -97,9 +112,21 @@ internal class MediaStoreSaver(
         return if (outputTreeUri != null) {
             publishDocumentTree(tempFile, requestedName, mediaKind, outputTreeUri, shouldCancel)
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            publishScoped(tempFile, requestedName, mediaKind, shouldCancel)
+            publishScoped(
+                tempFile,
+                requestedName,
+                mediaKind,
+                dateTakenEpochMs,
+                shouldCancel,
+            )
         } else {
-            publishLegacy(tempFile, requestedName, mediaKind, shouldCancel)
+            publishLegacy(
+                tempFile,
+                requestedName,
+                mediaKind,
+                dateTakenEpochMs,
+                shouldCancel,
+            )
         }
     }
 
@@ -236,12 +263,14 @@ internal class MediaStoreSaver(
         tempFile: File,
         requestedName: String,
         mediaKind: OutputMediaKind,
+        dateTakenEpochMs: Long?,
         shouldCancel: () -> Boolean,
     ): String {
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, requestedName)
             put(MediaStore.MediaColumns.MIME_TYPE, mediaKind.mimeType)
             put(MediaStore.MediaColumns.RELATIVE_PATH, mediaKind.scopedRelativePath)
+            putVideoDateTaken(mediaKind, dateTakenEpochMs)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val outputUri =
@@ -321,6 +350,7 @@ internal class MediaStoreSaver(
         tempFile: File,
         requestedName: String,
         mediaKind: OutputMediaKind,
+        dateTakenEpochMs: Long?,
         shouldCancel: () -> Boolean,
     ): String {
         val directory =
@@ -349,6 +379,7 @@ internal class MediaStoreSaver(
             put(MediaStore.MediaColumns.TITLE, destination.nameWithoutExtension)
             put(MediaStore.MediaColumns.MIME_TYPE, mediaKind.mimeType)
             put(MediaStore.MediaColumns.DATA, destination.path)
+            putVideoDateTaken(mediaKind, dateTakenEpochMs)
         }
         val outputUri =
             resolver.insert(externalContentUri(mediaKind), values)
@@ -453,6 +484,15 @@ internal class MediaStoreSaver(
             shouldCancel = shouldCancel,
             openReadback = { resolver.openInputStream(outputUri) },
         )
+    }
+
+    private fun ContentValues.putVideoDateTaken(
+        mediaKind: OutputMediaKind,
+        candidateEpochMs: Long?,
+    ) {
+        PublicationCaptureMetadataPolicy.dateTakenEpochMs(mediaKind, candidateEpochMs)?.let {
+            put(MediaStore.Video.VideoColumns.DATE_TAKEN, it)
+        }
     }
 
     private fun uniqueDestination(directory: File, requestedName: String): File {

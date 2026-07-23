@@ -6,6 +6,7 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import java.io.IOException
 
@@ -30,6 +31,7 @@ internal data class VideoMetadata(
     val isHdr: Boolean,
     val videoProfile: Int? = null,
     val videoLevel: Int? = null,
+    val captureMetadata: SourceCaptureMetadata = SourceCaptureMetadata.EMPTY,
 ) {
     fun toChannelMap(): Map<String, Any?> =
         linkedMapOf(
@@ -139,6 +141,19 @@ internal class VideoMetadataReader(context: Context) {
                     ?: retriever.metadataInt(MediaMetadataRetriever.METADATA_KEY_BITRATE)
                     ?: 0).coerceAtLeast(0)
             val colorTransfer = requiredVideoFormat.intValue(MediaFormat.KEY_COLOR_TRANSFER)
+            val captureMetadata =
+                SourceCaptureMetadata(
+                    captureTimeEpochMs =
+                        CaptureMetadataParser.chooseCaptureTime(
+                            retrieverDate =
+                                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE),
+                            mediaStoreDateTakenEpochMs = readMediaStoreDateTakenSafely(uri),
+                        ),
+                    location =
+                        CaptureMetadataParser.parseLocation(
+                            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION),
+                        ),
+                )
 
             return VideoMetadata(
                 sourceUri = uri.toString(),
@@ -180,6 +195,7 @@ internal class VideoMetadataReader(context: Context) {
                         colorTransfer == MediaFormat.COLOR_TRANSFER_ST2084,
                 videoProfile = requiredVideoFormat.intValue(MediaFormat.KEY_PROFILE),
                 videoLevel = requiredVideoFormat.intValue(MediaFormat.KEY_LEVEL),
+                captureMetadata = captureMetadata,
             )
         } catch (exception: VideoMetadataException) {
             throw exception
@@ -274,6 +290,27 @@ internal class VideoMetadataReader(context: Context) {
             fileSizeBytes = fileSizeBytes ?: 0L,
         )
     }
+
+    private fun readMediaStoreDateTakenSafely(uri: Uri): Long? =
+        try {
+            contentResolver
+                .query(
+                    uri,
+                    arrayOf(MediaStore.Video.VideoColumns.DATE_TAKEN),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    if (!cursor.moveToFirst() || cursor.isNull(0)) {
+                        null
+                    } else {
+                        cursor.getLong(0).takeIf(CaptureMetadataParser::isWritableCaptureTime)
+                    }
+                }
+        } catch (_: Exception) {
+            // Photo Picker and arbitrary DocumentsProviders need not expose MediaStore columns.
+            null
+        }
 
     private data class OpenableMetadata(
         val fileName: String,

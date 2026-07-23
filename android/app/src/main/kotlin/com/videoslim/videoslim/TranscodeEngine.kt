@@ -25,7 +25,7 @@ import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultAssetLoaderFactory
 import androidx.media3.transformer.DefaultDecoderFactory
 import androidx.media3.transformer.DefaultEncoderFactory
-import androidx.media3.transformer.DefaultMuxer
+import androidx.media3.transformer.InAppMp4Muxer
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
@@ -89,6 +89,7 @@ internal class TranscodeEngine(
     private val recoveryStore: TaskRecoveryStore = TaskRecoveryStore(context),
     private val sourceAccessProbe: SourceAccessProbe = SourceAccessProbe(context),
     private val codecCatalog: HardwareCodecCatalog = HardwareCodecCatalog(),
+    private val captureMetadataVerifier: CaptureMetadataFileVerifier = CaptureMetadataFileVerifier(),
     private val logger: (String) -> Unit = {},
     private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor(),
 ) {
@@ -228,6 +229,12 @@ internal class TranscodeEngine(
                 throw EngineOperationException(failure)
             }
             val metadata = metadataReader.read(task.request.sourceUri)
+            task.captureMetadataPolicy = CaptureMetadataPolicy(metadata.captureMetadata)
+            log(
+                "task=${task.id} source capture metadata " +
+                    "captureTimePresent=${metadata.captureMetadata.hasCaptureTime} " +
+                    "locationPresent=${metadata.captureMetadata.hasLocation}",
+            )
             if (
                 sourceAccess.statSize != null &&
                 metadata.fileSizeBytes > 0L &&
@@ -305,7 +312,7 @@ internal class TranscodeEngine(
             if (task.request.audioMode == AudioMode.COPY) {
                 metadata.audioMime?.let { audioMime ->
                     val supportedAudio =
-                        DefaultMuxer.Factory().getSupportedSampleMimeTypes(C.TRACK_TYPE_AUDIO)
+                        InAppMp4Muxer.Factory().getSupportedSampleMimeTypes(C.TRACK_TYPE_AUDIO)
                     if (audioMime !in supportedAudio) {
                         throw EngineOperationException(
                             EngineFailure(
@@ -341,6 +348,9 @@ internal class TranscodeEngine(
             recoveryStore.updateStage(task.id, RecoveryStage.TRANSFORMING)
             task.stage = Stage.TRANSFORMING
             val plan = checkNotNull(task.plan) { "Transcode plan is missing" }
+            val captureMetadataPolicy =
+                checkNotNull(task.captureMetadataPolicy) { "Capture metadata policy is missing" }
+            val muxerFactory = InAppMp4Muxer.Factory(captureMetadataPolicy)
             val settings =
                 VideoEncoderSettings.Builder()
                     .setBitrate(task.request.videoBitrate)
@@ -401,6 +411,7 @@ internal class TranscodeEngine(
                 Transformer.Builder(appContext)
                     .setAssetLoaderFactory(assetLoaderFactory)
                     .setEncoderFactory(encoderFactory)
+                    .setMuxerFactory(muxerFactory)
                     .setVideoMimeType(videoMimeType(task.request.videoCodec))
             if (task.request.audioMode == AudioMode.REENCODE) {
                 transformerBuilder.setAudioMimeType(MimeTypes.AUDIO_AAC)
@@ -550,11 +561,22 @@ internal class TranscodeEngine(
         emit(task, max(task.lastPercent, PUBLISHING_PERCENT), STATE_RUNNING)
         ioExecutor.execute {
             try {
+                val resolvedMetadata =
+                    checkNotNull(task.captureMetadataPolicy) {
+                        "Capture metadata policy is missing"
+                    }.resolvedMetadata()
+                captureMetadataVerifier.verify(task.tempFile, resolvedMetadata)
+                log(
+                    "task=${task.id} capture metadata verified " +
+                        "captureTimePresent=${resolvedMetadata.hasCaptureTime} " +
+                        "locationPresent=${resolvedMetadata.hasLocation}",
+                )
                 val publishedUri =
                     mediaStoreSaver.publishVideo(
-                        task.tempFile,
-                        task.request.outputFileName,
-                        task.request.outputTreeUri,
+                        tempFile = task.tempFile,
+                        requestedName = task.request.outputFileName,
+                        outputTreeUri = task.request.outputTreeUri,
+                        dateTakenEpochMs = resolvedMetadata.captureTimeEpochMs,
                     ) {
                         task.cancelRequested || disposed || Thread.currentThread().isInterrupted
                     }
@@ -611,7 +633,7 @@ internal class TranscodeEngine(
                     mainHandler.post {
                         try {
                             if (!disposed && isCurrent(task)) {
-                                fail(task, EngineErrorMapper.fromThrowable(error), error)
+                                fail(task, mapPublicationFailure(error), error)
                             }
                         } finally {
                             task.publicationBoundary.complete()
@@ -824,6 +846,13 @@ internal class TranscodeEngine(
             else -> EngineErrorMapper.fromThrowable(error)
         }
 
+    private fun mapPublicationFailure(error: Throwable): EngineFailure =
+        if (error is CaptureMetadataVerificationException) {
+            EngineFailure(EngineErrorCode.CAPTURE_METADATA_FAILED)
+        } else {
+            EngineErrorMapper.fromThrowable(error)
+        }
+
     private fun exportFailureDiagnostic(
         task: ActiveTask,
         error: ExportException,
@@ -937,6 +966,7 @@ internal class TranscodeEngine(
         @Volatile var recoveryStarted: Boolean = false
         @Volatile var retainRecovery: Boolean = false
         var plan: TranscodePlan? = null
+        var captureMetadataPolicy: CaptureMetadataPolicy? = null
         var sourceAccessAtStart: SourceAccessProbeResult? = null
         var compatibleDecoderNames: Set<String> = emptySet()
         var compatibleEncoderNames: Set<String> = emptySet()

@@ -2,6 +2,7 @@ package com.videoslim.videoslim
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VideoMetadataTest {
@@ -41,8 +42,22 @@ class VideoMetadataTest {
         assertEquals(90, channelMap["rotationDegrees"])
         assertFalse(channelMap.containsKey("storageWidth"))
         assertFalse(channelMap.containsKey("storageHeight"))
+        assertFalse(channelMap.containsKey("captureMetadata"))
+        assertFalse(channelMap.containsKey("captureTimeEpochMs"))
+        assertFalse(channelMap.containsKey("location"))
         assertEquals(null, channelMap["audioCodec"])
         assertEquals(null, channelMap["audioChannels"])
+    }
+
+    @Test
+    fun `native metadata string reports capture presence without revealing values`() {
+        val rendered = sampleMetadata().toString()
+
+        assertTrue(rendered.contains("captureTimePresent=true"))
+        assertTrue(rendered.contains("locationPresent=true"))
+        assertFalse(rendered.contains("1721644215000"))
+        assertFalse(rendered.contains("37.421998"))
+        assertFalse(rendered.contains("-122.084"))
     }
 
     private fun sampleMetadata() =
@@ -65,5 +80,10 @@ class VideoMetadataTest {
             audioSampleRate = null,
             audioBitrate = null,
             isHdr = true,
+            captureMetadata =
+                SourceCaptureMetadata(
+                    captureTimeEpochMs = 1_721_644_215_000L,
+                    location = CaptureLocation(37.421998, -122.084),
+                ),
         )
 }
