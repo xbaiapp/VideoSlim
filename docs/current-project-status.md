@@ -131,12 +131,13 @@ M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被
 
 ## 8. 阅读顺序
 
-1. `AI_REVIEW_START_HERE.md`
-2. `docs/current-project-status.md`
-3. `docs/capture-metadata-completion-report.md`
-4. `docs/capture-metadata-device-acceptance.md`
-5. `docs/m4-a-completion-report.md`
-6. `docs/m4-device-acceptance.md`
-7. `docs/VideoSlim PRD.md`
-8. `docs/known-debt.md`
-9. `AGENTS.md`
+1. `docs/VideoSlim-AI-Handoff-2026-07-23.md`
+2. `AI_REVIEW_START_HERE.md`
+3. `docs/current-project-status.md`
+4. `docs/capture-metadata-completion-report.md`
+5. `docs/capture-metadata-device-acceptance.md`
+6. `docs/m4-a-completion-report.md`
+7. `docs/m4-device-acceptance.md`
+8. `docs/VideoSlim PRD.md`
+9. `docs/known-debt.md`
+10. `AGENTS.md`

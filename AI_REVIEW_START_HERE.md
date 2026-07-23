@@ -9,16 +9,17 @@
 
 ## 1. 先读什么
 
-1. `AI_REVIEW_START_HERE.md`（本文）
-2. `docs/current-project-status.md`（当前进度与证据）
-3. `README.md`（当前用户能力）
-4. `docs/VideoSlim PRD.md`（产品和权威 contract）
-5. `docs/capture-metadata-completion-report.md`（当前候选实现、APK和证据边界）
-6. `docs/capture-metadata-device-acceptance.md`（当前功能的真实来源/设备矩阵）
-7. `docs/m4-a-completion-report.md` / `docs/m4-device-acceptance.md`（仍保留的裁剪候选与PENDING矩阵）
-8. `docs/known-debt.md`（冻结 Slice B 与已知限制）
-9. `AGENTS.md`（项目治理、复审预算、真机优先规则）
-10. 之后再读下方“关键源码”。
+1. `docs/VideoSlim-AI-Handoff-2026-07-23.md`（可独立转交的新AI摘要、当前任务和路线图）
+2. `AI_REVIEW_START_HERE.md`（本文）
+3. `docs/current-project-status.md`（当前进度与证据）
+4. `README.md`（当前用户能力）
+5. `docs/VideoSlim PRD.md`（产品和权威 contract）
+6. `docs/capture-metadata-completion-report.md`（当前候选实现、APK和证据边界）
+7. `docs/capture-metadata-device-acceptance.md`（当前功能的真实来源/设备矩阵）
+8. `docs/m4-a-completion-report.md` / `docs/m4-device-acceptance.md`（仍保留的裁剪候选与PENDING矩阵）
+9. `docs/known-debt.md`（冻结 Slice B 与已知限制）
+10. `AGENTS.md`（项目治理、复审预算、真机优先规则）
+11. 之后再读下方“关键源码”。
 
 ## 2. 产品边界
 
@@ -153,7 +154,7 @@ Picker URI
 - `CaptureMetadata.kt` / `VideoMetadataReader.kt` — 来源时间/GPS解析、muxer白名单、发布前核验与安全传播
 - `CropGeometryMapper.kt` / `PreviewFrameReader.kt` — 显示像素到 NDC 与只读预览帧
 - `AudioExtractionEngine.kt` — AAC copy / AAC encode
-- `AudioSampleCopyLoop.kt` / `AudioSampleDigest.kt` — sample copy 和完整性证据
+- `AudioSampleCopyLoop.kt` — sample copy、版本化SHA-256 digest和完整性证据
 - `AudioMetadataReader.kt` — 音频 metadata/物理扫描 fallback
 - `VerifiedAudioInfoCache.kt` — 发布成功后的一次性 verified metadata handoff
 - `MediaStoreSaver.kt` — 默认 MediaStore 与 SAF document-tree 发布

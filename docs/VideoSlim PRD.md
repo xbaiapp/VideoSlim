@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.10（增加原拍摄时间/GPS保留、发布前核验与输出命名契约） |
+| 文档版本 | v1.11（同步当前候选、M4-A状态与超长日志复制契约） |
 | 日期 | 2026-07-23 |
-| 状态 | M3 `ACCEPTED — private scope`；M4-A `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`（`d41e21c...` / App `1.5.0+20`）；拍摄时间/GPS与命名候选 `a92d1cd...` 已修订缺省处理时间blocker并通过完整门禁/focused review，待真实来源/设备验收；M4-B 未授权 |
+| 状态 | M3 `ACCEPTED — private scope`；当前 `1.6.1+22 / b0267a0...` 已包含M4-A画面裁剪、拍摄时间/GPS与命名增强及超长日志复制修复，自动化/静态APK门禁与focused review通过；M4-A、真实来源metadata、MediaStore/SAF及新剪贴板行为仍待真机验收；M4-B 未授权 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
@@ -270,11 +270,11 @@
   2. 平台通道每次调用的方法名、参数摘要、响应与错误（含引擎 errorCode/errorMessage 原文与原生堆栈摘要）；
   3. 关键流程埋点：任务开始/结束、完整参数 JSON、耗时。
 - 入口：设置页"调试日志"（M1 阶段可临时放首页角落）；
-- 每条含时间戳；提供**一键复制全部**与**分享**按钮（分享出的纯文本直接发给 Hermes）；
+- 每条含时间戳；提供**复制日志**与**分享日志**按钮。小日志复制全部；超长日志只复制最近128 KiB、从完整UTF-8日志行开始并附截断提示，避免Android Binder超限；完整日志始终通过文件分享发送给 Hermes；
 - 日志轮转：最多保留最近 2000 条或 1 MB。
 - 日志、截图和验收文档不得保留任何真实凭据；凭据值始终替换为 `[REDACTED]`。
 
-**验收标准**：人为制造一次失败（如选损坏文件压缩），日志页可见完整错误链路；一键复制后粘贴到聊天软件内容完整可读。
+**验收标准**：人为制造一次失败（如选损坏文件压缩），日志页可见完整错误链路；小日志复制后内容完整可读；约1 MiB日志复制不得触发 `TransactionTooLargeException`，应保留最新完整日志行并明确提示截断；“分享日志”导出的文件仍包含完整日志。
 
 ---
 
@@ -618,9 +618,9 @@ class HistoryRecord {
 - 验收：按 `docs/m3-device-acceptance.md` 实测 copy 短片 3 次、同源 AAC 四码率 bytes 单调及实际 Decoder/Encoder、mono、Opus WebM、无音轨、后台/锁屏、转换/发布取消、默认/SAF、1 小时 copy <10 秒和 F19。未实际执行不得预填 PASS。
 
 ### M4-A 画面裁剪（F5）
-- 状态：`APPROVED — IMPLEMENTATION AUTHORIZED`（2026-07-22）。项目所有者明确批准："批准 M4-A 按 PRD 的 F5 与 M4-A 章节执行"。该授权允许产出实施计划并实现本节范围，不授权 M4-B、hardening、refactor 或 migration。
+- 状态：`CANDIDATE READY — DEVICE ACCEPTANCE PENDING`。项目所有者于2026-07-22批准实施；双入口、S4编辑器、单次 `Crop → Presentation` 管线及真机反馈的慢拖累计位移修复均已完成。自动化、构建和静态APK检查通过，但完整十项真机矩阵仍未执行；该授权始终不包含M4-B、hardening、refactor或migration。
 - 用户流程：压缩入口可在 S3 选择性进入 S4；裁剪入口先进入 S4；两者都在 S3 汇合，开始前显示裁剪 + 输出档位 + 预估大小。不裁剪路径保持现状。
-- 任务：实现 F5 全部，包括双入口、S4 手势编辑器、`getPreviewFrame`、Dart 坐标/规划纯逻辑与单测、Kotlin NDC mapper、`Crop → Presentation` 单次转码、`INVALID_CROP`、snapshot/retry crop round-trip、F19 裁剪证据及"保持画质（仅裁剪）"档。
+- 已实现：F5双入口、S4手势编辑器、`getPreviewFrame`、Dart坐标/规划纯逻辑与单测、Kotlin NDC mapper、`Crop → Presentation`单次转码、`INVALID_CROP`、snapshot/retry crop round-trip、F19裁剪证据及“保持画质（仅裁剪）”档。
 - 范围锁：不实现 trim、旋转/翻转、多裁剪框或两次转码中间文件；不改 publication / recovery / registry / `ProcessingService` / `finishOnce` / 通知 / 音频提取 / decoderMode 重试 / MediaStore 与 SAF / 空间预检；不引入新状态或生命周期框架。
 - 验收：严格执行 F5 的 10 项真机矩阵。旋转样本若出现无法解释的错位，停止并报告；不得用二次编码绕过。未获得逐项真机证据不得标为 PASS。
 - 复审预算：按 `AGENTS.md` B 节，最多 1 次实现 + 1 次修订 + 1 轮复审。
