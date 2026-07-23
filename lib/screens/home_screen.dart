@@ -784,14 +784,21 @@ class _HomeScreenState extends State<HomeScreen> {
       )) {
         return;
       }
+      const retryAacBitrate = 128000;
       final request = asAac
           ? AudioExtractRequest(
               uri: previous.uri,
-              outputFileName: previous.outputFileName,
+              outputFileName:
+                  OutputFileNameBuilder(token: widget.outputNameToken).audio(
+                    sourceName: source.fileName,
+                    mode: AudioExtractMode.aac,
+                    targetBitrate: retryAacBitrate,
+                    createdAt: _now(),
+                  ),
               outputLocationLabel: previous.outputLocationLabel,
               outputTreeUri: previous.outputTreeUri,
               mode: AudioExtractMode.aac,
-              bitrate: 128000,
+              bitrate: retryAacBitrate,
             )
           : previous;
       if (!_isAudioRetryContextCurrent(

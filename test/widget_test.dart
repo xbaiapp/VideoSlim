@@ -2438,6 +2438,10 @@ void main() {
     expect(engine.audioProcessRequests, hasLength(2));
     expect(engine.audioProcessRequests.last.mode, AudioExtractMode.aac);
     expect(engine.audioProcessRequests.last.bitrate, 128000);
+    expect(
+      engine.audioProcessRequests.last.outputFileName,
+      '旅行_视频_audio_aac_target128k_20260719_010203000_a7f3.m4a',
+    );
   });
 
   testWidgets('non-AAC copy failure offers one-click AAC retry', (
@@ -2478,6 +2482,10 @@ void main() {
     expect(engine.audioProcessRequests, hasLength(2));
     expect(engine.audioProcessRequests.last.mode, AudioExtractMode.aac);
     expect(engine.audioProcessRequests.last.bitrate, 128000);
+    expect(
+      engine.audioProcessRequests.last.outputFileName,
+      '旅行_视频_audio_aac_target128k_20260719_010203000_a7f3.m4a',
+    );
   });
 
   testWidgets('immutable audio failures do not offer guaranteed-fail retry', (
