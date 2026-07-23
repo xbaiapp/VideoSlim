@@ -4,6 +4,7 @@ import android.annotation.TargetApi
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.os.Build
+import androidx.annotation.RequiresApi
 
 internal data class EncoderTypeCapability(
     val supportsCq: Boolean,
@@ -26,6 +27,14 @@ internal data class EncoderCodecDescriptor(
     val isVendor: Boolean?,
     val supportedTypes: Set<String>,
     val inspect: (String) -> EncoderTypeCapability,
+)
+
+private data class PlatformCodecIdentity(
+    val canonicalName: String,
+    val isAlias: Boolean,
+    val isHardwareAccelerated: Boolean,
+    val isSoftwareOnly: Boolean,
+    val isVendor: Boolean,
 )
 
 /**
@@ -138,22 +147,34 @@ internal class EncoderCapabilityReader(
 
         private fun platformCodecDescriptors(apiLevel: Int): List<EncoderCodecDescriptor> =
             MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.map { codecInfo ->
-                val platformClassification = apiLevel >= Build.VERSION_CODES.Q
+                val platformIdentity =
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        codecInfo.platformIdentity()
+                    } else {
+                        null
+                    }
                 EncoderCodecDescriptor(
                     name = codecInfo.name,
-                    canonicalName =
-                        if (platformClassification) codecInfo.canonicalName else null,
+                    canonicalName = platformIdentity?.canonicalName,
                     isEncoder = codecInfo.isEncoder,
-                    isAlias = if (platformClassification) codecInfo.isAlias else null,
-                    isHardwareAccelerated =
-                        if (platformClassification) codecInfo.isHardwareAccelerated else null,
-                    isSoftwareOnly =
-                        if (platformClassification) codecInfo.isSoftwareOnly else null,
-                    isVendor = if (platformClassification) codecInfo.isVendor else null,
+                    isAlias = platformIdentity?.isAlias,
+                    isHardwareAccelerated = platformIdentity?.isHardwareAccelerated,
+                    isSoftwareOnly = platformIdentity?.isSoftwareOnly,
+                    isVendor = platformIdentity?.isVendor,
                     supportedTypes = codecInfo.supportedTypes.toSet(),
                     inspect = { mimeType -> inspectPlatformType(codecInfo, mimeType, apiLevel) },
                 )
             }
+
+        @RequiresApi(Build.VERSION_CODES.Q)
+        private fun MediaCodecInfo.platformIdentity(): PlatformCodecIdentity =
+            PlatformCodecIdentity(
+                canonicalName = canonicalName,
+                isAlias = isAlias,
+                isHardwareAccelerated = isHardwareAccelerated,
+                isSoftwareOnly = isSoftwareOnly,
+                isVendor = isVendor,
+            )
 
         private fun inspectPlatformType(
             codecInfo: MediaCodecInfo,
