@@ -1407,8 +1407,7 @@ class _HomeScreenState extends State<HomeScreen> {
         content: Text(warnings.join('\n\n')),
         actions: <Widget>[
           if (plan.hasLowSavings) ...<Widget>[
-            if (plan.crop != null &&
-                _selectedPreset != CompressionPreset.preserveQuality)
+            if (plan.crop != null)
               TextButton(
                 key: const ValueKey<String>(
                   'use-preserve-quality-for-low-savings',

@@ -805,6 +805,55 @@ void main() {
   );
 
   testWidgets(
+    'cropped low-savings plan still offers preserve quality when already selected',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine();
+      final picker = _FakePicker()..galleryResult = _sourceUri;
+      final backend = _MemoryBackend();
+      engine.infoByUri[_sourceUri] = _videoInfo(
+        fileSizeBytes: 10 * 1024 * 1024,
+      );
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await tester.tap(find.byKey(const ValueKey<String>('crop-entry')));
+      await tester.pump();
+      await tester.pump();
+      await _saveCropFromEditor(tester);
+      expect(
+        tester
+            .widget<ChoiceChip>(
+              find.byKey(const ValueKey<String>('preset-preserveQuality')),
+            )
+            .selected,
+        isTrue,
+      );
+
+      await _tapCompression(tester);
+      final usePreserve = find.byKey(
+        const ValueKey<String>('use-preserve-quality-for-low-savings'),
+      );
+      expect(usePreserve, findsOneWidget);
+      expect(find.text('仍按原目标压缩'), findsOneWidget);
+      expect(find.text('取消'), findsOneWidget);
+      await tester.tap(usePreserve);
+      await tester.pump();
+
+      expect(engine.lastRequest, isNull);
+      expect(
+        tester
+            .widget<ChoiceChip>(
+              find.byKey(const ValueKey<String>('preset-preserveQuality')),
+            )
+            .selected,
+        isTrue,
+      );
+    },
+  );
+
+  testWidgets(
     'progress arriving before process returns is buffered by task id',
     (WidgetTester tester) async {
       final engine = _FakeEngine()..processCompleter = Completer<String>();

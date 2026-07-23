@@ -4,6 +4,7 @@
 > **当前阶段：** 拍摄时间/GPS保留与输出命名 `CANDIDATE READY — DEVICE ACCEPTANCE PENDING`
 > **当前候选版本：** `1.6.1+22`
 > **当前候选源代码：** `b0267a0b959ccb46785daa1c91d0be96b5a0ef98`
+> **C1a开发候选：** `1.7.0+23`；一次复审发现的crop既选保持画质分支与文档冲突正在唯一修订，尚未构建或替代上述可安装候选
 > **当前已接受发布基线：** M3 `19abfb7da2e8fa028e7200000f0dc2a114bc840e`（`1.4.3+18`）
 
 ## 1. 里程碑进度
@@ -16,7 +17,7 @@
 | M3 音频提取 | `ACCEPTED — private scope` | 项目所有者于 2026-07-22 明确报告当前 M3 候选测试成功 |
 | M4-A 画面裁剪 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 自动化、构建和静态 APK 检查通过；真机十项矩阵尚未执行 |
 | F7 拍摄时间/GPS与输出命名增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 缺省处理时间blocker已修订；一条Pixel设备“仅时间”任务成功，完整来源/图库/SAF矩阵仍待执行 |
-| C轨 D1/F20–F22 | `C1a AUTHORIZED — IN DEVELOPMENT` | 所有者已选择C1a纯Dart提示；D1待指定日志，C1b/C2/C3仍未授权 |
+| C轨 D1/F20–F22 | `C1a AUTHORIZED — REVISION IN PROGRESS` | 首轮实现自动化通过；唯一复审指出crop既选保持画质分支与交接状态两项冲突，正在唯一修订；D1待指定日志，C1b/C2/C3仍未授权 |
 | M4-B 时间裁剪 | `PLANNED — NOT AUTHORIZED` | F8 trim已有书面范围，但不在M4-A授权范围 |
 | M4-C 多段时间编辑 | `PLANNED — NOT AUTHORIZED` | F23同源多段依赖M4-B真机接受；跨文件拼接归F16 |
 | M5 自用版打磨 | NOT STARTED | 历史、批量、目标大小等未实现 |
@@ -24,7 +25,7 @@
 
 `ACCEPTED — private scope` 只表示项目所有者接受已测试的自用设备/素材范围，不表示生产发布或多设备保证。`CANDIDATE READY` 也不等于真机通过。
 
-## 2. 当前候选身份
+## 2. 当前可安装候选身份
 
 - 应用：VideoSlim / 视频瘦身
 - 包名：`com.videoslim.videoslim`
@@ -40,6 +41,8 @@
 - APK SHA-256：`21ac3df44e8afa116cc9bb7c5f8ca7db94bacc45830f2dd373e4b9d4b0570409`
 
 M3 已接受 APK、旧 `1.5.0+20` M4-A候选和各自证据继续保留，不被新候选覆盖或改写。
+
+`pubspec.yaml`中的`1.7.0+23`是C1a开发候选身份；只有唯一修订、完整门禁、exact-revision复审结论处置、APK构建与独立静态核验完成后，才会在文档证据提交中替代本节的`1.6.1+22`可安装候选。
 
 ## 3. 当前已实现功能
 
