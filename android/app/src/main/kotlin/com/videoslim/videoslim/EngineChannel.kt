@@ -11,6 +11,7 @@ import io.flutter.plugin.common.MethodChannel
 internal typealias LegacyWritePermissionRequester = ((Boolean) -> Unit) -> Unit
 internal typealias NotificationPermissionRequester = ((Boolean) -> Unit) -> Unit
 internal typealias PreviewFrameProvider = (String, Long) -> ByteArray
+internal typealias EncoderCapabilitiesProvider = () -> Map<String, Any?>
 
 internal fun routeEngineSnapshotLog(
     snapshot: TaskRuntimeSnapshot,
@@ -31,6 +32,8 @@ internal class EngineChannel(
     private val metadataReader: VideoMetadataReader,
     private val transcodeEngine: TranscodeEngine,
     private val previewFrameProvider: PreviewFrameProvider = PreviewFrameReader(context)::read,
+    private val encoderCapabilitiesProvider: EncoderCapabilitiesProvider =
+        EncoderCapabilityReader()::read,
     private val requestLegacyWritePermission: LegacyWritePermissionRequester,
     private val requestNotificationPermission: NotificationPermissionRequester,
     private val ioDispatcher: AppMediaIoDispatcher,
@@ -65,6 +68,7 @@ internal class EngineChannel(
             "getPreviewFrame" -> getPreviewFrame(call.arguments, reply)
             "getAudioInfo" -> getAudioInfo(call.arguments, reply)
             "getCapabilities" -> getCapabilities(call.arguments, reply)
+            "getEncoderCapabilities" -> getEncoderCapabilities(call.arguments, reply)
             "getTaskSnapshot" -> getTaskSnapshot(call.arguments, reply)
             "process" -> process(call.arguments, reply)
             "extractAudio" -> extractAudio(call.arguments, reply)
@@ -196,6 +200,30 @@ internal class EngineChannel(
             reply.success(response) { log("method=getCapabilities response=$response") }
         } catch (error: Throwable) {
             reply.error(EngineFailure(EngineErrorCode.UNKNOWN), error)
+        }
+    }
+
+    private fun getEncoderCapabilities(arguments: Any?, reply: PendingEngineReply) {
+        try {
+            requireExactMap(arguments, emptySet())
+        } catch (error: Throwable) {
+            reply.error(EngineFailure(EngineErrorCode.UNKNOWN, "编码器能力查询失败"), error)
+            return
+        }
+        submitIo(reply, MediaIoOperation.ENCODER_CAPABILITIES, encoderCapabilitiesProvider) { outcome ->
+            outcome.fold(
+                onSuccess = { response ->
+                    reply.success(response) {
+                        log("method=getEncoderCapabilities response=$response")
+                    }
+                },
+                onFailure = { error ->
+                    reply.error(
+                        EngineFailure(EngineErrorCode.UNKNOWN, "编码器能力查询失败"),
+                        error,
+                    )
+                },
+            )
         }
     }
 

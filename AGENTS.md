@@ -14,7 +14,7 @@
 - C1a上一候选源码为`7c49e57e3b6eafeeb765f2600c17b0242bea1160`（`1.7.0+23`）。首版`d3af1c3...`的一轮并行复审为FAIL；三项IMPORTANT均在唯一修订中处置，完整自动化与APK静态核验通过。按复审预算不再发起第二轮，不得把首版FAIL写成最终SHA的PASS；其设备测试后来由所有者跳过。
 - 项目所有者随后明确跳过C1a真机验收并要求继续下一步；C1a状态记为`IMPLEMENTED — DEVICE TEST WAIVED/NOT RUN`，不得写成PASS。D1已用此前提供的最新相关F19任务完成零代码诊断：Media3有效配置仍为500 kbps，输出`videoBitrate`实际等于容器平均码率fallback；该Pixel HEVC组合属于运行期明显过冲，C1b不得建议更低目标。
 - 同一指示构成M4-B/F8单段时间裁剪的明确开工授权。范围只允许连续单段起止时间、与crop/Presentation/压缩一次转码、现有音频模式与生命周期复用；不包含多段、乱序、跨文件、批量、hardening/refactor/migration或M4-C。M4-B首个冻结SHA `9c9ca887...`的一次双路复审为一路PASS、一路BLOCKERS；接受的`INVALID_TRIM`恢复锁定问题已在唯一纠正修订`9351e75bcc43c71a6e7caf03093fe27b0072b061`中修复。该纠正SHA通过Flutter `244/244`、Android JVM `346/346`、完整lint/build和独立APK核验；项目所有者随后报告测试成功，`1.8.0+24`现为`ACCEPTED — private scope`。按预算未追加第二轮复审，旧SHA裁决不得写成纠正SHA独立PASS；未提供的设备矩阵不得补写PASS。完整处置和身份见`docs/m4-b-exact-sha-review-disposition.md`、`docs/m4-b-completion-report.md`与`docs/m4-b-device-acceptance.md`。
-- 项目所有者在报告M4-B测试成功后要求“继续进行下一步”，该指令按既定路线授权C2/F21编码器能力诊断作为唯一代码项。范围只允许F19只读能力页面/平台通道：查询`MediaCodecList`的目标视频encoder、码率模式、QP bounds、bitrate/complexity range及软硬件属性；不得configure codec、创建媒体任务、改变VBR/codec fallback/发布/生命周期，也不自动授权C1b、C3、M4-C或任何hardening/refactor/migration。
+- 项目所有者在报告M4-B测试成功后要求“继续进行下一步”，该指令按既定路线授权C2/F21编码器能力诊断作为唯一代码项。范围只允许F19只读能力页面/平台通道：查询`MediaCodecList`的目标视频encoder、码率模式、QP bounds、bitrate/complexity range及软硬件属性；不得configure codec、创建媒体任务、改变VBR/codec fallback/发布/生命周期，也不自动授权C1b、C3、M4-C或任何hardening/refactor/migration。该范围现已在目标`1.9.0+25`工作树实现；冻结SHA、唯一复审、APK核验和真机能力清单完成前不得称为候选或据此启动C3。
 - 未提供逐项真机证据的矩阵行不得反向预填 PASS，private-scope 接受不得扩写为生产发布或多设备保证。
 - 当前已知限制见 `docs/known-debt.md`。
 

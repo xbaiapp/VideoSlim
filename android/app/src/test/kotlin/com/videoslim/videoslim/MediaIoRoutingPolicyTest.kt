@@ -28,7 +28,7 @@ class MediaIoRoutingPolicyTest {
     }
 
     @Test
-    fun `engine metadata and destination preflight use bounded media io without activity executor ownership`() {
+    fun `engine metadata capabilities and destination preflight use bounded media io without activity executor ownership`() {
         val engine = source("EngineChannel.kt")
         val transcode = source("TranscodeEngine.kt")
 
@@ -36,6 +36,7 @@ class MediaIoRoutingPolicyTest {
         assertFalse(engine.contains("Executors.newSingleThreadExecutor"))
         assertTrue(engine.contains("MediaIoOperation.VIDEO_METADATA"))
         assertTrue(engine.contains("MediaIoOperation.AUDIO_METADATA"))
+        assertTrue(engine.contains("MediaIoOperation.ENCODER_CAPABILITIES"))
         assertTrue(engine.contains("MediaIoOperation.OUTPUT_DESTINATION_VALIDATION"))
         assertTrue(engine.contains("postToMain { continueAfterValidation(token) }"))
         assertTrue(engine.contains("activeLaunch = token"))

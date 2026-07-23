@@ -1996,7 +1996,7 @@ class _HomeScreenState extends State<HomeScreen> {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (BuildContext context) =>
-            DebugLogScreen(logger: widget.logger),
+            DebugLogScreen(logger: widget.logger, engine: widget.engine),
       ),
     );
   }

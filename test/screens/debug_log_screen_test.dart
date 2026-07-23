@@ -4,8 +4,10 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:videoslim/engine/video_engine.dart';
 import 'package:videoslim/logging/app_logger.dart';
 import 'package:videoslim/logic/log_clipboard_payload.dart';
+import 'package:videoslim/models/encoder_capabilities.dart';
 import 'package:videoslim/screens/debug_log_screen.dart';
 
 class FakeScreenLogBackend implements LogBackend {
@@ -55,8 +57,27 @@ class DelayedReadBackend implements LogBackend {
   Future<void> shareAll() async {}
 }
 
-Widget appFor(AppLogger logger) {
-  return MaterialApp(home: DebugLogScreen(logger: logger));
+final class _FakeCapabilityEngine extends Fake implements VideoEngine {
+  int capabilityCalls = 0;
+
+  @override
+  Future<EncoderCapabilitiesReport> getEncoderCapabilities() async {
+    capabilityCalls += 1;
+    return EncoderCapabilitiesReport(
+      sdkInt: 36,
+      queriedMimeTypes: targetEncoderMimeTypes,
+      encoders: const <EncoderCapabilityEntry>[],
+    );
+  }
+}
+
+Widget appFor(AppLogger logger, {VideoEngine? engine}) {
+  return MaterialApp(
+    home: DebugLogScreen(
+      logger: logger,
+      engine: engine ?? _FakeCapabilityEngine(),
+    ),
+  );
 }
 
 void main() {
@@ -246,5 +267,24 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('分享失败'), findsOneWidget);
+  });
+
+  testWidgets('opens the read-only encoder capability page on demand', (
+    tester,
+  ) async {
+    final engine = _FakeCapabilityEngine();
+
+    await tester.pumpWidget(
+      appFor(AppLogger(backend: FakeScreenLogBackend()), engine: engine),
+    );
+    await tester.pumpAndSettle();
+    expect(engine.capabilityCalls, 0);
+
+    await tester.tap(find.byTooltip('编码器能力'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('编码器能力'), findsOneWidget);
+    expect(find.textContaining('只查询系统声明'), findsOneWidget);
+    expect(engine.capabilityCalls, 1);
   });
 }

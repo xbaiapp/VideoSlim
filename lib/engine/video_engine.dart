@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import '../models/audio_info.dart';
 import '../models/device_capabilities.dart';
+import '../models/encoder_capabilities.dart';
 import '../models/process_request.dart';
 import '../models/progress_event.dart';
 import '../models/task_snapshot.dart';
@@ -33,6 +34,11 @@ abstract class VideoEngine {
 
   /// Detects the device's supported hardware encoders.
   Future<DeviceCapabilities> getCapabilities();
+
+  /// Returns a read-only inventory of declared Android video encoder capabilities.
+  ///
+  /// This diagnostic query must not create/configure a codec or start a media task.
+  Future<EncoderCapabilitiesReport> getEncoderCapabilities();
 
   /// Returns the active or most recent terminal task, if one is reconnectable.
   Future<TaskSnapshot?> getTaskSnapshot();

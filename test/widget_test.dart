@@ -11,6 +11,7 @@ import 'package:videoslim/engine/video_picker.dart';
 import 'package:videoslim/logging/app_logger.dart';
 import 'package:videoslim/models/compression_settings.dart';
 import 'package:videoslim/models/device_capabilities.dart';
+import 'package:videoslim/models/encoder_capabilities.dart';
 import 'package:videoslim/models/output_location.dart';
 import 'package:videoslim/models/audio_info.dart';
 import 'package:videoslim/models/process_request.dart';
@@ -193,6 +194,14 @@ final class _FakeEngine implements VideoEngine {
     }
     return capabilities;
   }
+
+  @override
+  Future<EncoderCapabilitiesReport> getEncoderCapabilities() async =>
+      EncoderCapabilitiesReport(
+        sdkInt: 36,
+        queriedMimeTypes: targetEncoderMimeTypes,
+        encoders: const <EncoderCapabilityEntry>[],
+      );
 
   @override
   Future<String> process(ProcessRequest request) async {
@@ -4024,5 +4033,6 @@ void main() {
     expect(find.text('调试日志'), findsOneWidget);
     expect(find.byTooltip('复制全部'), findsOneWidget);
     expect(find.byTooltip('分享日志'), findsOneWidget);
+    expect(find.byTooltip('编码器能力'), findsOneWidget);
   });
 }

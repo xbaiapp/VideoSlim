@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../engine/video_engine.dart';
 import '../logging/app_logger.dart';
 import '../logic/log_clipboard_payload.dart';
+import 'encoder_capabilities_screen.dart';
 
 class DebugLogScreen extends StatefulWidget {
-  const DebugLogScreen({super.key, required this.logger});
+  const DebugLogScreen({super.key, required this.logger, required this.engine});
 
   final AppLogger logger;
+  final VideoEngine engine;
 
   @override
   State<DebugLogScreen> createState() => _DebugLogScreenState();
@@ -95,12 +98,28 @@ class _DebugLogScreenState extends State<DebugLogScreen> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _openEncoderCapabilities() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) =>
+            EncoderCapabilitiesScreen(engine: widget.engine),
+      ),
+    );
+    if (mounted) await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('调试日志'),
         actions: <Widget>[
+          IconButton(
+            key: const ValueKey<String>('encoder-capabilities-button'),
+            onPressed: _openEncoderCapabilities,
+            tooltip: '编码器能力',
+            icon: const Icon(Icons.memory_outlined),
+          ),
           IconButton(
             onPressed: _loading ? null : _load,
             tooltip: '刷新日志',

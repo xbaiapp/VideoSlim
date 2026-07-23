@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:videoslim/engine/method_channel_video_engine.dart';
 import 'package:videoslim/engine/video_engine.dart';
 import 'package:videoslim/logging/app_logger.dart';
+import 'package:videoslim/models/encoder_capabilities.dart';
 import 'package:videoslim/models/process_request.dart';
 import 'package:videoslim/models/progress_event.dart';
 import 'package:videoslim/models/task_snapshot.dart';
@@ -40,6 +41,80 @@ void main() {
   });
 
   group('MethodChannelVideoEngine method calls', () {
+    test(
+      'gets a strict encoder capability report with empty arguments',
+      () async {
+        final calls = <MethodCall>[];
+        messenger.setMockMethodCallHandler(_engineChannel, (
+          MethodCall call,
+        ) async {
+          calls.add(call);
+          return <String, Object?>{
+            'sdkInt': 36,
+            'queriedMimeTypes': targetEncoderMimeTypes,
+            'encoders': <Object?>[
+              <String, Object?>{
+                'name': 'c2.pixel.hevc.encoder',
+                'canonicalName': 'c2.pixel.hevc.encoder',
+                'mimeType': 'video/hevc',
+                'isAlias': false,
+                'isHardwareAccelerated': true,
+                'isSoftwareOnly': false,
+                'isVendor': true,
+                'classificationSource': 'platform',
+                'supportsCq': true,
+                'supportsVbr': true,
+                'supportsCbr': false,
+                'supportsQpBounds': true,
+                'bitrateRange': <String, Object?>{
+                  'lower': 64000,
+                  'upper': 120000000,
+                },
+                'complexityRange': <String, Object?>{'lower': 0, 'upper': 10},
+                'errorCode': null,
+              },
+            ],
+          };
+        });
+        final engine = MethodChannelVideoEngine(logger: logger);
+
+        final report = await engine.getEncoderCapabilities();
+
+        expect(report.sdkInt, 36);
+        expect(report.encoders.single.supportsVbr, isTrue);
+        expect(calls.single.method, 'getEncoderCapabilities');
+        expect(calls.single.arguments, <String, Object?>{});
+        expect(logger.entries, hasLength(1));
+        final details = _detailsOf(logger.entries.single);
+        expect(details['method'], 'getEncoderCapabilities');
+        expect(details['arguments'], <String, Object?>{});
+      },
+    );
+
+    test('normalizes malformed encoder capability reports', () async {
+      messenger.setMockMethodCallHandler(_engineChannel, (
+        MethodCall call,
+      ) async {
+        expect(call.method, 'getEncoderCapabilities');
+        return <String, Object?>{
+          'sdkInt': 36.5,
+          'queriedMimeTypes': targetEncoderMimeTypes,
+          'encoders': <Object?>[],
+        };
+      });
+      final engine = MethodChannelVideoEngine(logger: logger);
+
+      final error = await _captureEngineException(
+        engine.getEncoderCapabilities(),
+      );
+
+      expect(error.code, 'UNKNOWN');
+      expect(error.message, contains('平台返回数据异常'));
+      final details = error.details! as Map<String, Object?>;
+      expect(details['rawResponse'], isA<Map<Object?, Object?>>());
+      expect(details['error'], contains('sdkInt'));
+    });
+
     test('gets a strict nullable task snapshot with empty arguments', () async {
       final calls = <MethodCall>[];
       var invocation = 0;

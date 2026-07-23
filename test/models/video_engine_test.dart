@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:videoslim/engine/video_engine.dart';
 import 'package:videoslim/models/device_capabilities.dart';
 import 'package:videoslim/models/audio_info.dart';
+import 'package:videoslim/models/encoder_capabilities.dart';
 import 'package:videoslim/models/process_request.dart';
 import 'package:videoslim/models/progress_event.dart';
 import 'package:videoslim/models/task_snapshot.dart';
@@ -43,6 +44,7 @@ void main() {
       expect(engine.cancelledTaskId, 'process-task');
       expect(await engine.progressStream.toList(), isEmpty);
       expect((await engine.getCapabilities()).hevcEncoder, isTrue);
+      expect((await engine.getEncoderCapabilities()).sdkInt, 36);
       expect(await engine.getTaskSnapshot(), isNull);
     },
   );
@@ -89,6 +91,14 @@ class _FakeVideoEngine implements VideoEngine {
   @override
   Future<DeviceCapabilities> getCapabilities() async =>
       const DeviceCapabilities(hevcEncoder: true, h264Encoder: true);
+
+  @override
+  Future<EncoderCapabilitiesReport> getEncoderCapabilities() async =>
+      EncoderCapabilitiesReport(
+        sdkInt: 36,
+        queriedMimeTypes: targetEncoderMimeTypes,
+        encoders: const <EncoderCapabilityEntry>[],
+      );
 
   @override
   Future<TaskSnapshot?> getTaskSnapshot() async => null;

@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.17（记录M4-B私有接受与C2/F21实施授权） |
+| 文档版本 | v1.18（锁定C2/F21实现contract与冻结前状态） |
 | 日期 | 2026-07-23 |
-| 状态 | M3 `ACCEPTED — private scope`；`1.7.0+23 / 7c49e57...`已实现F20/C1a但所有者跳过真机验收（未记PASS）；D1确认Pixel HEVC运行期明显过冲；M4-B/F8 `1.8.0+24 / 9351e75...`由所有者报告测试成功并接受private scope，未提供的逐项矩阵仍PENDING；C2/F21已获准作为唯一代码项，C1b/F22与M4-C仍未授权 |
+| 状态 | M3 `ACCEPTED — private scope`；`1.7.0+23 / 7c49e57...`已实现F20/C1a但所有者跳过真机验收（未记PASS）；D1确认Pixel HEVC运行期明显过冲；M4-B/F8 `1.8.0+24 / 9351e75...`由所有者报告测试成功并接受private scope，未提供的逐项矩阵仍PENDING；C2/F21已在目标`1.9.0+25`工作树实现并通过冻结前自动化，但尚未冻结/复审/形成候选；C1b/F22与M4-C仍未授权 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
@@ -299,7 +299,7 @@
 | F17 HDR 处理 | 远期。本期策略见 5.7-R4（检测 + 提示 + 色调映射到 SDR）。 |
 | F18 iOS | UI/业务层复用，新增 AVFoundation 引擎实现（AVAssetExportSession / AVAssetWriter），接口契约见 5.4。 |
 | F20 低收益提示/建议目标 | C1a 仅提示、不改值：用保守输出上界与已知源大小判断预计节省是否低于15%；C1b为后置条件项，要求显式码率来源、D1/C2证据、合法码率范围与逐codec真机校准。不得承诺或强制输出一定小于源文件。 |
-| F21 编码器能力诊断 | **当前唯一获准代码项。** F19调试区只读枚举目标视频编码器的mime、VBR/CBR/CQ、QP bounds、bitrate/complexity range及软/硬件属性；不configure codec、不创建任务、不改变转码行为，但仍按完整小型代码任务构建、测试、复审和真机验证。 |
+| F21 编码器能力诊断 | **当前唯一代码项，工作树已实现。** F19调试区只读枚举目标视频编码器的mime、VBR/CBR/CQ、QP bounds、bitrate/complexity range及平台软/硬件属性；支持刷新、确定性复制、API缺省语义和单项失败隔离。查询不configure codec、不创建任务、不改变转码行为；冻结SHA、唯一复审、APK核验与真机清单仍需完成。固定contract见`docs/plans/2026-07-23-c2-encoder-capabilities.md`。 |
 | F22 条件式高级编码档 | 仅在F21本机证据后由所有者从QP钳制、CQ、AV1、都不做中选择，至多实施一个；CQ需明示修订VBR产品不变量，AV1按独立格式功能评估。软件x264/x265/SVT-AV1 CRF默认不做。 |
 | F23 同源多段时间编辑 | M4-B依赖已满足但仍未授权；Media3 `Composition + EditedMediaItemSequence`一次导出有序、不重叠的同源片段，不支持段乱序。跨文件拼接归F16，不在F23默认范围。 |
 
@@ -641,10 +641,10 @@ class HistoryRecord {
 - F20/C1b：后置条件项。只有显式码率来源契约、D1结论、F21声明范围和逐codec真机校准齐备时才显示建议值；建议值由用户显式采用，不支持的codec组合或低于产品下限时不生成。
 - F21/C2：F19只读编码器能力页；查询mime、VBR/CBR/CQ、QP bounds、bitrate/complexity range及软硬件属性，不创建转码任务。
 - F22/C3：F21真机证据后，所有者从QP钳制、CQ、AV1、都不做中选择，至多实施一个。软件CRF默认不做。
-- 推荐顺序：M4-B（当前）→ C2 → C1b/C3决策 → M4-C；C1a与既有真机矩阵作为未测试债务保留。每项独立授权、独立候选、独立验收；详细停止条件见交接文档§7.1。
+- 推荐顺序：M4-B（已接受private scope）→ C2（当前）→ C1b/C3决策 → M4-C；C1a与既有真机矩阵作为未测试债务保留。每项独立授权、独立候选、独立验收；详细停止条件见交接文档§7.1。
 
 ### M4-B 时间裁剪（F8）
-- 状态：`CANDIDATE READY — DEVICE ACCEPTANCE PENDING`。F8首个冻结SHA `9c9ca887...`的一次双路复审为一路PASS、一路BLOCKERS；接受的`INVALID_TRIM`恢复锁定问题已在唯一纠正SHA `9351e75...`中修复。该SHA通过Flutter `244/244`、Android JVM `346/346`、完整lint/build和APK静态核验。按每任务一轮复审预算不追加第二轮，不得把旧SHA的混合裁决写成纠正SHA的独立PASS；真机验收尚未执行。
+- 状态：`ACCEPTED — private scope`。F8首个冻结SHA `9c9ca887...`的一次双路复审为一路PASS、一路BLOCKERS；接受的`INVALID_TRIM`恢复锁定问题已在唯一纠正SHA `9351e75...`中修复。该SHA通过Flutter `244/244`、Android JVM `346/346`、完整lint/build和APK静态核验。按每任务一轮复审预算未追加第二轮；项目所有者随后报告测试成功并接受private scope。未提供的逐项矩阵仍为PENDING，不得扩写为多设备或生产保证。
 - 范围：S4起止双滑块；启用已预留的`trimStartMs/trimEndMs`；Kotlin使用Media3 `ClippingConfiguration`，与`Crop → Presentation`同一次Transformer导出。
 - 校验：`0 <= start < end <= duration`、最短保留1秒、无效值fail closed为`INVALID_TRIM`；trim必须在request/snapshot/retry/recovery中round-trip，S3估算按保留时长折算。
 - metadata：继续按源策略保留可靠拍摄时间/GPS；时间裁剪不改变拍摄语义，仍执行发布前应有/应无核验。

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../logging/app_logger.dart';
 import '../models/audio_info.dart';
 import '../models/device_capabilities.dart';
+import '../models/encoder_capabilities.dart';
 import '../models/output_location.dart';
 import '../models/process_request.dart';
 import '../models/progress_event.dart';
@@ -80,6 +81,16 @@ final class MethodChannelVideoEngine implements VideoEngine {
       arguments: arguments,
       parse: (Object? response) =>
           DeviceCapabilities.fromMap(_requireMap(response)),
+    );
+  }
+
+  @override
+  Future<EncoderCapabilitiesReport> getEncoderCapabilities() {
+    final arguments = <String, Object?>{};
+    return _invoker.invoke<EncoderCapabilitiesReport>(
+      'getEncoderCapabilities',
+      arguments: arguments,
+      parse: EncoderCapabilitiesReport.fromChannelValue,
     );
   }
 

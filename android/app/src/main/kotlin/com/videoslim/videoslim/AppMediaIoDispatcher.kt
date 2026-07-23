@@ -8,11 +8,12 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Every operation here may cross a provider, resolver, or persistent-preference boundary. */
+/** Every operation here may block on a local platform, provider, resolver, or preference query. */
 internal enum class MediaIoOperation {
     VIDEO_METADATA,
     VIDEO_PREVIEW_FRAME,
     AUDIO_METADATA,
+    ENCODER_CAPABILITIES,
     OUTPUT_DESTINATION_VALIDATION,
     VIDEO_GRANT_PERSISTENCE,
     OUTPUT_FOLDER_REPLACEMENT,
