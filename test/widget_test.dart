@@ -293,6 +293,7 @@ Widget _app({
     logger: logger,
     mediaActions: mediaActions ?? _FakeMediaActions(),
     now: () => DateTime(2026, 7, 19, 1, 2, 3),
+    outputNameToken: () => 'a7f3',
   );
 }
 
@@ -814,7 +815,10 @@ void main() {
       final request = engine.lastRequest;
       expect(request, isNotNull);
       expect(request!.uri, _sourceUri);
-      expect(request.outputFileName, '旅行_视频_slim_20260719_010203.mp4');
+      expect(
+        request.outputFileName,
+        '旅行_视频_slim_h265_target2500k_20260719_010203000_a7f3.mp4',
+      );
       expect(request.videoCodec, 'hevc');
       expect(request.videoBitrate, 2500000);
       expect(request.longEdge, isNull);
@@ -1300,6 +1304,7 @@ void main() {
         'SOURCE_PROVIDER_FAILED',
         'VIDEO_DECODING_FAILED',
         'VIDEO_ENCODING_FAILED',
+        'CAPTURE_METADATA_FAILED',
         'OUTPUT_PERMISSION_LOST',
         'UNKNOWN',
       ]) {
@@ -2293,6 +2298,10 @@ void main() {
 
       expect(engine.lastAudioRequest?.mode, AudioExtractMode.copy);
       expect(engine.lastAudioRequest?.bitrate, isNull);
+      expect(
+        engine.lastAudioRequest?.outputFileName,
+        '旅行_视频_audio_copy_20260719_010203000_a7f3.m4a',
+      );
       expect(
         engine.lastAudioRequest?.outputLocationLabel,
         '系统音频 > Music > VideoSlim',

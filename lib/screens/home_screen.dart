@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -11,6 +10,7 @@ import '../logging/app_logger.dart';
 import '../logic/audio_extract_planner.dart';
 import '../logic/compression_planner.dart';
 import '../logic/eta_estimator.dart';
+import '../logic/output_file_name_builder.dart';
 import '../models/audio_extract_settings.dart';
 import '../models/audio_info.dart';
 import '../models/compression_settings.dart';
@@ -37,6 +37,7 @@ class HomeScreen extends StatefulWidget {
     required this.logger,
     required this.mediaActions,
     this.now,
+    this.outputNameToken,
   });
 
   final VideoEngine engine;
@@ -44,6 +45,7 @@ class HomeScreen extends StatefulWidget {
   final AppLogger logger;
   final MediaActions mediaActions;
   final DateTime Function()? now;
+  final String Function()? outputNameToken;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -294,7 +296,7 @@ class _HomeScreenState extends State<HomeScreen> {
   AudioExtractPlan? get _audioExtractPlan {
     final source = _audioExtractSource;
     if (source == null) return null;
-    return AudioExtractPlanner(now: _now).plan(
+    return AudioExtractPlanner(now: _now, token: widget.outputNameToken).plan(
       source: source,
       settings: AudioExtractSettings(
         mode: _audioExtractMode,
@@ -1217,7 +1219,13 @@ class _HomeScreenState extends State<HomeScreen> {
       final startedAt = _now();
       final request = plan.toProcessRequest(
         uri: uri,
-        outputFileName: _buildOutputFileName(info.fileName, startedAt),
+        outputFileName: OutputFileNameBuilder(token: widget.outputNameToken)
+            .video(
+              sourceName: info.fileName,
+              codec: plan.videoCodec,
+              targetBitrate: plan.videoBitrate,
+              createdAt: startedAt,
+            ),
         outputLocationLabel: verifiedLocation.label,
         outputTreeUri: verifiedLocation.treeUri,
         videoDecoderMode: videoDecoderMode,
@@ -3074,6 +3082,7 @@ bool _canRetryVideoFailure(String? code) => switch (code) {
   'SOURCE_PROVIDER_FAILED' ||
   'VIDEO_DECODING_FAILED' ||
   'VIDEO_ENCODING_FAILED' ||
+  'CAPTURE_METADATA_FAILED' ||
   'OUTPUT_PERMISSION_LOST' ||
   'UNKNOWN' => true,
   _ => false,
@@ -3107,6 +3116,7 @@ String _messageForCode(
     'VIDEO_FORMAT_UNSUPPORTED' => '这台手机暂时无法读取这种视频格式。',
     'COMPATIBILITY_DECODER_UNAVAILABLE' => '这台手机没有可用于此视频的软件读取方式。原视频没有被修改。',
     'VIDEO_ENCODING_FAILED' => '手机没能按当前设置完成压缩。可按原设置重试，或返回调整格式或画质。',
+    'CAPTURE_METADATA_FAILED' => '无法确认原拍摄时间或位置已保留，未保存不完整结果。',
     'INVALID_CROP' => '裁剪区域无效，请重新框选。',
     'AUDIO_TRACK_MISSING' => '这个视频没有可提取的音轨。',
     'AUDIO_COPY_UNSUPPORTED' => '原音轨不是 AAC，无法无损提取。请改用 AAC 转码。',
@@ -3122,43 +3132,6 @@ String _messageForCode(
     'PICKER_BUSY' => '已有视频选择请求正在进行，请稍后再试。',
     _ => fallback,
   };
-}
-
-String _buildOutputFileName(String sourceName, DateTime now) {
-  var stem = sourceName.trim();
-  final extensionIndex = stem.lastIndexOf('.');
-  if (extensionIndex > 0) {
-    stem = stem.substring(0, extensionIndex);
-  }
-  stem = stem
-      .replaceAll(RegExp(r'[\/\\:*?"<>|]'), '_')
-      .replaceAll(RegExp(r'[\x00-\x1f\x7f]'), '_')
-      .replaceAll(RegExp(r'\s+'), '_')
-      .replaceAll(RegExp(r'[.\s]+$'), '')
-      .replaceAll(RegExp(r'^\.+'), '');
-  if (stem.isEmpty) {
-    stem = 'video';
-  }
-
-  final timestamp =
-      '${now.year.toString().padLeft(4, '0')}'
-      '${now.month.toString().padLeft(2, '0')}'
-      '${now.day.toString().padLeft(2, '0')}_'
-      '${now.hour.toString().padLeft(2, '0')}'
-      '${now.minute.toString().padLeft(2, '0')}'
-      '${now.second.toString().padLeft(2, '0')}';
-  final suffix = '_slim_$timestamp.mp4';
-  final stemBuffer = StringBuffer();
-  for (final rune in stem.runes) {
-    final candidate =
-        '${stemBuffer.toString()}${String.fromCharCode(rune)}$suffix';
-    if (utf8.encode(candidate).length > 240) {
-      break;
-    }
-    stemBuffer.writeCharCode(rune);
-  }
-  final safeStem = stemBuffer.isEmpty ? 'video' : stemBuffer.toString();
-  return '$safeStem$suffix';
 }
 
 String? _audioMimeTypeForCodec(String? codec) {

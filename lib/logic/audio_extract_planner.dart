@@ -1,7 +1,6 @@
-import 'dart:convert';
-
 import '../models/audio_extract_request.dart';
 import '../models/audio_extract_settings.dart';
+import 'output_file_name_builder.dart';
 
 /// Why an audio extraction request cannot start for the selected source.
 enum AudioExtractUnavailableReason { audioTrackMissing, copyRequiresAac }
@@ -72,7 +71,9 @@ final class AudioExtractPlan {
 
 /// Pure M3 extraction planner.
 final class AudioExtractPlanner {
-  AudioExtractPlanner({DateTime Function()? now}) : _now = now ?? DateTime.now;
+  AudioExtractPlanner({DateTime Function()? now, String Function()? token})
+    : _now = now ?? DateTime.now,
+      _outputFileNameBuilder = OutputFileNameBuilder(token: token);
 
   /// Conservative copied-audio fallback when the source reports no bitrate.
   static const int unknownCopyBitrateFallback = 512000;
@@ -84,6 +85,7 @@ final class AudioExtractPlanner {
   static const int minimumContainerOverheadBytes = 64 * 1024;
 
   final DateTime Function() _now;
+  final OutputFileNameBuilder _outputFileNameBuilder;
 
   /// Resolves source-dependent defaults, availability, output name, and bytes.
   AudioExtractPlan plan({
@@ -99,7 +101,12 @@ final class AudioExtractPlanner {
     }
     final effectiveSettings =
         settings ?? AudioExtractSettings.defaultsForSource(source);
-    final requestedName = _defaultOutputName(source.sourceFileName, _now());
+    final requestedName = _outputFileNameBuilder.audio(
+      sourceName: source.sourceFileName,
+      mode: effectiveSettings.mode,
+      targetBitrate: effectiveSettings.bitrate,
+      createdAt: _now(),
+    );
 
     if (!source.hasAudioTrack) {
       return _unavailable(
@@ -170,42 +177,6 @@ AudioExtractPlan _unavailable({
   sourceBitrateIsUnknown: false,
   requestedName: requestedName,
 );
-
-String _defaultOutputName(String sourceName, DateTime now) {
-  final normalized = sourceName.replaceAll(r'\', '/');
-  var stem = normalized.split('/').last.trim();
-  final extensionIndex = stem.lastIndexOf('.');
-  if (extensionIndex > 0) {
-    stem = stem.substring(0, extensionIndex);
-  }
-  stem = stem.replaceAll(RegExp(r'[.\x00-\x1f\x7f/\\]+'), '_').trim();
-  if (stem.isEmpty) stem = 'audio';
-
-  final suffix =
-      '_slim_${_four(now.year)}${_two(now.month)}${_two(now.day)}_'
-      '${_two(now.hour)}${_two(now.minute)}${_two(now.second)}.m4a';
-  final maximumStemBytes =
-      AudioExtractRequest.maxOutputFileNameBytes - utf8.encode(suffix).length;
-  stem = _truncateUtf8(stem, maximumStemBytes);
-  if (stem.isEmpty) stem = 'audio';
-  return '$stem$suffix';
-}
-
-String _truncateUtf8(String value, int maximumBytes) {
-  final buffer = StringBuffer();
-  var usedBytes = 0;
-  for (final rune in value.runes) {
-    final character = String.fromCharCode(rune);
-    final bytes = utf8.encode(character).length;
-    if (usedBytes + bytes > maximumBytes) break;
-    buffer.write(character);
-    usedBytes += bytes;
-  }
-  return buffer.toString();
-}
-
-String _two(int value) => value.toString().padLeft(2, '0');
-String _four(int value) => value.toString().padLeft(4, '0');
 
 BigInt _ceilMultiplyDivide(int left, int right, int divisor) =>
     _ceilMultiplyDivideBig(

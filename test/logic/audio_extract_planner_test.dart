@@ -8,6 +8,7 @@ import 'package:videoslim/models/audio_extract_settings.dart';
 void main() {
   final planner = AudioExtractPlanner(
     now: () => DateTime(2026, 7, 20, 11, 57, 39),
+    token: () => 'a7f3',
   );
 
   group('availability and defaults', () {
@@ -18,7 +19,10 @@ void main() {
       expect(plan.reason, isNull);
       expect(plan.settings.mode, AudioExtractMode.copy);
       expect(plan.settings.bitrate, isNull);
-      expect(plan.requestedName, 'holiday_slim_20260720_115739.m4a');
+      expect(
+        plan.requestedName,
+        'holiday_audio_copy_20260720_115739000_a7f3.m4a',
+      );
     });
 
     test('non-AAC source disables copy and defaults to AAC 128 kbps', () {
@@ -33,6 +37,10 @@ void main() {
       expect(defaultPlan.available, isTrue);
       expect(defaultPlan.settings.mode, AudioExtractMode.aac);
       expect(defaultPlan.settings.bitrate, 128000);
+      expect(
+        defaultPlan.requestedName,
+        'recording_audio_aac_target128k_20260720_115739000_a7f3.m4a',
+      );
       expect(copyPlan.available, isFalse);
       expect(copyPlan.reason, AudioExtractUnavailableReason.copyRequiresAac);
     });
@@ -67,7 +75,7 @@ void main() {
         ),
       );
 
-      expect(plan.requestedName, '旅 行__slim_20260720_115739.m4a');
+      expect(plan.requestedName, '旅_行_audio_copy_20260720_115739000_a7f3.m4a');
       expect(plan.requestedName, isNot(contains('/')));
       expect(plan.requestedName.codeUnits, isNot(contains(0)));
       expect(
@@ -89,7 +97,10 @@ void main() {
     test('truncates a long Unicode stem to a safe m4a display name', () {
       final plan = planner.plan(source: source(name: '${'旅行' * 200}.mp4'));
 
-      expect(plan.requestedName, endsWith('_slim_20260720_115739.m4a'));
+      expect(
+        plan.requestedName,
+        endsWith('_audio_copy_20260720_115739000_a7f3.m4a'),
+      );
       expect(
         utf8.encode(plan.requestedName).length,
         lessThanOrEqualTo(AudioExtractRequest.maxOutputFileNameBytes),

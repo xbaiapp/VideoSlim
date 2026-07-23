@@ -15,6 +15,7 @@ class VideoSlimApp extends StatelessWidget {
     required this.logger,
     required this.mediaActions,
     this.now,
+    this.outputNameToken,
   });
 
   final VideoEngine engine;
@@ -25,6 +26,9 @@ class VideoSlimApp extends StatelessWidget {
   /// Optional clock used for collision-safe output names. Primarily useful in
   /// deterministic widget tests.
   final DateTime Function()? now;
+
+  /// Optional four-hex output-name token source for deterministic tests.
+  final String Function()? outputNameToken;
 
   @override
   Widget build(BuildContext context) {
@@ -73,6 +77,7 @@ class VideoSlimApp extends StatelessWidget {
         logger: logger,
         mediaActions: mediaActions,
         now: now,
+        outputNameToken: outputNameToken,
       ),
     );
   }
