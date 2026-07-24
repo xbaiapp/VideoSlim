@@ -4,9 +4,9 @@
 > **生成日期：** 2026-07-23
 > **当前候选版本：** `1.9.0+25`
 > **当前候选代码 SHA：** `11f169ca9f30b2f05eeeec777dbaaaf71a01f7ff`
-> **当前候选状态：** C2/F21 `CANDIDATE READY — DEVICE CAPABILITY REPORT PENDING`；exact自动门禁和APK核验通过，纠正SHA无独立review PASS
+> **当前候选状态：** C2/F21 `DEVICE REPORT CAPTURED — OWNER DISPOSITION PENDING`；Pixel 10 Pro / API 37回传9 entries、四种MIME、0 query errors；纠正SHA无独立review PASS
 > **当前已接受基线：** M4-B/F8 `1.8.0+24 / 9351e75...`；项目所有者报告测试成功，详细设备矩阵未提供
-> **阶段：** C2候选等待真机能力清单；C1b/C3/M4-C仍未授权
+> **阶段：** C2报告已归档，等待项目所有者接受/拒绝或补测剩余交互项；C1b/C3/M4-C仍未授权
 > **安全：** 凭据、用户媒体、运行时数据库和私有日志不属于本交接包；任何秘密值只能写为 `[REDACTED]`。
 
 ## 1. 先读什么
@@ -16,7 +16,7 @@
 3. `docs/current-project-status.md`（当前进度与证据）
 4. `docs/c2-encoder-capabilities-completion-report.md`（C2纠正源码、门禁与APK身份）
 5. `docs/c2-exact-sha-review-disposition.md`（唯一复审超时、lint blocker与纠正边界）
-6. `docs/c2-encoder-capabilities-device-acceptance.md`（C2待执行真机清单）
+6. `docs/c2-encoder-capabilities-device-acceptance.md`（C2实际API 37报告、解读与剩余真机项）
 7. `docs/plans/2026-07-23-c2-encoder-capabilities.md`（C2固定contract）
 8. `README.md`（当前用户能力）
 9. `docs/m4-b-completion-report.md`（M4-B纠正源码、门禁与APK身份）
@@ -62,7 +62,7 @@ VideoSlim 是 Android 本地媒体工具：
 | M3 | `ACCEPTED — private scope` | AAC 无损直提和 AAC 强制重编码；所有者于 2026-07-22 报告测试成功 |
 | M4-A | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | F5 画面裁剪已实现；自动化与候选构建通过，真机矩阵未执行 |
 | F7 metadata/name增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 无来源时间改用unknown sentinel并增加必无核验；focused review通过 |
-| C轨 D1/F20–F22 | `C2/F21 CANDIDATE READY — DEVICE REPORT PENDING` | D1有效配置500 kbps，Pixel HEVC运行期明显过冲；C2 `1.9.0+25 / 11f169c...` exact自动门禁与APK核验通过，纠正SHA无独立review PASS；C1b/C3未授权 |
+| C轨 D1/F20–F22 | `C2/F21 DEVICE REPORT CAPTURED — OWNER DISPOSITION PENDING` | Pixel 10 Pro / API 37报告9 entries、四种MIME、0 query errors；硬件AVC/HEVC有QP bounds、硬件CQ均不可用、硬件AV1存在但无QP bounds；C1b/C3未授权 |
 | M4-B | `ACCEPTED — private scope` | `1.8.0+24`由所有者报告测试成功；详细矩阵未提供，旧SHA混合裁决不等于纠正SHA独立PASS |
 | M4-C | `PLANNED — NOT AUTHORIZED` | M4-B依赖已满足，但F23仍需独立授权 |
 | M5/M6 | NOT STARTED | 打磨、批量、目标大小、iOS/上架 |
@@ -234,7 +234,7 @@ C2纠正候选`1.9.0+25 / 11f169c...`：
 - `TranscodeEngine.kt`、`ProcessingService.kt`、publication、recovery和manifest均未修改；
 - 首个SHA `85e2497...`唯一双路复审均超时无裁决，且controller exact gate发现API 29 lint blocker；唯一纠正SHA使用直接SDK guard和`@RequiresApi(Q)` helper；
 - 纠正SHA的debug/release lint、debug assemble、ARM64 release build与APK ZIP/16 KiB zipalign/v2签名/证书连续性/package/version/SDK/ABI/权限/秘密扫描均PASS；
-- APK SHA-256：`fe9e0e70b90dd5ae3bd6aace327b3a636b365a112689cd7a1f994927ccb6b2ed`；按预算未复审纠正SHA，不得写成独立review PASS；真机能力清单仍PENDING。
+- APK SHA-256：`fe9e0e70b90dd5ae3bd6aace327b3a636b365a112689cd7a1f994927ccb6b2ed`；按预算未复审纠正SHA，不得写成独立review PASS；API 37真机能力清单已归档，接受决定和未报告交互项仍PENDING。
 
 远端 CI 不是全绿：主 Flutter/Android job 全部通过，但 API 35 x86_64 instrumentation job 因 runner 中 `sdkmanager: command not found` 在该 job 的应用/instrumentation 构建前失败，emulator instrumentation 未执行。
 
@@ -245,7 +245,7 @@ C2纠正候选`1.9.0+25 / 11f169c...`：
 - `1.4.3+18` 只消除成功后 `getAudioInfo` 的重复扫描，不删除发布前完整校验。
 - Task 3 Slice B 未集成；其 worktree/patch 是冻结研究，不是产品代码。
 - Release 使用 Debug certificate，不是生产签名。
-- M4-A crop与C1a提示已实现但尚未真机接受；M4-B连续单段trim已由所有者报告测试成功并接受private scope；C2已形成纠正私有候选但没有独立review PASS或真机能力清单，C1b/C3与M4-C仍未实现、未授权。
+- M4-A crop与C1a提示已实现但尚未真机接受；M4-B连续单段trim已由所有者报告测试成功并接受private scope；C2已形成纠正私有候选并收到一份API 37能力清单，但没有独立review PASS或所有者接受决定，C1b/C3与M4-C仍未实现、未授权。
 - `a92d1cd...` 已用1904/zero sentinel覆盖Media3处理时间默认值，并对时间/GPS执行必有与必无核验；`b0267a0...` 只增加日志复制边界。单次Pixel成功不能替代真机矩阵，不得提前写为ACCEPTED。
 
 ## 8. M4-A 实现边界与剩余验收

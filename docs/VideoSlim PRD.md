@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.19（记录C2/F21纠正私有候选与设备PENDING边界） |
+| 文档版本 | v1.20（记录C2/F21 API 37能力报告与所有者决定PENDING边界） |
 | 日期 | 2026-07-23 |
-| 状态 | M3 `ACCEPTED — private scope`；`1.7.0+23 / 7c49e57...`已实现F20/C1a但所有者跳过真机验收（未记PASS）；D1确认Pixel HEVC运行期明显过冲；M4-B/F8 `1.8.0+24 / 9351e75...`由所有者报告测试成功并接受private scope，未提供的逐项矩阵仍PENDING；C2/F21 `1.9.0+25 / 11f169c...`纠正私有候选的exact自动门禁与APK静态核验通过，纠正SHA无独立review PASS且真机能力清单PENDING；C1b/F22与M4-C仍未授权 |
+| 状态 | M3 `ACCEPTED — private scope`；`1.7.0+23 / 7c49e57...`已实现F20/C1a但所有者跳过真机验收（未记PASS）；D1确认Pixel HEVC运行期明显过冲；M4-B/F8 `1.8.0+24 / 9351e75...`由所有者报告测试成功并接受private scope，未提供的逐项矩阵仍PENDING；C2/F21 `1.9.0+25 / 11f169c...`已收到Pixel 10 Pro / API 37完整能力报告，纠正SHA无独立review PASS，项目所有者接受决定与未报告交互项PENDING；C1b/F22与M4-C仍未授权 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
@@ -299,7 +299,7 @@
 | F17 HDR 处理 | 远期。本期策略见 5.7-R4（检测 + 提示 + 色调映射到 SDR）。 |
 | F18 iOS | UI/业务层复用，新增 AVFoundation 引擎实现（AVAssetExportSession / AVAssetWriter），接口契约见 5.4。 |
 | F20 低收益提示/建议目标 | C1a 仅提示、不改值：用保守输出上界与已知源大小判断预计节省是否低于15%；C1b为后置条件项，要求显式码率来源、D1/C2证据、合法码率范围与逐codec真机校准。不得承诺或强制输出一定小于源文件。 |
-| F21 编码器能力诊断 | **纠正私有候选已形成，真机能力清单PENDING。** F19调试区只读枚举目标视频编码器的mime、VBR/CBR/CQ、QP bounds、bitrate/complexity range及平台软/硬件属性；支持刷新、确定性复制、API缺省语义和单项失败隔离。查询不configure codec、不创建任务、不改变转码行为。`1.9.0+25 / 11f169c...` exact自动门禁与APK静态核验通过；唯一双路复审绑定首个SHA且两路超时无裁决，controller发现的API 29 lint blocker已在唯一修订中纠正，按预算未复审纠正SHA。固定contract与证据见`docs/plans/2026-07-23-c2-encoder-capabilities.md`、`docs/c2-encoder-capabilities-completion-report.md`和`docs/c2-exact-sha-review-disposition.md`。 |
+| F21 编码器能力诊断 | **纠正私有候选与API 37真机能力报告已形成，所有者决定PENDING。** F19调试区只读枚举目标视频编码器的mime、VBR/CBR/CQ、QP bounds、bitrate/complexity range及平台软/硬件属性；支持刷新、确定性复制、API缺省语义和单项失败隔离。Pixel 10 Pro报告9 entries、四种固定MIME、0 query errors：硬件AVC/HEVC声明QP bounds，三个硬件encoder均不声明CQ，硬件AV1存在但无QP bounds。查询不configure codec、不创建任务、不改变转码行为；系统声明不等于实际编码成功。`1.9.0+25 / 11f169c...` exact自动门禁与APK静态核验通过；唯一双路复审绑定首个SHA且两路超时无裁决，controller发现的API 29 lint blocker已在唯一修订中纠正，按预算未复审纠正SHA。固定contract与证据见`docs/plans/2026-07-23-c2-encoder-capabilities.md`、`docs/c2-encoder-capabilities-completion-report.md`、`docs/c2-encoder-capabilities-device-acceptance.md`和`docs/c2-exact-sha-review-disposition.md`。 |
 | F22 条件式高级编码档 | 仅在F21本机证据后由所有者从QP钳制、CQ、AV1、都不做中选择，至多实施一个；CQ需明示修订VBR产品不变量，AV1按独立格式功能评估。软件x264/x265/SVT-AV1 CRF默认不做。 |
 | F23 同源多段时间编辑 | M4-B依赖已满足但仍未授权；Media3 `Composition + EditedMediaItemSequence`一次导出有序、不重叠的同源片段，不支持段乱序。跨文件拼接归F16，不在F23默认范围。 |
 

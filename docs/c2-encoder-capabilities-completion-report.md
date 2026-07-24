@@ -1,12 +1,12 @@
 # VideoSlim C2/F21 编码器能力诊断完成报告
 
 > **日期：** 2026-07-23
-> **状态：** `CANDIDATE READY — DEVICE CAPABILITY REPORT PENDING`
+> **状态：** `DEVICE REPORT CAPTURED — OWNER DISPOSITION PENDING`
 > **版本：** `1.9.0+25`
 > **候选源码 SHA：** `11f169ca9f30b2f05eeeec777dbaaaf71a01f7ff`
 > **源码 tree：** `bcc2cbed2fe44027ea38c4d6973f126a7661faaf`
 > **分支：** `m4a/crop`
-> **设备证据：** `PENDING — NO DEVICE CAPABILITY REPORT`
+> **设备证据：** Pixel 10 Pro / Android 17 API 37：9 entries、四种固定MIME、0 query errors；项目所有者接受决定与未报告交互项仍PENDING
 
 ## 1. 交付范围
 
@@ -91,12 +91,16 @@ C2只枚举`MediaCodecList`并读取`MediaCodecInfo`/capabilities。它不创建
 - **源码归档大小：** `497,410` bytes
 - **源码归档SHA-256：** `52f1a4b3b5ef03a5117e98ee553996a21f98da821e2c68e1caac5b983c4c7219`
 - **最终证据目录：** `/root/artifacts/videoslim/c2-encoder-capabilities/11f169ca9f30b2f05eeeec777dbaaaf71a01f7ff/`
+- **真机能力原文：** `/root/artifacts/videoslim/c2-encoder-capabilities/11f169ca9f30b2f05eeeec777dbaaaf71a01f7ff/device-reports/2026-07-23-api37-encoder-capabilities.txt`
+- **真机报告SHA-256：** `1edea9a31f6646b342a831e1045749dbe178efa0572c9ff79750e865693fca5d`
 - **被否决首个SHA证据：** `/root/artifacts/videoslim/c2-encoder-capabilities/85e249726e36325e9532e641f296854b8c8d1eb2/`
 
 证据包含exact Flutter/Android门禁、纠正focused gate、release build、lint报告、APK/manifest/badging/permissions、zipalign、签名与上一APK对照、秘密扫描、source archive和哈希清单；不包含用户媒体、运行时数据库、精确位置或凭据。
 
 ## 6. 设备边界与后续
 
-构建机没有Android设备。`docs/c2-encoder-capabilities-device-acceptance.md`中的所有入口、刷新、复制、四种MIME能力、只读行为和回归项继续保持`PENDING`，直到项目所有者安装本APK并回传实际能力清单。自动化与静态检查不能证明设备encoder目录、厂商capabilities或真实编码行为。
+项目所有者已回传Pixel 10 Pro / Android 17 API 37确定性能力报告：9个entry对应7个唯一canonical实现和2个alias，四种固定MIME均有entry，全部`query error: none`。平台声明硬件AVC、HEVC和AV1 encoder；硬件AVC/HEVC支持QP bounds，硬件AV1不支持；三个硬件encoder均不支持CQ；VP9仅有软件实现/alias。该报告证明能力页查询与完整复制的核心路径，但刷新、返回后设置不变、查询无任务/通知/文件副作用、重启重查和并发普通压缩仍未获得独立设备证据，项目所有者也尚未明确接受或拒绝。
+
+硬件AVC/HEVC声明的bitrate range均从`1 bps`起，因此此前低目标HEVC运行期过冲不能解释为平台声明的最低码率夹高。系统声明仍不能证明QP设置可用、码率改善、实际AV1导出或跨应用兼容。
 
 C2完成不自动授权C1b建议目标、C3 QP/CQ/AV1编码档或M4-C多段编辑；下一代码项仍需项目所有者独立决策。
