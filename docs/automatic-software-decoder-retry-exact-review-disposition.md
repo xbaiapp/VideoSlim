@@ -3,7 +3,7 @@
 > 日期：2026-07-24
 > 唯一独立review目标：`11799b06dec490d4cab4c8094b10377580c5971b`
 > 唯一纠正SHA：`8f4e970c8c724a5019bcc0f56cbbddbb47d2fb33`
-> 最终状态：独立review为 **NO VERDICT**；纠正候选自动化通过，真机验收PENDING
+> 最终状态：独立review为 **NO VERDICT**；纠正候选自动化通过；2026-07-24自然真机fallback contract已观察，所有者处置与剩余矩阵PENDING
 
 ## 1. 独立review结果
 
@@ -49,5 +49,5 @@
 ## 4. 候选处置
 
 - `11799b06…`及其APK已标记superseded，不得安装或分发。
-- 当前私有候选是`1.9.1+26 / 8f4e970…`。
-- 真实Media3/Codec2 fallback、后台/锁屏、SAF、唯一发布和recovery清理仍以真机清单为准。
+- 自动fallback实现候选是`1.9.1+26 / 8f4e970…`；当前可执行私有候选为`1.9.2+27 / 7948f9f…`，后续只修改AAC copy cadence，视频retry关键路径无差异。
+- 真实Media3/Codec2 fallback contract已自然观察；最终成功发布/播放、通知、取消、后台/锁屏等剩余项仍以真机清单为准。

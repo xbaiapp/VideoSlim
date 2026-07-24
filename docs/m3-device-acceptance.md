@@ -335,3 +335,45 @@
 - [x] 仍有未提供逐项证据的矩阵项，不据此扩大支持范围。
 
 验收人：项目所有者（Ming）  日期：2026-07-22
+
+---
+
+## 13. 2026-07-24 AAC 无损 copy cadence 修正补证
+
+> 修正候选：`1.9.2+27 / 7948f9fdbfc839b26d6055ca83ddf8449df42de5`
+> 状态：`APP-LEVEL DEVICE LOG PASS — SUBJECTIVE PLAYBACK PENDING`
+> 完整实现、review、门禁和制品证据：`docs/m3-lossless-copy-cadence-correction-completion-report.md`
+
+### 13.1 修正前真实失败
+
+同一类 Pixel 10 Pro / Android 17 AAC-LC 48 kHz 素材在 source、copy loop 与 output 均为 `805 samples / 206,177 payload bytes`、首末 PTS 为 `0 / 17,158,041 µs`、payload digest 与 indexed size 聚合检查通过后，仍因 `maxSampleDeltaUs=23,812` 超出旧普通门限 `23,334 µs` 而被误判 `AUDIO_OUTPUT_INVALID`。
+
+### 13.2 修正后最近任务日志
+
+- [x] 无损路径实际为 `decoder=none`、`encoder=none`；
+- [x] source、copy loop 与 output 都是 `805 samples / 206,177 payload bytes`；
+- [x] 首末 PTS 保持 `0 / 17,158,041 µs`，PTS 单调；
+- [x] output verifier 接受真实 `23,812 µs` cadence；
+- [x] 只分配并完成一次 SAF publication；
+- [x] 输出 metadata 为 AAC mono 48 kHz / 96 kbps，`17,179 ms`，文件 `213,382 bytes`；
+- [x] 任务以 `100% success` 终止，没有 `AUDIO_OUTPUT_INVALID` 或其他 error；
+- [x] recovery record 已清除，service 正常销毁；
+- [ ] 项目所有者明确确认该 M4A 已在设备或外部播放器实际播放、声音正常；
+- [ ] 日志片段独立证明安装包 version/hash（片段没有打印该身份，二进制身份依赖覆盖安装交付上下文）。
+
+### 13.3 安全反例
+
+自动化继续拒绝约一个完整 AAC frame 的 `42,668 µs` gap，包括：
+
+- output 新引入完整 frame gap；
+- source 与 output 共同具有完整 frame gap。
+
+lossless-copy output 的最大 delta 同时受 `source max + 2,000 µs` 时间戳取整边界和 `普通严格门限 + 1,000 µs` 绝对边界约束；AAC 重编码保持严格 verifier，不继承 source cadence。
+
+### 13.4 当前处置
+
+- App 端修正和设备日志门禁：**PASS**；
+- 唯一发布、终态、recovery/temp 清理：**PASS**；
+- 人耳播放、声音和外部播放器兼容：**PENDING**。
+
+2026-07-22 对 M3 私有范围的接受保持有效，但不能用它替代本次新修正二进制的主观播放确认，也不能据此扩大到多设备或商店发布保证。

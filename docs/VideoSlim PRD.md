@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.21（冻结一次性无确认自动软件解码重试与 `1.9.1+26` 私有候选边界） |
+| 文档版本 | v1.22（冻结`1.9.2+27` M3 lossless-copy cadence修正、真机补证与自动software decoder fallback真实contract处置） |
 | 日期 | 2026-07-24 |
-| 状态 | M3 与 M4-B/F8 已按 private scope 接受；C2/F21 `1.9.0+25 / 11f169c...` 的 Pixel 10 Pro/API 37 能力证据保持冻结；一次性自动软件解码重试 `1.9.1+26 / 8f4e970...` 已通过静态门禁和 APK 核验，真机验收 PENDING；独立 exact-state review 超时无裁决，控制器已用唯一修订关闭两个 attempt-boundary 问题；C1b/F22 与 M4-C 仍未授权 |
+| 状态 | M3原范围与M4-B/F8已按private scope接受；当前可执行候选`1.9.2+27 / 7948f9f...`修正AAC无损copy真实`23,812 µs` cadence误杀，App端真机发布成功、主观播放PENDING；一次性自动software decoder fallback真实failure contract已在Pixel观察、所有者处置PENDING；C2/F21证据保持冻结，C1b/F22与M4-C仍未授权 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
@@ -446,7 +446,7 @@ abstract class VideoEngine {
   `androidx.media3:media3-transformer`、`media3-effect`、`media3-common`
 - **压缩**：`Transformer.Builder` + `setVideoMimeType`（H.265/H.264）；码率经 `DefaultEncoderFactory` + `VideoEncoderSettings.Builder().setBitrate()` 设置；分辨率缩放用 `Presentation` 效果；裁剪用 `Crop` 效果（NDC 坐标）；时间剪辑用 `MediaItem.ClippingConfiguration`。
 - **视频压缩的音频 copy 模式**：不设置音频 MIME、不加音频处理器，让 Transformer 对视频内音轨走转封装路径。
-- **M3 音频 copy**：独立实现类，`MediaExtractor` → `MediaMuxer` 逐 sample 复制第一条有明确 profile 证据的 AAC-LC/HE-AAC/HE-AAC-v2（`audio/mp4a-latm`）音轨，不经过 Transformer，也不创建 Decoder/Encoder。
+- **M3 音频 copy**：独立实现类，`MediaExtractor` → `MediaMuxer` 逐 sample 复制第一条有明确 profile 证据的 AAC-LC/HE-AAC/HE-AAC-v2（`audio/mp4a-latm`）音轨，不经过 Transformer，也不创建 Decoder/Encoder。source/copy/output的sample count、payload bytes/digest、indexed physical size、PTS单调性和覆盖完整性必须先一致；只有lossless-copy的output最大delta可取`min(source max + 2,000 µs, 普通严格上限 + 1,000 µs)`，完整AAC frame gap即使source/output共同存在也必须失败。
 - **M3 AAC 模式**：Media3 Transformer audio-only，`setRemoveVideo(true)`，并强制 `audioNeedsEncoding=true` 以保证 AAC→AAC 仍实际创建音频 Decoder/AAC Encoder；目标码率只允许 192000/128000/96000/64000 bps。
 - **前台服务**：任务在 `ForegroundService` 中执行；建通知渠道；进度节流为每秒 ≤ 2 次更新。
 - **权限清单**：`FOREGROUND_SERVICE` + 对应类型权限（`FOREGROUND_SERVICE_MEDIA_PROCESSING` / `FOREGROUND_SERVICE_DATA_SYNC`，Android 14+ 缺失会直接崩溃）、`POST_NOTIFICATIONS`（Android 13+ 需运行时申请，否则进度通知不显示）、`WAKE_LOCK`。Photo Picker 选取与 MediaStore 写入自有输出文件均**无需**存储权限。
@@ -622,6 +622,7 @@ class HistoryRecord {
 
 ### M3 音频提取
 - 状态：`ACCEPTED — private scope`（2026-07-22）。项目所有者明确报告当前 M3 候选测试成功；接受范围和未认领矩阵见 `docs/m3-completion-report.md` 与 `docs/m3-device-acceptance.md`。
+- 2026-07-24 cadence修正：`1.9.2+27 / 7948f9f...`状态为`APP-LEVEL DEVICE LOG PASS — SUBJECTIVE PLAYBACK PENDING`。真实Pixel AAC-LC 48 kHz素材的`23,812 µs`最大delta只比旧普通门限高`478 µs`；聚合完整性先通过后，output仍同时受`source max + 2,000 µs`和`普通严格上限 + 1,000 µs`约束。约`42,668 µs`完整frame gap无论新引入还是source/output共同存在都失败。AAC重编码继续使用严格cadence规则。实现、review、门禁、APK和真机证据见`docs/m3-lossless-copy-cadence-correction-completion-report.md`。
 - 任务：实现 F4 AAC copy + AAC 强制重编码，入口接入首页与信息页；复用 M2 前台服务、通知、取消、snapshot、发布、恢复与 F19，并以 `taskKind=audio_extraction` 与视频任务隔离。
 - copy：第一音轨必须为 AAC-LC/HE-AAC（`audio/mp4a-latm`），使用 `MediaExtractor + MediaMuxer` 纯 sample copy 到 `.m4a`，不得创建 Decoder/Encoder；非 AAC 稳定返回 `AUDIO_COPY_UNSUPPORTED`。
 - AAC：Media3 audio-only 强制重编码为 AAC-LC 192/128/96/64 kbps；即使 AAC→AAC 也不得 transmux。支持 mono/stereo，>2 声道拒绝；无音轨返回 `AUDIO_TRACK_MISSING`。
@@ -655,7 +656,7 @@ class HistoryRecord {
 - 不做：多段、跨文件拼接、无损切割或时间轴缩略图带。任何可感知音画漂移、trim恢复丢失或文件安全问题立即停止。
 
 ### 一次性自动软件解码重试
-- 状态：`PRIVATE INTERNAL CANDIDATE — DEVICE ACCEPTANCE PENDING`。`1.9.1+26 / 8f4e970...` 已通过 Flutter `259/259`、Android JVM `359/359`、debug/release lint、assemble、ARM64 release build 与 APK 静态核验。
+- 状态：`NATURAL DEVICE FALLBACK CONTRACT OBSERVED — OWNER DISPOSITION PENDING`。`1.9.1+26 / 8f4e970...`通过Flutter`259/259`、Android JVM`359/359`、完整lint/build和APK核验；Pixel 10 Pro / Android 17已自然观察到首次硬件Decoder约79%结构化失败、同task/同service无确认切software并回到0%、实际软件Decoder启动。后续独立硬件HEVC Encoder失败正确终止，没有循环、残缺发布或recovery泄漏。当前`1.9.2+27`没有修改视频retry关键路径。
 - 触发：仅同一用户视频任务的首次 hardware `VIDEO_DECODING_FAILED`；无确认，在原 `ProcessingService` 内自动从头尝试 software decoder 一次。相同素材后来硬件成功，因此不建立永久黑名单，新任务仍先硬件。
 - 不变项：输入、crop/trim、codec、VBR 码率、尺寸、音频、目的地、输出名、metadata、SAF/MediaStore 和 C2 只读查询。
 - 审查边界：唯一独立 exact-state review 在 600 秒超时且无 verdict；控制器用唯一修订关闭延迟 snapshot attempt-boundary 与 registry fail-open 两项问题，不把 NO VERDICT 记为 PASS，也不启动无限复审。
@@ -686,7 +687,7 @@ class HistoryRecord {
 | HDR 输入颜色异常 | 中 | 5.7-R4 |
 | 机型编码器差异 | 中 | 5.7-R2 |
 | 长任务被杀 | 中 | 5.7-R3 |
-| 非确定性硬件 decoder 生命周期失败 | 中 | 首次结构化 `VIDEO_DECODING_FAILED` 在同任务内自动 software fallback 一次；无永久黑名单、无循环；真机验收见独立清单 |
+| 非确定性硬件 decoder 生命周期失败 | 中 | 首次结构化 `VIDEO_DECODING_FAILED` 在同任务内自动 software fallback 一次；无永久黑名单、无循环；真实contract已观察，最终成功/通知/取消/后台矩阵见独立清单 |
 | FFmpeg 生态/授权 | 低（因主架构不依赖） | 5.7-R7、附录 C |
 
 ---

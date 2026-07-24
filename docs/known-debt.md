@@ -1,7 +1,7 @@
 # VideoSlim 已知技术债与冻结边界
 
-> **决策日期：** 2026-07-22
-> **当前路线：** M3 已接受为 `ACCEPTED — private scope`；当前发布代码为 `19abfb7da2e8fa028e7200000f0dc2a114bc840e`，Task 3 Slice B 继续冻结且未集成。
+> **决策日期：** 2026-07-24
+> **当前路线：** M3原私有范围与M4-B已接受；当前可执行候选为`1.9.2+27 / 7948f9fdbfc839b26d6055ca83ddf8449df42de5`。AAC copy cadence修正已有App端真机成功日志、主观播放PENDING；自动software decoder fallback真实contract已观察、所有者处置PENDING。Task 3 Slice B继续冻结且未集成。
 > **处理原则：** 本清单中的问题不自动触发新计划；只有真机可复现或会丢失/误删用户文件的问题才是 blocker，其他事项由项目所有者裁决。
 
 ## 1. Slice B 冻结状态
@@ -82,7 +82,21 @@ Task 3 Slice B 未合入当前候选。
 
 只在静态复审中出现、无法在真机复现且不涉及用户文件安全的问题，继续保留在本清单，由项目所有者裁决。
 
-## 5. 接受后的禁止状态声明
+## 5. 当前候选仍未关闭的证据项
+
+### 5.1 M3 cadence修正的人耳播放
+
+同类AAC素材已通过`23,812 µs` cadence verifier、单次SAF publication、metadata回读与recovery/temp清理；日志无法证明外部播放器实际解码、声音和人耳听感。项目所有者明确确认前，该项保持PENDING，不把App日志成功扩写为主观播放PASS。
+
+### 5.2 自动software decoder fallback矩阵
+
+真实硬件Decoder failure已经自然进入同task/同service的一次software attempt；后续独立硬件Encoder failure正确终止，未循环或发布残缺输出。仍缺自动fallback最终成功发布/播放、通知截图、software attempt取消、后台/锁屏/Activity重建证据。这些是未执行矩阵，不是当前已知代码blocker。
+
+### 5.3 API 35 x86_64 instrumentation CI（已关闭）
+
+可执行SHA的主Flutter/Android job全通过；其instrumentation job曾因runner PATH中缺少`sdkmanager`而在APK构建前失败。workflow-only修正`68aaa777ef39b1b71441dbc9da3d17ce78258301`显式配置Android command-line tools后，远端run`30107559081`全绿，API 35 x86_64 instrumentation `3/3 PASS`。模拟器结果仍不能替代物理设备验收。GitHub对若干固定action的Node.js 20→24强制兼容警告为non-blocking maintenance，不自动触发升级。
+
+## 6. 接受后的禁止状态声明
 
 M3 已由项目所有者接受为 private scope，但仍不得声称：
 

@@ -1,10 +1,11 @@
 # 一次性自动软件解码重试：实现与候选报告
 
 > 日期：2026-07-24
-> 状态：私有内部候选；静态门禁通过后等待真机验收
+> 状态：`NATURAL DEVICE FALLBACK CONTRACT OBSERVED — OWNER DISPOSITION PENDING`
 > 版本：`1.9.1+26`
 > 代码候选：`8f4e970c8c724a5019bcc0f56cbbddbb47d2fb33`
 > Tree：`54059b52b5cb9a65419ab65e8815f4527946c3d3`
+> 当前可执行候选：`1.9.2+27 / 7948f9fdbfc839b26d6055ca83ddf8449df42de5`；后续只修改 AAC copy cadence，视频 retry 关键路径无差异
 
 ## 1. 产品结论
 
@@ -74,10 +75,12 @@
 
 唯一一轮独立 exact-state 审查针对 `11799b06…` 运行 600 秒后超时，完成 29 次只读调用但没有形成 verdict，按规则记录为 **NO VERDICT**，不是 PASS。控制器随后发现并修复两个 attempt-boundary 问题：延迟硬件 snapshot 可能压过软件 retry 的 0% 重置，以及 registry 转移失败后仍继续 best-effort。修订提交为本报告的 `8f4e970…`。遵守每任务一轮 review/一次 revision 的预算，没有启动无限复审循环；完整处置见`docs/automatic-software-decoder-retry-exact-review-disposition.md`。
 
-## 8. 仍需真机证明
+## 8. 真机证据与剩余边界
 
-自动化测试证明状态机和所有权约束，但不能强制 Pixel 10 Pro/API 37 复现非确定性的硬件 decoder failure，也不能代替真实 Media3/Codec2、后台锁屏、SAF 发布和长视频行为。新候选的完成定义仍包含独立真机验收清单。
+Pixel 10 Pro / Android 17 已自然复现首次硬件 attempt 在约 `79%` 由 `c2.google.avc.decoder` 返回结构化 `VIDEO_DECODING_FAILED`。同一外层 task、同一 ProcessingService 随即无确认切换到 software、进度回到 preparing / 0%，实际 Decoder 为 `c2.android.avc.decoder`，原 request 仅改变 Decoder mode。software attempt 随后由硬件 HEVC Encoder 返回独立 `VIDEO_ENCODING_FAILED`；任务正确终止，没有第二轮 fallback、没有发布残缺文件，recovery 与 service 均完成清理。
+
+因此真实 failure contract 不再是 PENDING。仍未证明的项目是：自动 fallback 后最终成功发布并由人类播放检查、前台通知截图、software attempt 主动取消，以及 fallback 期间后台/锁屏/Activity 重建。项目所有者明确接受前，状态保持 `OWNER DISPOSITION PENDING`。完整分层证据见`docs/automatic-software-decoder-retry-device-acceptance.md`。
 
 ## 9. 与原 C2 候选的关系
 
-原 `1.9.0+25 / 11f169ca…`、tree `bcc2cbed…`、APK SHA-256 `fe9e0e…` 和 Pixel 10 Pro C2 报告继续作为冻结历史证据，不被本候选覆盖。本实现是新的 `1.9.1+26` 私有内部候选。
+原 `1.9.0+25 / 11f169ca…`、tree `bcc2cbed…`、APK SHA-256 `fe9e0e…` 和 Pixel 10 Pro C2 报告继续作为冻结历史证据，不被本候选覆盖。自动 retry 的实现候选是 `1.9.1+26`；当前 `1.9.2+27` 只修正 M3 AAC 无损 copy cadence，并继承完全相同的视频 retry 关键路径。

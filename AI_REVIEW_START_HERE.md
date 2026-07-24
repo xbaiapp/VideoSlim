@@ -2,11 +2,11 @@
 
 > **用途：** 给新的 AI/开发者一个可验证的当前项目入口。先读本文，再决定是否需要展开 PRD 和源码。
 > **生成日期：** 2026-07-24
-> **当前候选版本：** `1.9.1+26`
-> **当前候选代码 SHA：** `8f4e970c8c724a5019bcc0f56cbbddbb47d2fb33`
-> **当前候选状态：** 一次性自动软件解码重试 `PRIVATE INTERNAL CANDIDATE — DEVICE ACCEPTANCE PENDING`；静态门禁和APK核验通过；唯一独立exact-state review超时无裁决，纠正SHA无独立review PASS
+> **当前候选版本：** `1.9.2+27`
+> **当前可执行代码 SHA：** `7948f9fdbfc839b26d6055ca83ddf8449df42de5`
+> **当前候选状态：** M3 AAC无损copy cadence修正`APP-LEVEL DEVICE LOG PASS — SUBJECTIVE PLAYBACK PENDING`；一次性自动software decoder fallback的自然failure contract已在Pixel设备观察，所有者处置PENDING
 > **当前已接受基线：** M4-B/F8 `1.8.0+24 / 9351e75...`；项目所有者报告测试成功，详细设备矩阵未提供
-> **阶段：** 自动fallback候选等待Pixel真机验收；原C2报告与候选证据保持冻结，C1b/C3/M4-C仍未授权
+> **阶段：** 冻结`1.9.2+27`修正与真机证据；workflow-only CI重跑已全绿，原C2报告保持冻结，C1b/C3/M4-C仍未授权
 > **安全：** 凭据、用户媒体、运行时数据库和私有日志不属于本交接包；任何秘密值只能写为 `[REDACTED]`。
 
 ## 1. 先读什么
@@ -14,24 +14,27 @@
 1. `docs/VideoSlim-AI-Handoff-2026-07-23.md`（可独立转交的新AI摘要、当前任务和路线图）
 2. `AI_REVIEW_START_HERE.md`（本文）
 3. `docs/current-project-status.md`（当前进度与证据）
-4. `docs/automatic-software-decoder-retry-completion-report.md`（自动fallback契约、门禁、审查边界和APK身份）
-5. `docs/automatic-software-decoder-retry-device-acceptance.md`（自动fallback真机矩阵）
-6. `docs/c2-encoder-capabilities-completion-report.md`（冻结C2源码、门禁与APK身份）
-7. `docs/c2-exact-sha-review-disposition.md`（C2复审边界）
-8. `docs/c2-encoder-capabilities-device-acceptance.md`（C2实际API 37报告与剩余真机项）
-9. `docs/plans/2026-07-23-c2-encoder-capabilities.md`（C2固定contract）
-10. `README.md`（当前用户能力）
-11. `docs/m4-b-completion-report.md`（M4-B纠正源码、门禁与APK身份）
-12. `docs/m4-b-exact-sha-review-disposition.md`（M4-B复审边界）
-13. `docs/m4-b-device-acceptance.md`（M4-B所有者接受记录）
-14. `docs/d1-bitrate-diagnosis-2026-07-23.md`
-15. `docs/c1a-low-savings-completion-report.md` / `docs/c1a-low-savings-device-acceptance.md`
-16. `docs/VideoSlim PRD.md`（产品和权威contract）
-17. `docs/capture-metadata-completion-report.md` / `docs/capture-metadata-device-acceptance.md`
-18. `docs/m4-a-completion-report.md` / `docs/m4-device-acceptance.md`
-19. `docs/known-debt.md`
-20. `AGENTS.md`
-21. 之后再读下方“关键源码”。
+4. `docs/m3-lossless-copy-cadence-correction-completion-report.md`（M3修正、review、门禁、APK和真机日志边界）
+5. `docs/m3-device-acceptance.md`（M3历史验收与2026-07-24补证）
+6. `docs/ci-api35-instrumentation-recovery-2026-07-24.md`（workflow-only修正和远端`3/3`证据）
+7. `docs/automatic-software-decoder-retry-completion-report.md`（自动fallback契约、门禁、审查边界和APK身份）
+8. `docs/automatic-software-decoder-retry-device-acceptance.md`（自动fallback真机矩阵）
+9. `docs/c2-encoder-capabilities-completion-report.md`（冻结C2源码、门禁与APK身份）
+10. `docs/c2-exact-sha-review-disposition.md`（C2复审边界）
+11. `docs/c2-encoder-capabilities-device-acceptance.md`（C2实际API 37报告与剩余真机项）
+12. `docs/plans/2026-07-23-c2-encoder-capabilities.md`（C2固定contract）
+13. `README.md`（当前用户能力）
+14. `docs/m4-b-completion-report.md`（M4-B纠正源码、门禁与APK身份）
+15. `docs/m4-b-exact-sha-review-disposition.md`（M4-B复审边界）
+16. `docs/m4-b-device-acceptance.md`（M4-B所有者接受记录）
+17. `docs/d1-bitrate-diagnosis-2026-07-23.md`
+18. `docs/c1a-low-savings-completion-report.md` / `docs/c1a-low-savings-device-acceptance.md`
+19. `docs/VideoSlim PRD.md`（产品和权威contract）
+20. `docs/capture-metadata-completion-report.md` / `docs/capture-metadata-device-acceptance.md`
+21. `docs/m4-a-completion-report.md` / `docs/m4-device-acceptance.md`
+22. `docs/known-debt.md`
+23. `AGENTS.md`
+24. 之后再读下方“关键源码”。
 
 ## 2. 产品边界
 
@@ -63,21 +66,23 @@ VideoSlim 是 Android 本地媒体工具：
 | M1 | ACCEPTED | 导入→metadata→压缩→相册→F19 主流程通过 |
 | M2 | `ACCEPTED — private scope` | 完整压缩、前台任务、取消、恢复、SAF 和兼容 Decoder 重试 |
 | M3 | `ACCEPTED — private scope` | AAC 无损直提和 AAC 强制重编码；所有者于 2026-07-22 报告测试成功 |
+| M3 cadence修正 | `APP-LEVEL DEVICE LOG PASS — SUBJECTIVE PLAYBACK PENDING` | `1.9.2+27 / 7948f9f...`接受真实`23,812 µs`小抖动并单次发布成功；完整frame gap仍拒绝，实际播放/声音待确认 |
 | M4-A | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | F5 画面裁剪已实现；自动化与候选构建通过，真机矩阵未执行 |
 | F7 metadata/name增强 | `CANDIDATE READY — DEVICE ACCEPTANCE PENDING` | 无来源时间改用unknown sentinel并增加必无核验；focused review通过 |
 | C轨 D1/F20–F22 | `C2/F21 DEVICE REPORT CAPTURED — OWNER DISPOSITION PENDING` | Pixel 10 Pro / API 37报告9 entries、四种MIME、0 query errors；硬件AVC/HEVC有QP bounds、硬件CQ均不可用、硬件AV1存在但无QP bounds；C1b/C3未授权 |
 | M4-B | `ACCEPTED — private scope` | `1.8.0+24`由所有者报告测试成功；详细矩阵未提供，旧SHA混合裁决不等于纠正SHA独立PASS |
-| 自动软件decoder fallback | `PRIVATE INTERNAL CANDIDATE — DEVICE ACCEPTANCE PENDING` | `1.9.1+26 / 8f4e970...`静态门禁和APK核验通过；独立review超时无裁决；真实failure路径待Pixel证据 |
+| 自动软件decoder fallback | `NATURAL DEVICE FALLBACK CONTRACT OBSERVED — OWNER DISPOSITION PENDING` | 首次硬件解码约79%失败后，同task/同service无确认切软件并回到0%；后续独立Encoder失败没有触发循环或残缺发布 |
 | M4-C | `PLANNED — NOT AUTHORIZED` | M4-B依赖已满足，但F23仍需独立授权 |
 | M5/M6 | NOT STARTED | 打磨、批量、目标大小、iOS/上架 |
 
-当前自动fallback私有真机验收APK：
+当前私有真机验收APK：
 
 ```text
-VideoSlim-1.9.1+26-8f4e970-arm64-v8a-release.apk
-SHA-256 8765c79b1afe9cfe5b451359766646b4be089d12820e3478a05ba636f24272f3
+VideoSlim-1.9.2+27-7948f9f-arm64-v8a-release.apk
+SHA-256 7a180bc7ce8f89439c7e31f1fcb4c019d1be45d4d356c436698aad43bbcb6f18
 package com.videoslim.videoslim
-version 1.9.1+26
+version 1.9.2+27
+executable source 7948f9fdbfc839b26d6055ca83ddf8449df42de5
 ```
 
 ## 4. 技术架构
@@ -247,9 +252,17 @@ C2纠正候选`1.9.0+25 / 11f169c...`：
 - Dart format 63/0、Flutter analyze 0 issues、Flutter tests`259/259`、Android JVM`359/359`、debug/release lint与assemble、ARM64 release build和APK静态核验PASS；
 - APK SHA-256：`8765c79b1afe9cfe5b451359766646b4be089d12820e3478a05ba636f24272f3`；
 - 唯一独立exact-state review针对首版`11799b0...`超时且无verdict；控制器用唯一修订关闭延迟硬件snapshot attempt-boundary和registry fail-open，不得写成独立review PASS；
-- 真机状态PENDING，证据与矩阵见两个`automatic-software-decoder-retry-*`文档。
+- Pixel 10 Pro / Android 17已自然观察到：首次硬件Decoder约79%结构化失败，同task/同service无确认切software并回到0%，实际`c2.android.avc.decoder`启动；后续独立硬件HEVC Encoder失败正确终止，无循环、残缺发布或recovery泄漏。最终fallback成功发布/播放等矩阵仍PENDING。
 
-远端 CI 不是全绿：主 Flutter/Android job 全部通过，但 API 35 x86_64 instrumentation job 因 runner 中 `sdkmanager: command not found` 在该 job 的应用/instrumentation 构建前失败，emulator instrumentation 未执行。
+当前M3 AAC copy cadence修正`1.9.2+27 / 7948f9f...`：
+
+- 只在sample count、payload bytes/digest、indexed physical size、PTS与覆盖完整性先通过后，lossless-copy的output最大delta才可取`min(source max + 2,000 µs, 普通严格上限 + 1,000 µs)`；AAC重编码保持严格；
+- 初版`fe0e04d...`审查发现source/output共同完整frame gap可能被放行，已撤销；唯一修订加入绝对上限和对应RED→GREEN测试；
+- focused`22/22`、Flutter`259/259`、Android JVM`365/365`、完整lint/build与APK核验PASS；
+- Pixel同类素材的`23,812 µs`cadence已成功通过output verifier、单次SAF发布和清理；日志无法证明人耳播放/声音，故主观项PENDING；
+- APK SHA-256：`7a180bc7ce8f89439c7e31f1fcb4c019d1be45d4d356c436698aad43bbcb6f18`。
+
+可执行SHA上的远端主Flutter/Android job全部通过；其API 35 x86_64 instrumentation job曾因runner PATH中缺少`sdkmanager`在APK构建前失败。workflow-only修正`68aaa77...`显式配置Android command-line tools后，远端run`30107559081`全部成功，instrumentation `3/3 PASS`。该修正不能冒充新的可执行APK源码。
 
 ## 7. 不要误读的事实
 
@@ -258,7 +271,7 @@ C2纠正候选`1.9.0+25 / 11f169c...`：
 - `1.4.3+18` 只消除成功后 `getAudioInfo` 的重复扫描，不删除发布前完整校验。
 - Task 3 Slice B 未集成；其 worktree/patch 是冻结研究，不是产品代码。
 - Release 使用 Debug certificate，不是生产签名。
-- M4-A crop与C1a提示已实现但尚未真机接受；M4-B连续单段trim已由所有者报告测试成功并接受private scope；C2证据保持冻结。自动fallback候选没有独立review PASS或真实failure-path真机证据；C1b/C3与M4-C仍未实现、未授权。
+- M4-A crop与C1a提示已实现但尚未真机接受；M4-B连续单段trim已由所有者报告测试成功并接受private scope；C2证据保持冻结。自动fallback纠正SHA没有独立review PASS，但真实failure contract已观察；M3 cadence修正已有App端成功日志但主观播放仍PENDING。C1b/C3与M4-C仍未实现、未授权。
 - `a92d1cd...` 已用1904/zero sentinel覆盖Media3处理时间默认值，并对时间/GPS执行必有与必无核验；`b0267a0...` 只增加日志复制边界。单次Pixel成功不能替代真机矩阵，不得提前写为ACCEPTED。
 
 ## 8. M4-A 实现边界与剩余验收
@@ -281,7 +294,7 @@ M4-A 已按下列一次转码链路实现：
 ## 9. 已知债务和下一 AI 的工作规则
 
 - 先读 `docs/known-debt.md`；不要恢复或合并冻结的 Slice B。
-- 自动fallback代码与私有候选已经完成，下一步只是真机验收；C2证据归档保持独立。在项目所有者新的明确授权前，C1b/C3、M4-C/F23或任何hardening/refactor/migration不得开工。
+- 自动fallback和M3 cadence修正代码已完成，workflow-only CI已全绿；冻结证据后，设备剩余项保持PENDING。C2证据归档保持独立。在项目所有者新的明确授权前，C1b/C3、M4-C/F23或任何hardening/refactor/migration不得开工。
 - 当前候选只保留可靠来源时间/GPS；不要增加隐私模式、完整metadata复制、设备定位、音频继承、第二次remux或自定义MP4 writer。真实单次mux失败时停止并报告规模升级。
 - “分析”意味着只读，不得自动编辑代码。
 - 每任务默认最多一次实现、一次修订、一轮 exact-SHA 复审。
