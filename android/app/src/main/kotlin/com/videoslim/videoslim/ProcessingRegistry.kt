@@ -12,6 +12,7 @@ internal data class TaskRuntimeSnapshot(
     val retryRequest: Map<String, Any?>? = null,
     val outputLocationLabel: String = DEFAULT_OUTPUT_LOCATION_LABEL,
     val videoDecoderMode: String = VideoDecoderMode.HARDWARE.wireName,
+    val automaticSoftwareDecoderRetry: Boolean = false,
     val actualVideoEncodingMode: String = VideoEncoderMode.UNKNOWN.wireName,
     val outputUri: String? = null,
     val errorCode: String? = null,
@@ -25,6 +26,7 @@ internal data class TaskRuntimeSnapshot(
             "state" to state,
             "phase" to phase,
             "videoDecoderMode" to videoDecoderMode,
+            "automaticSoftwareDecoderRetry" to automaticSoftwareDecoderRetry,
             "actualVideoEncodingMode" to actualVideoEncodingMode,
             "outputUri" to outputUri,
             "outputFileName" to outputFileName,
@@ -152,6 +154,53 @@ internal class ProcessingRegistry {
                     errorMessage = errorMessage,
                 )
             if (updated == previous) return true
+            current = updated
+            listeners = observers.toList()
+        }
+        notifyObservers(listeners, updated)
+        return true
+    }
+
+    /**
+     * Begins the only automatic decoder fallback inside the same service task. Unlike ordinary
+     * progress updates, this explicit attempt boundary is allowed to reset percent and phase.
+     */
+    fun beginAutomaticSoftwareDecoderRetry(
+        taskId: String,
+        retryRequest: Map<String, Any?>,
+        startedAtEpochMs: Long,
+    ): Boolean {
+        require(startedAtEpochMs >= 0L) { "startedAtEpochMs must not be negative" }
+        val updated: TaskRuntimeSnapshot
+        val listeners: List<(TaskRuntimeSnapshot) -> Unit>
+        synchronized(lock) {
+            val previous = current ?: return false
+            if (
+                previous.taskId != taskId ||
+                previous.isTerminal ||
+                previous.taskKind != TaskKind.VIDEO_COMPRESSION ||
+                previous.videoDecoderMode != VideoDecoderMode.HARDWARE.wireName
+            ) {
+                return false
+            }
+            val retryVideo = retryRequest["video"] as? Map<*, *>
+            require(retryVideo?.get("decoderMode") == VideoDecoderMode.SOFTWARE.wireName) {
+                "Automatic decoder retry request must use software mode"
+            }
+            updated =
+                previous.copy(
+                    percent = 0.0,
+                    state = TaskRuntimeSnapshot.STATE_RUNNING,
+                    phase = TaskRuntimeSnapshot.PHASE_PREPARING,
+                    retryRequest = retryRequest,
+                    videoDecoderMode = VideoDecoderMode.SOFTWARE.wireName,
+                    automaticSoftwareDecoderRetry = true,
+                    actualVideoEncodingMode = VideoEncoderMode.UNKNOWN.wireName,
+                    outputUri = null,
+                    errorCode = null,
+                    errorMessage = null,
+                    startedAtEpochMs = startedAtEpochMs,
+                )
             current = updated
             listeners = observers.toList()
         }

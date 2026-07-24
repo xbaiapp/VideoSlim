@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:videoslim/models/compression_settings.dart';
 import 'package:videoslim/models/process_request.dart';
 import 'package:videoslim/models/progress_event.dart';
+import 'package:videoslim/models/task_kind.dart';
 import 'package:videoslim/models/video_info.dart';
 import 'package:videoslim/state/home_flow_state.dart';
 
@@ -250,6 +251,34 @@ void main() {
     expect(state.preparing, isFalse);
     expect(state.processing, isFalse);
     expect(state.finishing, isFalse);
+  });
+
+  test('automatic software retry resets only the active attempt progress', () {
+    state.completeRestoration();
+    state.beginTaskPreparation(
+      taskKind: TaskKind.videoCompression,
+      outputFileName: 'same-output.mp4',
+    );
+    state.setTaskId('service-task');
+    state.beginTaskProcessing();
+    state.setProgress(percent: 89, phase: TaskPhase.encoding);
+    state.setTiming(
+      elapsed: const Duration(minutes: 4),
+      remaining: const Duration(seconds: 30),
+      etaStalled: true,
+    );
+
+    state.beginAutomaticSoftwareDecoderRetry();
+
+    expect(state.taskLifecycle, HomeTaskLifecycle.preparing);
+    expect(state.taskId, 'service-task');
+    expect(state.percent, 0);
+    expect(state.taskPhase, TaskPhase.preparing);
+    expect(state.elapsed, Duration.zero);
+    expect(state.remaining, isNull);
+    expect(state.etaStalled, isFalse);
+    expect(state.outputPublished, isFalse);
+    expect(state.beginAutomaticSoftwareDecoderRetry, throwsStateError);
   });
 
   test('processing can overlap restoration and uncertain native ownership', () {

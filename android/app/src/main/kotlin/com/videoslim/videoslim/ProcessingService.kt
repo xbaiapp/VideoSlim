@@ -84,6 +84,8 @@ private data class ActiveServiceLaunch(
     val reconciliationObservation: DetachableReconciliationObservation,
     val recoveryWaitWatchdog: RecoveryWaitWatchdog,
     val terminationPolicy: ServiceTerminationPolicy,
+    var videoRequest: ProcessRequest? = null,
+    var automaticSoftwareDecoderRetryAttempted: Boolean = false,
 )
 
 internal class ProcessingService : Service() {
@@ -315,6 +317,7 @@ internal class ProcessingService : Service() {
                 when (context.taskKind) {
                     TaskKind.VIDEO_COMPRESSION -> {
                         val request = ProcessRequest.parse(readArguments(intent))
+                        launch.videoRequest = request
                         launch.transcodeEngine.start(request) { event ->
                             onEngineEvent(launch, generation, event)
                         }
@@ -659,6 +662,26 @@ internal class ProcessingService : Service() {
             } else {
                 event.state
             }
+        if (
+            startAutomaticSoftwareDecoderRetryIfEligible(
+                launch = launch,
+                generation = generation,
+                event = event,
+                forcedFinishSource = forcedFinishSource,
+            )
+        ) {
+            return
+        }
+        if (
+            launch.automaticSoftwareDecoderRetryAttempted &&
+            launch.videoRequest?.videoDecoderMode == VideoDecoderMode.SOFTWARE &&
+            state != TaskRuntimeSnapshot.STATE_RUNNING
+        ) {
+            log(
+                "task=${context.serviceTaskId} automatic software decoder retry terminal " +
+                    "state=$state code=${event.errorCode ?: "none"} percent=${event.percent}",
+            )
+        }
         val publishEvent: () -> Unit = {
             ProcessingRuntime.registry.apply(
                 taskId = context.serviceTaskId,
@@ -718,6 +741,87 @@ internal class ProcessingService : Service() {
                 },
             publishTerminal = publishEvent,
         )
+    }
+
+    private fun startAutomaticSoftwareDecoderRetryIfEligible(
+        launch: ActiveServiceLaunch,
+        generation: Long,
+        event: EngineProgressEvent,
+        forcedFinishSource: ActiveTaskFinishSource?,
+    ): Boolean {
+        val context = launch.context
+        val retryRequest =
+            AutomaticSoftwareDecoderRetryPolicy.retryRequestOrNull(
+                taskKind = context.taskKind,
+                currentRequest = launch.videoRequest,
+                automaticRetryAlreadyAttempted = launch.automaticSoftwareDecoderRetryAttempted,
+                cancellationRequested = context.isCancellationRequested,
+                forcedFinishSource = forcedFinishSource,
+                event = event,
+            ) ?: return false
+        val previousRoute = context.engineRoute ?: return false
+        launch.automaticSoftwareDecoderRetryAttempted = true
+        log(
+            "task=${context.serviceTaskId} hardware video decoder failed; " +
+                "starting one automatic software decoder retry " +
+                "previousEngineTask=${previousRoute.engineTaskId} percent=${event.percent}",
+        )
+        try {
+            val retryEngineTaskId =
+                launch.transcodeEngine.start(retryRequest) { retryEvent ->
+                    onEngineEvent(launch, generation, retryEvent)
+                }
+            val retryRoute =
+                checkNotNull(
+                    context.replaceEngineTaskIdForAutomaticRetry(
+                        generation = generation,
+                        previousEngineTaskId = previousRoute.engineTaskId,
+                        retryEngineTaskId = retryEngineTaskId,
+                    ),
+                ) { "Automatic decoder retry no longer owns the active engine route" }
+            check(
+                launch.publicationOwner.replaceEngineRouteForAutomaticRetry(
+                    previousRoute = previousRoute,
+                    retryRoute = retryRoute,
+                ),
+            ) { "Automatic decoder retry could not transfer publication ownership" }
+            launch.videoRequest = retryRequest
+            val mirrored =
+                ProcessingRuntime.registry.beginAutomaticSoftwareDecoderRetry(
+                    taskId = context.serviceTaskId,
+                    retryRequest = retryRequest.toChannelMap(),
+                    startedAtEpochMs = System.currentTimeMillis(),
+                )
+            if (!mirrored) {
+                log(
+                    "task=${context.serviceTaskId} automatic software decoder retry started " +
+                        "without a current registry mirror",
+                )
+            }
+            log(
+                "task=${context.serviceTaskId} automatic software decoder retry started " +
+                    "engineTask=${retryRoute.engineTaskId} output=${retryRequest.outputFileName}",
+            )
+        } catch (error: Throwable) {
+            val failure =
+                when (error) {
+                    is ProcessRequestException -> error.error
+                    is EngineOperationException -> error.failure
+                    else -> EngineErrorMapper.fromThrowable(error)
+                }
+            log(
+                "task=${context.serviceTaskId} automatic software decoder retry launch failed " +
+                    "code=${failure.code.wireName}: ${error.stackTraceToString()}",
+            )
+            finishActiveTask(
+                launch = launch,
+                outcome = ActiveTaskTerminalOutcome.FAILED,
+                source = ActiveTaskFinishSource.START_EXCEPTION,
+                errorCode = failure.code.wireName,
+                errorMessage = failure.message,
+            )
+        }
+        return true
     }
 
     private inline fun bestEffortCleanup(

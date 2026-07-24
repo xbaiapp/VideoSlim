@@ -53,6 +53,32 @@ internal object ForegroundNotificationDeliveryPolicy {
     }
 }
 
+/** Exact, side-effect-free gate for the single automatic hardware-to-software decoder fallback. */
+internal object AutomaticSoftwareDecoderRetryPolicy {
+    fun retryRequestOrNull(
+        taskKind: TaskKind,
+        currentRequest: ProcessRequest?,
+        automaticRetryAlreadyAttempted: Boolean,
+        cancellationRequested: Boolean,
+        forcedFinishSource: ActiveTaskFinishSource?,
+        event: EngineProgressEvent,
+    ): ProcessRequest? {
+        val request = currentRequest ?: return null
+        if (
+            taskKind != TaskKind.VIDEO_COMPRESSION ||
+            request.videoDecoderMode != VideoDecoderMode.HARDWARE ||
+            automaticRetryAlreadyAttempted ||
+            cancellationRequested ||
+            forcedFinishSource != null ||
+            event.state != TaskRuntimeSnapshot.STATE_FAILED ||
+            event.errorCode != EngineErrorCode.VIDEO_DECODING_FAILED.wireName
+        ) {
+            return null
+        }
+        return request.copy(videoDecoderMode = VideoDecoderMode.SOFTWARE)
+    }
+}
+
 /**
  * Persistent publication identity for one service launch.
  *
@@ -83,6 +109,29 @@ internal class ActiveTaskPublicationOwner(
                 )
             boundIdentity?.let { return@synchronized it == identity }
             boundIdentity = identity
+            true
+        }
+
+    fun replaceEngineRouteForAutomaticRetry(
+        previousRoute: EngineTaskRoute,
+        retryRoute: EngineTaskRoute,
+    ): Boolean =
+        synchronized(lock) {
+            if (
+                previousRoute.taskKind != TaskKind.VIDEO_COMPRESSION ||
+                retryRoute.taskKind != TaskKind.VIDEO_COMPRESSION ||
+                context.engineRoute != retryRoute
+            ) {
+                return@synchronized false
+            }
+            val expectedPrevious =
+                PublicationLaunchIdentity(
+                    serviceTaskId = context.serviceTaskId,
+                    launchGeneration = context.launchGeneration,
+                    engineTaskId = previousRoute.engineTaskId,
+                )
+            if (boundIdentity != expectedPrevious) return@synchronized false
+            boundIdentity = expectedPrevious.copy(engineTaskId = retryRoute.engineTaskId)
             true
         }
 }

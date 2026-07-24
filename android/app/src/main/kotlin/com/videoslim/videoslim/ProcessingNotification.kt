@@ -106,16 +106,36 @@ internal data class ProcessingNotificationText(
             when (snapshot.phase) {
                 TaskRuntimeSnapshot.PHASE_PREPARING ->
                     ProcessingNotificationText(
-                        title = "正在准备视频",
-                        body = "即将开始压缩 · ${encodingModeText(snapshot)}",
+                        title =
+                            if (snapshot.automaticSoftwareDecoderRetry) {
+                                "正在兼容重试视频"
+                            } else {
+                                "正在准备视频"
+                            },
+                        body =
+                            if (snapshot.automaticSoftwareDecoderRetry) {
+                                "硬件读取失败，已自动改用兼容方式"
+                            } else {
+                                "即将开始压缩 · ${encodingModeText(snapshot)}"
+                            },
                         progress = progress,
                         ongoing = true,
                         showCancel = true,
                     )
                 TaskRuntimeSnapshot.PHASE_ENCODING ->
                     ProcessingNotificationText(
-                        title = "正在压缩视频",
-                        body = "已完成 $progress% · ${encodingModeText(snapshot)}",
+                        title =
+                            if (snapshot.automaticSoftwareDecoderRetry) {
+                                "正在兼容重试视频"
+                            } else {
+                                "正在压缩视频"
+                            },
+                        body =
+                            if (snapshot.automaticSoftwareDecoderRetry) {
+                                "已完成 $progress% · 软件读取"
+                            } else {
+                                "已完成 $progress% · ${encodingModeText(snapshot)}"
+                            },
                         progress = progress,
                         ongoing = true,
                         showCancel = true,
@@ -177,7 +197,7 @@ internal data class ProcessingNotificationText(
                 EngineErrorCode.INVALID_TRIM.wireName -> "时间裁剪范围无效，请打开 VideoSlim 重新选择"
                 EngineErrorCode.VIDEO_DECODING_FAILED.wireName ->
                     if (snapshot.videoDecoderMode == VideoDecoderMode.HARDWARE.wireName) {
-                        "视频读取方式未能完成，原视频没有被修改。可打开 VideoSlim 使用兼容模式重试"
+                        "视频读取方式未能完成，原视频没有被修改。请打开 VideoSlim 查看详情"
                     } else {
                         "软件读取方式未能完成，原视频没有被修改。可打开 VideoSlim 查看详情"
                     }

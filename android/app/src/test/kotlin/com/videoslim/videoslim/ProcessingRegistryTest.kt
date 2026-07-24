@@ -28,6 +28,7 @@ class ProcessingRegistryTest {
                 "state" to "running",
                 "phase" to "preparing",
                 "videoDecoderMode" to "hardware",
+                "automaticSoftwareDecoderRetry" to false,
                 "actualVideoEncodingMode" to "unknown",
                 "outputUri" to null,
                 "outputFileName" to "source_slim.mp4",
@@ -44,7 +45,7 @@ class ProcessingRegistryTest {
     }
 
     @Test
-    fun `requested decoder mode is immutable and strictly validated`() {
+    fun `requested decoder mode is strictly validated`() {
         val registry = ProcessingRegistry()
         val snapshot =
             registry.reserve(
@@ -66,6 +67,125 @@ class ProcessingRegistryTest {
                 videoDecoderMode = "automatic",
             )
         }
+    }
+
+    @Test
+    fun `automatic software retry atomically resets attempt progress and persisted request`() {
+        val registry = ProcessingRegistry()
+        val hardwareRequest =
+            ProcessRequest(
+                sourceUri = "content://source",
+                outputFileName = "output.mp4",
+                videoCodec = VideoCodec.HEVC,
+                videoDecoderMode = VideoDecoderMode.HARDWARE,
+                videoBitrate = 1_111_111,
+                longEdge = 1_280,
+                crop = CropRect(0, 0, 1_280, 720),
+                trim = TimeTrim(515_070L, 2_373_988L),
+                audioMode = AudioMode.COPY,
+                audioBitrate = null,
+            )
+        registry.reserve(
+            taskId = "task",
+            sourceUri = hardwareRequest.sourceUri,
+            outputFileName = hardwareRequest.outputFileName,
+            startedAtEpochMs = 1L,
+            retryRequest = hardwareRequest.toChannelMap(),
+        )
+        registry.apply(
+            taskId = "task",
+            percent = 89.0,
+            state = TaskRuntimeSnapshot.STATE_RUNNING,
+            phase = TaskRuntimeSnapshot.PHASE_ENCODING,
+            actualVideoEncodingMode = VideoEncoderMode.EXPLICIT_HARDWARE.wireName,
+        )
+        val softwareRequest = hardwareRequest.copy(videoDecoderMode = VideoDecoderMode.SOFTWARE)
+
+        assertTrue(
+            registry.beginAutomaticSoftwareDecoderRetry(
+                taskId = "task",
+                retryRequest = softwareRequest.toChannelMap(),
+                startedAtEpochMs = 2L,
+            ),
+        )
+
+        val retry = checkNotNull(registry.snapshot())
+        assertEquals(0.0, retry.percent, 0.0)
+        assertEquals(TaskRuntimeSnapshot.PHASE_PREPARING, retry.phase)
+        assertEquals(VideoDecoderMode.SOFTWARE.wireName, retry.videoDecoderMode)
+        assertTrue(retry.automaticSoftwareDecoderRetry)
+        assertEquals(VideoEncoderMode.UNKNOWN.wireName, retry.actualVideoEncodingMode)
+        assertEquals(softwareRequest.toChannelMap(), retry.retryRequest)
+        assertEquals(2L, retry.startedAtEpochMs)
+        assertFalse(
+            registry.beginAutomaticSoftwareDecoderRetry(
+                taskId = "task",
+                retryRequest = softwareRequest.toChannelMap(),
+                startedAtEpochMs = 3L,
+            ),
+        )
+    }
+
+    @Test
+    fun `automatic software retry rejects wrong terminal audio and non-software requests`() {
+        val softwareRequest =
+            ProcessRequest(
+                sourceUri = "content://source",
+                outputFileName = "output.mp4",
+                videoCodec = VideoCodec.HEVC,
+                videoDecoderMode = VideoDecoderMode.SOFTWARE,
+                videoBitrate = 1_000_000,
+                longEdge = null,
+                audioMode = AudioMode.COPY,
+                audioBitrate = null,
+            )
+        val registry = ProcessingRegistry()
+        registry.reserve("task", "content://source", "output.mp4", 1L)
+        assertFalse(
+            registry.beginAutomaticSoftwareDecoderRetry(
+                taskId = "wrong",
+                retryRequest = softwareRequest.toChannelMap(),
+                startedAtEpochMs = 2L,
+            ),
+        )
+        assertRejected {
+            registry.beginAutomaticSoftwareDecoderRetry(
+                taskId = "task",
+                retryRequest =
+                    softwareRequest.copy(videoDecoderMode = VideoDecoderMode.HARDWARE).toChannelMap(),
+                startedAtEpochMs = 2L,
+            )
+        }
+        registry.apply(
+            "task",
+            5.0,
+            TaskRuntimeSnapshot.STATE_FAILED,
+            errorCode = EngineErrorCode.VIDEO_DECODING_FAILED.wireName,
+            errorMessage = EngineErrorCode.VIDEO_DECODING_FAILED.defaultMessage,
+        )
+        assertFalse(
+            registry.beginAutomaticSoftwareDecoderRetry(
+                taskId = "task",
+                retryRequest = softwareRequest.toChannelMap(),
+                startedAtEpochMs = 2L,
+            ),
+        )
+
+        val audio = ProcessingRegistry()
+        audio.reserve(
+            taskKind = TaskKind.AUDIO_EXTRACTION,
+            taskId = "audio",
+            sourceUri = "content://source",
+            outputFileName = "output.m4a",
+            startedAtEpochMs = 1L,
+        )
+        assertFalse(
+            audio.beginAutomaticSoftwareDecoderRetry(
+                taskId = "audio",
+                retryRequest = softwareRequest.toChannelMap(),
+                startedAtEpochMs = 2L,
+            ),
+        )
     }
 
     @Test

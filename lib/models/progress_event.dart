@@ -97,6 +97,7 @@ class ProgressEvent {
     required this.state,
     this.phase = TaskPhase.encoding,
     this.videoDecoderMode = RequestedVideoDecoderMode.hardware,
+    this.automaticSoftwareDecoderRetry = false,
     this.actualVideoEncodingMode = ActualVideoEncodingMode.unknown,
     this.outputUri,
     this.outputFileName,
@@ -123,6 +124,8 @@ class ProgressEvent {
       videoDecoderMode: requestedVideoDecoderModeFromWireName(
         map['videoDecoderMode'] ?? 'hardware',
       ),
+      automaticSoftwareDecoderRetry:
+          map['automaticSoftwareDecoderRetry'] as bool? ?? false,
       actualVideoEncodingMode: actualVideoEncodingModeFromWireName(
         map['actualVideoEncodingMode'] ?? 'unknown',
       ),
@@ -153,6 +156,9 @@ class ProgressEvent {
   /// Input decoder mode explicitly requested for this task.
   final RequestedVideoDecoderMode videoDecoderMode;
 
+  /// Whether this event belongs to the task's one automatic software-decoder retry.
+  final bool automaticSoftwareDecoderRetry;
+
   /// Classification of the video encoder created by Media3.
   final ActualVideoEncodingMode actualVideoEncodingMode;
 
@@ -179,6 +185,7 @@ class ProgressEvent {
     'state': state.wireName,
     'phase': phase.wireName,
     'videoDecoderMode': videoDecoderMode.wireName,
+    'automaticSoftwareDecoderRetry': automaticSoftwareDecoderRetry,
     'actualVideoEncodingMode': actualVideoEncodingMode.wireName,
     'outputUri': outputUri,
     'outputFileName': outputFileName,

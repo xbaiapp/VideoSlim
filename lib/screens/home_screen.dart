@@ -72,6 +72,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _lastFailureCode;
   RequestedVideoDecoderMode _lastVideoDecoderMode =
       RequestedVideoDecoderMode.hardware;
+  bool _automaticSoftwareDecoderRetryActive = false;
   ProcessRequest? _lastProcessRequest;
   AudioExtractRequest? _lastAudioExtractRequest;
 
@@ -431,6 +432,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _flow.setProgress(percent: snapshot.percent, phase: snapshot.phase);
       _taskOutputLocationLabel = snapshot.outputLocationLabel;
       _lastVideoDecoderMode = snapshot.videoDecoderMode;
+      _automaticSoftwareDecoderRetryActive =
+          snapshot.automaticSoftwareDecoderRetry;
       _lastProcessRequest = snapshot.retryRequest;
       _flow.restoreCrop(snapshot.retryRequest?.crop);
       _flow.restoreTrim(snapshot.retryRequest?.videoTrim);
@@ -460,6 +463,7 @@ class _HomeScreenState extends State<HomeScreen> {
         state: snapshot.state,
         phase: snapshot.phase,
         videoDecoderMode: snapshot.videoDecoderMode,
+        automaticSoftwareDecoderRetry: snapshot.automaticSoftwareDecoderRetry,
         actualVideoEncodingMode: snapshot.actualVideoEncodingMode,
         outputUri: snapshot.outputUri,
         outputFileName: snapshot.outputFileName,
@@ -1073,61 +1077,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _compress() => _startCompression(videoDecoderMode: 'hardware');
 
-  Future<void> _retryLastMode() => _submitRetry(
-    videoDecoderMode: _lastVideoDecoderMode.wireName,
-    confirmCompatibility: false,
-  );
+  Future<void> _retryLastMode() =>
+      _submitRetry(videoDecoderMode: _lastVideoDecoderMode.wireName);
 
-  Future<void> _retryWithCompatibilityMode() =>
-      _submitRetry(videoDecoderMode: 'software', confirmCompatibility: true);
-
-  Future<void> _submitRetry({
-    required String videoDecoderMode,
-    required bool confirmCompatibility,
-  }) async {
+  Future<void> _submitRetry({required String videoDecoderMode}) async {
     final previous = _lastProcessRequest;
     final source = _sourceInfo;
-    if (previous == null ||
-        source == null ||
-        !_canBeginVideoRetry(previous, compatibility: confirmCompatibility)) {
+    if (previous == null || source == null || !_canBeginVideoRetry(previous)) {
       return;
     }
     final outputLocationRevision = _outputLocationRevision;
     final generation = _reserveDestinationValidation();
     try {
-      if (confirmCompatibility) {
-        final confirmed = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('使用兼容模式重试？'),
-            content: const Text(
-              '兼容模式会改用软件方式读取视频，并从头重新压缩。速度可能更慢，也会增加耗电和发热；输出编码设置保持不变。',
-            ),
-            actions: <Widget>[
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('返回'),
-              ),
-              FilledButton.tonal(
-                key: const ValueKey<String>('confirm-compatibility-retry'),
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('开始兼容重试'),
-              ),
-            ],
-          ),
-        );
-        if (!_isVideoRetryContextCurrent(
-          previous,
-          source,
-          generation,
-          outputLocationRevision,
-          compatibility: true,
-        )) {
-          return;
-        }
-        if (confirmed != true) return;
-      }
-
       if (previous.outputTreeUri != null) {
         try {
           final current = await widget.picker.getOutputLocation();
@@ -1136,7 +1097,6 @@ class _HomeScreenState extends State<HomeScreen> {
             source,
             generation,
             outputLocationRevision,
-            compatibility: confirmCompatibility,
           )) {
             return;
           }
@@ -1155,7 +1115,6 @@ class _HomeScreenState extends State<HomeScreen> {
             source,
             generation,
             outputLocationRevision,
-            compatibility: confirmCompatibility,
           )) {
             _rejectDestinationValidation(
               generation,
@@ -1171,7 +1130,6 @@ class _HomeScreenState extends State<HomeScreen> {
             source,
             generation,
             outputLocationRevision,
-            compatibility: confirmCompatibility,
           ) ||
           !_destinationMatchesRequest(previous.outputTreeUri)) {
         return;
@@ -1186,22 +1144,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  bool _canBeginVideoRetry(
-    ProcessRequest request, {
-    required bool compatibility,
-  }) =>
-      !_interactionLocked &&
-      _isVideoRetryEligible(request, compatibility: compatibility);
+  bool _canBeginVideoRetry(ProcessRequest request) =>
+      !_interactionLocked && _isVideoRetryEligible(request);
 
-  bool _isVideoRetryEligible(
-    ProcessRequest request, {
-    required bool compatibility,
-  }) {
+  bool _isVideoRetryEligible(ProcessRequest request) {
     final source = _sourceInfo;
-    final codeEligible = compatibility
-        ? _lastFailureCode == 'VIDEO_DECODING_FAILED' &&
-              _lastVideoDecoderMode == RequestedVideoDecoderMode.hardware
-        : _canRetryVideoFailure(_lastFailureCode);
     return !_outputLocationLoading &&
         !_outputPublished &&
         !_progressStreamClosed &&
@@ -1209,16 +1156,15 @@ class _HomeScreenState extends State<HomeScreen> {
         _selectedUri == request.uri &&
         source.uri == request.uri &&
         _destinationMatchesRequest(request.outputTreeUri) &&
-        codeEligible;
+        _canRetryVideoFailure(_lastFailureCode);
   }
 
   bool _isVideoRetryContextCurrent(
     ProcessRequest request,
     VideoInfo source,
     int generation,
-    int outputLocationRevision, {
-    required bool compatibility,
-  }) =>
+    int outputLocationRevision,
+  ) =>
       _isCurrent(generation) &&
       _validatingDestination &&
       identical(_lastProcessRequest, request) &&
@@ -1227,10 +1173,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _outputLocationRevision == outputLocationRevision &&
       !_outputPublished &&
       !_progressStreamClosed &&
-      (compatibility
-          ? _lastFailureCode == 'VIDEO_DECODING_FAILED' &&
-                _lastVideoDecoderMode == RequestedVideoDecoderMode.hardware
-          : _canRetryVideoFailure(_lastFailureCode));
+      _canRetryVideoFailure(_lastFailureCode);
 
   Future<void> _startCompression({required String videoDecoderMode}) async {
     final info = _sourceInfo;
@@ -1371,6 +1314,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _lastVideoDecoderMode = requestedVideoDecoderModeFromWireName(
         request.videoDecoderMode,
       );
+      _automaticSoftwareDecoderRetryActive = false;
       _lastProcessRequest = request;
       _taskOutputLocationLabel = request.outputLocationLabel;
       _actualVideoEncodingMode = ActualVideoEncodingMode.unknown;
@@ -1571,8 +1515,31 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     final isAudio = _activeTaskKind == TaskKind.audioExtraction;
+    final automaticSoftwareRetryStarted =
+        !isAudio &&
+        event.state == TaskState.running &&
+        event.phase == TaskPhase.preparing &&
+        event.percent == 0 &&
+        event.automaticSoftwareDecoderRetry &&
+        _lastVideoDecoderMode == RequestedVideoDecoderMode.hardware &&
+        event.videoDecoderMode == RequestedVideoDecoderMode.software &&
+        _flow.taskLifecycle == HomeTaskLifecycle.processing;
+    if (automaticSoftwareRetryStarted) {
+      _flow.beginAutomaticSoftwareDecoderRetry();
+      _startTiming(_now());
+      _logFlow(
+        '硬件视频解码失败，原生任务已自动切换软件解码并从头重试',
+        level: AppLogLevel.warning,
+        details: <String, Object?>{
+          'taskId': event.taskId,
+          'decoderMode': event.videoDecoderMode.wireName,
+        },
+      );
+    }
     _flow.update(() {
       _lastVideoDecoderMode = event.videoDecoderMode;
+      _automaticSoftwareDecoderRetryActive =
+          event.automaticSoftwareDecoderRetry;
       _actualVideoEncodingMode = event.actualVideoEncodingMode;
       _taskOutputLocationLabel = event.outputLocationLabel;
     });
@@ -2138,10 +2105,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               )) ||
                           (_activeTaskKind == TaskKind.videoCompression &&
                               _lastProcessRequest != null &&
-                              _isVideoRetryEligible(
-                                _lastProcessRequest!,
-                                compatibility: false,
-                              )),
+                              _isVideoRetryEligible(_lastProcessRequest!)),
                       retryLabel: _activeTaskKind == TaskKind.audioExtraction
                           ? '重试音频提取'
                           : '重试压缩',
@@ -2158,16 +2122,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             asAac: true,
                           ),
                       onAacRetry: _interactionLocked ? null : _retryAudioAsAac,
-                      canCompatibilityRetry:
-                          _activeTaskKind == TaskKind.videoCompression &&
-                          _lastProcessRequest != null &&
-                          _isVideoRetryEligible(
-                            _lastProcessRequest!,
-                            compatibility: true,
-                          ),
-                      onCompatibilityRetry: _interactionLocked
-                          ? null
-                          : _retryWithCompatibilityMode,
                       onReset: _interactionLocked ? null : _reset,
                     ),
                   ],
@@ -2316,6 +2270,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                 : '正在确认保存结果…'
                           : _cancelling
                           ? '正在取消并清理未完成文件…'
+                          : _automaticSoftwareDecoderRetryActive &&
+                                _activeTaskKind == TaskKind.videoCompression
+                          ? '硬件读取失败，已自动改用兼容方式从头重试…'
                           : _activeTaskKind == TaskKind.audioExtraction
                           ? switch (_taskPhase) {
                               TaskPhase.preparing => '正在检查音轨和可用空间…',
@@ -2818,8 +2775,6 @@ class _ErrorCard extends StatelessWidget {
     required this.onRetry,
     required this.canAacRetry,
     required this.onAacRetry,
-    required this.canCompatibilityRetry,
-    required this.onCompatibilityRetry,
     required this.onReset,
   });
 
@@ -2829,8 +2784,6 @@ class _ErrorCard extends StatelessWidget {
   final VoidCallback? onRetry;
   final bool canAacRetry;
   final VoidCallback? onAacRetry;
-  final bool canCompatibilityRetry;
-  final VoidCallback? onCompatibilityRetry;
   final VoidCallback? onReset;
 
   @override
@@ -2868,12 +2821,6 @@ class _ErrorCard extends StatelessWidget {
               runSpacing: 8,
               children: <Widget>[
                 TextButton(onPressed: onReset, child: const Text('重新选择')),
-                if (canCompatibilityRetry)
-                  FilledButton(
-                    key: const ValueKey<String>('compatibility-retry'),
-                    onPressed: onCompatibilityRetry,
-                    child: const Text('使用兼容模式重试'),
-                  ),
                 if (canAacRetry)
                   FilledButton(
                     key: const ValueKey<String>('audio-aac-retry'),

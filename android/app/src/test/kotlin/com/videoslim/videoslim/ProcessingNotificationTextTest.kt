@@ -38,12 +38,23 @@ class ProcessingNotificationTextTest {
             ProcessingNotificationText.from(
                 snapshot("running", 42.0, TaskRuntimeSnapshot.PHASE_CANCELLING),
             )
+        val automaticRetry =
+            ProcessingNotificationText.from(
+                snapshot(
+                    state = "running",
+                    percent = 0.0,
+                    phase = TaskRuntimeSnapshot.PHASE_PREPARING,
+                    automaticSoftwareDecoderRetry = true,
+                ),
+            )
 
         assertEquals("正在准备视频", preparing.title)
         assertEquals("正在保存视频", publishing.title)
         assertTrue(publishing.body.contains("系统相册"))
         assertEquals("正在取消", cancelling.title)
         assertFalse(cancelling.showCancel)
+        assertEquals("正在兼容重试视频", automaticRetry.title)
+        assertTrue(automaticRetry.body.contains("已自动改用兼容方式"))
     }
 
     @Test
@@ -103,7 +114,7 @@ class ProcessingNotificationTextTest {
     }
 
     @Test
-    fun `decoder failure notification suggests compatibility only after hardware mode`() {
+    fun `decoder failure notification never points to the removed manual compatibility action`() {
         val hardware =
             ProcessingNotificationText.from(
                 snapshot(
@@ -123,7 +134,7 @@ class ProcessingNotificationTextTest {
                 ),
             )
 
-        assertTrue(hardware.body.contains("使用兼容模式重试"))
+        assertFalse(hardware.body.contains("使用兼容模式重试"))
         assertTrue(hardware.body.contains("原视频没有被修改"))
         assertFalse(software.body.contains("使用兼容模式重试"))
         assertTrue(software.body.contains("软件读取方式未能完成"))
@@ -253,6 +264,7 @@ class ProcessingNotificationTextTest {
         errorCode: String? = null,
         errorMessage: String? = null,
         videoDecoderMode: String = VideoDecoderMode.HARDWARE.wireName,
+        automaticSoftwareDecoderRetry: Boolean = false,
         taskKind: TaskKind = TaskKind.VIDEO_COMPRESSION,
         audioMode: String? = null,
     ) =
@@ -268,6 +280,7 @@ class ProcessingNotificationTextTest {
             errorCode = errorCode,
             errorMessage = errorMessage,
             videoDecoderMode = videoDecoderMode,
+            automaticSoftwareDecoderRetry = automaticSoftwareDecoderRetry,
             taskKind = taskKind,
             retryRequest =
                 audioMode?.let { mode ->

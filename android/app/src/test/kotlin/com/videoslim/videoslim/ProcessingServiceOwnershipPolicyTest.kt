@@ -2,6 +2,7 @@ package com.videoslim.videoslim
 
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -149,6 +150,29 @@ class ProcessingServiceOwnershipPolicyTest {
         assertEquals(ActiveTaskLifecycle.RELEASED, context.lifecycle)
         assertTrue(harness.cancelledRoutes.isEmpty())
         harness.assertReleasedExactlyOnce(expectStop = false)
+    }
+
+    @Test
+    fun `publication owner transfers once with the automatic software retry route`() {
+        val context = activeContext("service-task", OLD_ENGINE_TASK_ID, generation = 30L)
+        val owner = ActiveTaskPublicationOwner(context)
+        val hardwareRoute = checkNotNull(context.engineRoute)
+        assertTrue(owner.bindEngineRoute(hardwareRoute))
+        val softwareRoute =
+            checkNotNull(
+                context.replaceEngineTaskIdForAutomaticRetry(
+                    generation = 30L,
+                    previousEngineTaskId = OLD_ENGINE_TASK_ID,
+                    retryEngineTaskId = NEW_ENGINE_TASK_ID,
+                ),
+            )
+
+        assertTrue(owner.replaceEngineRouteForAutomaticRetry(hardwareRoute, softwareRoute))
+        assertEquals(
+            PublicationLaunchIdentity("service-task", 30L, NEW_ENGINE_TASK_ID),
+            owner.identity,
+        )
+        assertFalse(owner.replaceEngineRouteForAutomaticRetry(hardwareRoute, softwareRoute))
     }
 
     @Test

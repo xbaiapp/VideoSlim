@@ -70,6 +70,95 @@ class ActiveTaskContextTest {
     }
 
     @Test
+    fun `video engine route can transfer exactly once to an automatic retry`() {
+        val context =
+            ActiveTaskContext(
+                serviceTaskId = "service-task",
+                taskKind = TaskKind.VIDEO_COMPRESSION,
+                launchGeneration = 81L,
+            )
+        val hardwareRoute = checkNotNull(context.assignEngineTaskId(81L, "hardware-engine"))
+
+        val softwareRoute =
+            context.replaceEngineTaskIdForAutomaticRetry(
+                generation = 81L,
+                previousEngineTaskId = hardwareRoute.engineTaskId,
+                retryEngineTaskId = "software-engine",
+            )
+
+        assertEquals(
+            EngineTaskRoute(TaskKind.VIDEO_COMPRESSION, "software-engine"),
+            softwareRoute,
+        )
+        assertFalse(context.acceptsEngineEvent(81L, "hardware-engine"))
+        assertTrue(context.acceptsEngineEvent(81L, "software-engine"))
+        assertNull(
+            context.replaceEngineTaskIdForAutomaticRetry(
+                generation = 81L,
+                previousEngineTaskId = "software-engine",
+                retryEngineTaskId = "forbidden-second-retry",
+            ),
+        )
+    }
+
+    @Test
+    fun `automatic retry route transfer rejects stale wrong audio and cancelled ownership`() {
+        val stale =
+            ActiveTaskContext(
+                serviceTaskId = "service-task",
+                taskKind = TaskKind.VIDEO_COMPRESSION,
+                launchGeneration = 82L,
+            ).also { it.assignEngineTaskId(82L, "hardware-engine") }
+        assertNull(
+            stale.replaceEngineTaskIdForAutomaticRetry(
+                generation = 81L,
+                previousEngineTaskId = "hardware-engine",
+                retryEngineTaskId = "software-engine",
+            ),
+        )
+        assertNull(
+            stale.replaceEngineTaskIdForAutomaticRetry(
+                generation = 82L,
+                previousEngineTaskId = "wrong-engine",
+                retryEngineTaskId = "software-engine",
+            ),
+        )
+
+        val audio =
+            ActiveTaskContext(
+                serviceTaskId = "audio-task",
+                taskKind = TaskKind.AUDIO_EXTRACTION,
+                launchGeneration = 83L,
+            ).also { it.assignEngineTaskId(83L, "audio-engine") }
+        assertNull(
+            audio.replaceEngineTaskIdForAutomaticRetry(
+                generation = 83L,
+                previousEngineTaskId = "audio-engine",
+                retryEngineTaskId = "software-engine",
+            ),
+        )
+
+        val cancelled =
+            ActiveTaskContext(
+                serviceTaskId = "cancelled-task",
+                taskKind = TaskKind.VIDEO_COMPRESSION,
+                launchGeneration = 84L,
+            ).also { it.assignEngineTaskId(84L, "hardware-engine") }
+        cancelled.requestCancellation(
+            taskId = "cancelled-task",
+            generation = 84L,
+            source = ActiveTaskCancellationSource.USER,
+        )
+        assertNull(
+            cancelled.replaceEngineTaskIdForAutomaticRetry(
+                generation = 84L,
+                previousEngineTaskId = "hardware-engine",
+                retryEngineTaskId = "software-engine",
+            ),
+        )
+    }
+
+    @Test
     fun `wrong task and stale generation cannot route or finish active ownership`() {
         val context =
             ActiveTaskContext(

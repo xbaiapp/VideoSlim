@@ -1232,84 +1232,81 @@ void main() {
     expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
   });
 
-  testWidgets('decoder failure offers an explicit software decoder retry', (
-    WidgetTester tester,
-  ) async {
-    final engine = _FakeEngine();
-    final picker = _FakePicker();
-    final backend = _MemoryBackend();
-    addTearDown(engine.close);
+  testWidgets(
+    'hardware decoder fallback stays in one task and restarts visibly without confirmation',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
 
-    await tester.pumpWidget(
-      _app(engine: engine, picker: picker, logger: _logger(backend)),
-    );
-    await _selectGallery(tester, engine, picker);
-    await _tapCompression(tester);
-    expect(engine.processRequests.single.videoDecoderMode, 'hardware');
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await _selectGallery(tester, engine, picker);
+      await _tapCompression(tester);
+      expect(engine.processRequests.single.videoDecoderMode, 'hardware');
 
-    engine.progress.add(
-      const ProgressEvent(
-        taskId: 'task-1',
-        percent: 89,
-        state: TaskState.failed,
-        errorCode: 'VIDEO_DECODING_FAILED',
-        errorMessage: '底层消息不应直接展示',
-      ),
-    );
-    await tester.pump();
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'task-1',
+          percent: 89,
+          state: TaskState.running,
+          phase: TaskPhase.encoding,
+          videoDecoderMode: RequestedVideoDecoderMode.hardware,
+        ),
+      );
+      await tester.pump();
 
-    expect(find.text('手机的视频解码器未能完成此次处理，原视频没有被修改。'), findsOneWidget);
-    final retry = find.byKey(const ValueKey<String>('compatibility-retry'));
-    final compatibilityFlow = Provider.of<HomeFlowState>(
-      tester.element(retry),
-      listen: false,
-    );
-    await tester.ensureVisible(retry);
-    await tester.tap(retry);
-    await tester.pump();
-    expect(find.text('使用兼容模式重试？'), findsOneWidget);
-    expect(compatibilityFlow.validatingDestination, isTrue);
-    expect(compatibilityFlow.interactionLocked, isTrue);
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'task-1',
+          percent: 0,
+          state: TaskState.running,
+          phase: TaskPhase.preparing,
+          videoDecoderMode: RequestedVideoDecoderMode.software,
+          automaticSoftwareDecoderRetry: true,
+        ),
+      );
+      await tester.pump();
 
-    await tester.tap(
-      find.byKey(const ValueKey<String>('confirm-compatibility-retry')),
-    );
-    await tester.pump();
-    await tester.pump();
+      expect(engine.processRequests, hasLength(1));
+      expect(find.text('使用兼容模式重试？'), findsNothing);
+      expect(
+        find.byKey(const ValueKey<String>('confirm-compatibility-retry')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('compatibility-retry')),
+        findsNothing,
+      );
+      expect(find.text('硬件读取失败，已自动改用兼容方式从头重试…'), findsOneWidget);
+      expect(find.text('0%'), findsOneWidget);
 
-    expect(engine.processRequests, hasLength(2));
-    expect(engine.processRequests.last.videoDecoderMode, 'software');
-    final firstRetryMap = engine.processRequests.first.toChannelMap();
-    final compatibilityRetryMap = engine.processRequests.last.toChannelMap();
-    expect(compatibilityRetryMap, <String, Object?>{
-      ...firstRetryMap,
-      'video': <String, Object?>{
-        ...(firstRetryMap['video']! as Map<String, Object?>),
-        'decoderMode': 'software',
-      },
-    });
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'task-1',
+          percent: 20,
+          state: TaskState.failed,
+          phase: TaskPhase.finished,
+          videoDecoderMode: RequestedVideoDecoderMode.software,
+          errorCode: 'VIDEO_DECODING_FAILED',
+          errorMessage: 'software decoder failed',
+        ),
+      );
+      await tester.pump();
 
-    engine.progress.add(
-      const ProgressEvent(
-        taskId: 'task-1',
-        percent: 20,
-        state: TaskState.failed,
-        videoDecoderMode: RequestedVideoDecoderMode.software,
-        errorCode: 'VIDEO_DECODING_FAILED',
-        errorMessage: 'software decoder failed',
-      ),
-    );
-    await tester.pump();
-    expect(find.text('使用兼容模式重试'), findsNothing);
-
-    final sameModeRetry = find.text('重试压缩');
-    await tester.ensureVisible(sameModeRetry);
-    await tester.tap(sameModeRetry);
-    await tester.pump();
-    await tester.pump();
-    expect(engine.processRequests, hasLength(3));
-    expect(engine.processRequests.last.videoDecoderMode, 'software');
-  });
+      expect(find.text('使用兼容模式重试'), findsNothing);
+      expect(engine.processRequests, hasLength(1));
+      final sameModeRetry = find.text('重试压缩');
+      await tester.ensureVisible(sameModeRetry);
+      await tester.tap(sameModeRetry);
+      await tester.pump();
+      await tester.pump();
+      expect(engine.processRequests, hasLength(2));
+      expect(engine.processRequests.last.videoDecoderMode, 'software');
+    },
+  );
 
   testWidgets('unavailable compatibility decoder has no pointless retry', (
     WidgetTester tester,
@@ -1602,44 +1599,43 @@ void main() {
     },
   );
 
-  testWidgets(
-    'progress closure removes compatibility and ordinary retry actions',
-    (WidgetTester tester) async {
-      final engine = _FakeEngine();
-      final picker = _FakePicker();
-      final backend = _MemoryBackend();
+  testWidgets('progress closure removes ordinary retry actions', (
+    WidgetTester tester,
+  ) async {
+    final engine = _FakeEngine();
+    final picker = _FakePicker();
+    final backend = _MemoryBackend();
 
-      await tester.pumpWidget(
-        _app(engine: engine, picker: picker, logger: _logger(backend)),
-      );
-      await _selectGallery(tester, engine, picker);
-      await _tapCompression(tester);
-      engine.progress.add(
-        const ProgressEvent(
-          taskId: 'task-1',
-          percent: 80,
-          state: TaskState.failed,
-          phase: TaskPhase.encoding,
-          errorCode: 'VIDEO_DECODING_FAILED',
-        ),
-      );
-      await tester.pump();
-      expect(
-        find.byKey(const ValueKey<String>('compatibility-retry')),
-        findsOneWidget,
-      );
-      expect(find.text('重试压缩'), findsOneWidget);
+    await tester.pumpWidget(
+      _app(engine: engine, picker: picker, logger: _logger(backend)),
+    );
+    await _selectGallery(tester, engine, picker);
+    await _tapCompression(tester);
+    engine.progress.add(
+      const ProgressEvent(
+        taskId: 'task-1',
+        percent: 80,
+        state: TaskState.failed,
+        phase: TaskPhase.encoding,
+        errorCode: 'VIDEO_DECODING_FAILED',
+      ),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey<String>('compatibility-retry')),
+      findsNothing,
+    );
+    expect(find.text('重试压缩'), findsOneWidget);
 
-      await engine.close();
-      await tester.pump();
+    await engine.close();
+    await tester.pump();
 
-      expect(
-        find.byKey(const ValueKey<String>('compatibility-retry')),
-        findsNothing,
-      );
-      expect(find.text('重试压缩'), findsNothing);
-    },
-  );
+    expect(
+      find.byKey(const ValueKey<String>('compatibility-retry')),
+      findsNothing,
+    );
+    expect(find.text('重试压缩'), findsNothing);
+  });
 
   testWidgets(
     'video stream error before task ID rebinds without losing ownership',
@@ -2215,14 +2211,14 @@ void main() {
     expect(cancelButton.onPressed, isNull);
   });
 
-  testWidgets('restored decoder failure retries the exact persisted request', (
+  testWidgets('restored automatic software retry resumes without a new task', (
     WidgetTester tester,
   ) async {
     const retryRequest = ProcessRequest(
       uri: _sourceUri,
       outputFileName: 'persisted_output_name.mp4',
       videoCodec: 'hevc',
-      videoDecoderMode: 'hardware',
+      videoDecoderMode: 'software',
       videoBitrate: 812345,
       longEdge: 1280,
       trimStartMs: 2000,
@@ -2232,16 +2228,15 @@ void main() {
     );
     final engine = _FakeEngine()
       ..snapshot = TaskSnapshot(
-        taskId: 'restored-failed-task',
+        taskId: 'restored-retry-task',
         sourceUri: _sourceUri,
         outputFileName: retryRequest.outputFileName,
         retryRequest: retryRequest,
-        state: TaskState.failed,
-        phase: TaskPhase.finished,
-        percent: 89,
-        videoDecoderMode: RequestedVideoDecoderMode.hardware,
-        errorCode: 'VIDEO_DECODING_FAILED',
-        errorMessage: 'internal detail',
+        state: TaskState.running,
+        phase: TaskPhase.preparing,
+        percent: 0,
+        videoDecoderMode: RequestedVideoDecoderMode.software,
+        automaticSoftwareDecoderRetry: true,
         startedAtEpochMs: DateTime(2026, 7, 19, 1).millisecondsSinceEpoch,
       )
       ..infoByUri[_sourceUri] = _videoInfo();
@@ -2256,24 +2251,19 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    final retry = find.byKey(const ValueKey<String>('compatibility-retry'));
-    await tester.ensureVisible(retry);
-    await tester.tap(retry);
-    await tester.pump();
-    await tester.tap(
-      find.byKey(const ValueKey<String>('confirm-compatibility-retry')),
+    expect(engine.processRequests, isEmpty);
+    expect(find.text('硬件读取失败，已自动改用兼容方式从头重试…'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('compatibility-retry')),
+      findsNothing,
     );
-    await tester.pump();
-    await tester.pump();
-
-    expect(engine.processRequests, hasLength(1));
-    expect(engine.lastRequest?.outputFileName, retryRequest.outputFileName);
-    expect(engine.lastRequest?.videoBitrate, retryRequest.videoBitrate);
-    expect(engine.lastRequest?.longEdge, retryRequest.longEdge);
-    expect(engine.lastRequest?.videoTrim, retryRequest.videoTrim);
-    expect(engine.lastRequest?.audioMode, retryRequest.audioMode);
-    expect(engine.lastRequest?.audioBitrate, retryRequest.audioBitrate);
-    expect(engine.lastRequest?.videoDecoderMode, 'software');
+    final flow = Provider.of<HomeFlowState>(
+      tester.element(find.byKey(const ValueKey<String>('debug-log-button'))),
+      listen: false,
+    );
+    expect(flow.taskId, 'restored-retry-task');
+    expect(flow.processing, isTrue);
+    expect(flow.trim, retryRequest.videoTrim);
   });
 
   testWidgets('restored INVALID_TRIM remains editable when metadata shrinks', (
@@ -3742,7 +3732,7 @@ void main() {
   );
 
   testWidgets(
-    'stream closure during compatibility retry validation releases ownership',
+    'stream closure during a software retry validation releases ownership',
     (WidgetTester tester) async {
       const treeUri =
           'content://com.android.externalstorage.documents/tree/primary%3AExports';
@@ -3772,25 +3762,29 @@ void main() {
       engine.progress.add(
         const ProgressEvent(
           taskId: 'task-1',
+          percent: 0,
+          state: TaskState.running,
+          phase: TaskPhase.preparing,
+          videoDecoderMode: RequestedVideoDecoderMode.software,
+          automaticSoftwareDecoderRetry: true,
+        ),
+      );
+      await tester.pump();
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'task-1',
           percent: 20,
           state: TaskState.failed,
-          videoDecoderMode: RequestedVideoDecoderMode.hardware,
+          phase: TaskPhase.finished,
+          videoDecoderMode: RequestedVideoDecoderMode.software,
           errorCode: 'VIDEO_DECODING_FAILED',
         ),
       );
       await tester.pump();
       final validation = Completer<OutputLocation>();
       picker.outputLocationCompleter = validation;
-      await tester.ensureVisible(
-        find.byKey(const ValueKey<String>('compatibility-retry')),
-      );
-      await tester.tap(
-        find.byKey(const ValueKey<String>('compatibility-retry')),
-      );
-      await tester.pump();
-      await tester.tap(
-        find.byKey(const ValueKey<String>('confirm-compatibility-retry')),
-      );
+      await tester.ensureVisible(find.text('重试压缩'));
+      await tester.tap(find.text('重试压缩'));
       await tester.pump();
       expect(
         Provider.of<HomeFlowState>(

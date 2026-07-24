@@ -57,6 +57,7 @@ void main() {
         'state': 'success',
         'phase': 'encoding',
         'videoDecoderMode': 'hardware',
+        'automaticSoftwareDecoderRetry': false,
         'actualVideoEncodingMode': 'unknown',
         'outputUri': 'content://media/output/2',
         'outputFileName': 'actual-output.mp4',

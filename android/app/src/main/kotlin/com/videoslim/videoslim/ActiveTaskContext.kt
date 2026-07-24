@@ -75,6 +75,7 @@ internal class ActiveTaskContext(
     private val lock = Any()
     private var currentLifecycle = ActiveTaskLifecycle.AWAITING_ENGINE
     private var currentEngineRoute: EngineTaskRoute? = null
+    private var automaticEngineRetryUsed = false
     private var cancellationRequested = false
     private var currentCancellationSource: ActiveTaskCancellationSource? = null
     private var currentTerminalOwnership: ActiveTaskTerminalOwnership? = null
@@ -136,6 +137,39 @@ internal class ActiveTaskContext(
             return EngineTaskRoute(taskKind, engineTaskId).also { route ->
                 currentEngineRoute = route
                 currentLifecycle = ActiveTaskLifecycle.ENGINE_ASSIGNED
+            }
+        }
+    }
+
+    /**
+     * Transfers this service launch from the terminal hardware-decoder attempt to its only allowed
+     * automatic software-decoder retry. The service task and terminal arbiter remain unchanged.
+     */
+    fun replaceEngineTaskIdForAutomaticRetry(
+        generation: Long,
+        previousEngineTaskId: String,
+        retryEngineTaskId: String,
+    ): EngineTaskRoute? {
+        require(previousEngineTaskId.isNotBlank()) { "previousEngineTaskId must not be blank" }
+        require(retryEngineTaskId.isNotBlank()) { "retryEngineTaskId must not be blank" }
+        require(retryEngineTaskId != previousEngineTaskId) {
+            "retryEngineTaskId must differ from previousEngineTaskId"
+        }
+        synchronized(lock) {
+            if (
+                generation != launchGeneration ||
+                taskKind != TaskKind.VIDEO_COMPRESSION ||
+                automaticEngineRetryUsed ||
+                cancellationRequested ||
+                currentTerminalOwnership != null ||
+                currentLifecycle != ActiveTaskLifecycle.ENGINE_ASSIGNED ||
+                currentEngineRoute?.engineTaskId != previousEngineTaskId
+            ) {
+                return null
+            }
+            return EngineTaskRoute(taskKind, retryEngineTaskId).also { route ->
+                automaticEngineRetryUsed = true
+                currentEngineRoute = route
             }
         }
     }

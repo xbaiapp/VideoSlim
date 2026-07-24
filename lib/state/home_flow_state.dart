@@ -394,6 +394,27 @@ final class HomeFlowState extends ChangeNotifier {
     _mutate(() => _taskLifecycle = HomeTaskLifecycle.processing);
   }
 
+  void beginAutomaticSoftwareDecoderRetry() {
+    if (_activeTaskKind != TaskKind.videoCompression ||
+        _taskLifecycle != HomeTaskLifecycle.processing ||
+        _terminalEventHandled ||
+        _cancelling ||
+        _outputPublished) {
+      throw StateError(
+        'Automatic software decoder retry requires one active video task.',
+      );
+    }
+    _mutate(() {
+      _taskLifecycle = HomeTaskLifecycle.preparing;
+      _percent = 0;
+      _taskPhase = TaskPhase.preparing;
+      _elapsed = Duration.zero;
+      _remaining = null;
+      _etaStalled = false;
+      _errorText = null;
+    });
+  }
+
   /// Binds a native snapshot that was already running before this UI existed.
   void restoreTaskProcessing() {
     _requireIdleInteraction('Task restoration');

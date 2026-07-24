@@ -17,6 +17,7 @@ final class TaskSnapshot {
     this.audioRetryRequest,
     this.outputLocationLabel = '系统相册 > Movies > VideoSlim',
     this.videoDecoderMode = RequestedVideoDecoderMode.hardware,
+    this.automaticSoftwareDecoderRetry = false,
     this.actualVideoEncodingMode = ActualVideoEncodingMode.unknown,
     required this.startedAtEpochMs,
     this.outputUri,
@@ -83,6 +84,8 @@ final class TaskSnapshot {
       videoDecoderMode: requestedVideoDecoderModeFromWireName(
         map['videoDecoderMode'] ?? 'hardware',
       ),
+      automaticSoftwareDecoderRetry:
+          map['automaticSoftwareDecoderRetry'] as bool? ?? false,
       actualVideoEncodingMode: actualVideoEncodingModeFromWireName(
         map['actualVideoEncodingMode'] ?? 'unknown',
       ),
@@ -126,6 +129,9 @@ final class TaskSnapshot {
   /// Input decoder mode explicitly requested for this task.
   final RequestedVideoDecoderMode videoDecoderMode;
 
+  /// Whether the running task is in its one automatic software-decoder retry.
+  final bool automaticSoftwareDecoderRetry;
+
   /// Classification of the encoder actually created for the task.
   final ActualVideoEncodingMode actualVideoEncodingMode;
 
@@ -160,6 +166,7 @@ final class TaskSnapshot {
     },
     'outputLocationLabel': outputLocationLabel,
     'videoDecoderMode': videoDecoderMode.wireName,
+    'automaticSoftwareDecoderRetry': automaticSoftwareDecoderRetry,
     'actualVideoEncodingMode': actualVideoEncodingMode.wireName,
     'startedAtEpochMs': startedAtEpochMs,
     'outputUri': outputUri,

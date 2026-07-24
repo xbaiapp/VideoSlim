@@ -58,6 +58,7 @@ void main() {
         'retryRequest': null,
         'outputLocationLabel': '系统相册 > Movies > VideoSlim',
         'videoDecoderMode': 'hardware',
+        'automaticSoftwareDecoderRetry': false,
         'actualVideoEncodingMode': 'unknown',
         'startedAtEpochMs': 1784419200123,
         'outputUri': null,
