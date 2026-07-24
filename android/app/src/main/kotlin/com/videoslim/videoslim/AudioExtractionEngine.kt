@@ -375,7 +375,7 @@ internal class AudioExtractionEngine(
                 task.cancelRequested || disposed || Thread.currentThread().isInterrupted
             }
         if (task.request.mode == AudioExtractMode.COPY) {
-            requireLosslessPayloadAggregateIntegrity(
+            AudioOutputVerifier.requireValidLosslessCopy(
                 source =
                     task.sourceMetadata
                         ?: throw IOException("Source metadata is unavailable for lossless verification"),
@@ -384,17 +384,14 @@ internal class AudioExtractionEngine(
                         ?: throw IOException("Lossless copy result is unavailable for verification"),
                 output = outputMetadata,
             )
+        } else {
+            AudioOutputVerifier.requireValid(
+                outputMetadata,
+                AudioOutputVerifier.AAC_MIME,
+                AudioOutputVerifier.TRANSCODE_AAC_PROFILES,
+                expectedSource = task.sourceMetadata,
+            )
         }
-        AudioOutputVerifier.requireValid(
-            outputMetadata,
-            AudioOutputVerifier.AAC_MIME,
-            if (task.request.mode == AudioExtractMode.COPY) {
-                AudioOutputVerifier.COPY_AAC_PROFILES
-            } else {
-                AudioOutputVerifier.TRANSCODE_AAC_PROFILES
-            },
-            expectedSource = task.sourceMetadata,
-        )
         log(
             "taskKind=audio_extraction task=${task.id} verifiedOutput=$outputMetadata " +
                 "sourceSpanMs=${task.sourceMetadata?.sampleSpanMs() ?: 0L}",

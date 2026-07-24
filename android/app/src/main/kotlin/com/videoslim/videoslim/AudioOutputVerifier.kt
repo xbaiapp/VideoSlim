@@ -27,6 +27,41 @@ internal object AudioOutputVerifier {
         requiredMime: String? = null,
         allowedAacProfiles: Set<Int> = COPY_AAC_PROFILES,
         expectedSource: AudioMetadata? = null,
+    ): AudioMetadata =
+        requireValidInternal(
+            metadata = metadata,
+            requiredMime = requiredMime,
+            allowedAacProfiles = allowedAacProfiles,
+            expectedSource = expectedSource,
+            inheritedCadenceSource = null,
+        )
+
+    /**
+     * Verifies a lossless AAC copy after binding cadence policy to the source.
+     * Payload integrity must pass before source-inherited timestamp jitter is accepted.
+     */
+    @Throws(IOException::class)
+    fun requireValidLosslessCopy(
+        source: AudioMetadata,
+        copy: EncodedAudioCopyResult,
+        output: AudioMetadata,
+    ): AudioMetadata {
+        requireLosslessPayloadAggregateIntegrity(source, copy, output)
+        return requireValidInternal(
+            metadata = output,
+            requiredMime = AAC_MIME,
+            allowedAacProfiles = COPY_AAC_PROFILES,
+            expectedSource = source,
+            inheritedCadenceSource = source,
+        )
+    }
+
+    private fun requireValidInternal(
+        metadata: AudioMetadata,
+        requiredMime: String?,
+        allowedAacProfiles: Set<Int>,
+        expectedSource: AudioMetadata?,
+        inheritedCadenceSource: AudioMetadata?,
     ): AudioMetadata {
         if (metadata.fileSizeBytes <= 0L) throw IOException("Published audio is empty")
         if (metadata.durationMs <= 0L) throw IOException("Published audio has no duration")
@@ -43,7 +78,7 @@ internal object AudioOutputVerifier {
             throw IOException("Published audio sample payload exceeds its physical file size")
         }
         if (!metadata.sampleTimesMonotonic) throw IOException("Published audio sample timestamps are not monotonic")
-        requireSampleCadence(metadata)
+        requireSampleCadence(metadata, inheritedCadenceSource)
         val firstSampleTimeUs = metadata.firstSampleTimeUs ?: throw IOException("Published audio has no first timestamp")
         if (firstSampleTimeUs < 0L || firstSampleTimeUs > MAX_START_OFFSET_US) {
             throw IOException("Published audio does not start near zero")
@@ -126,7 +161,10 @@ internal object AudioOutputVerifier {
         return maximumFrameDurationUs(metadata)
     }
 
-    private fun requireSampleCadence(metadata: AudioMetadata) {
+    private fun requireSampleCadence(
+        metadata: AudioMetadata,
+        inheritedSource: AudioMetadata?,
+    ) {
         if (metadata.sampleCount <= 1L) {
             if (metadata.maxSampleDeltaUs != null) {
                 throw IOException("Single-sample audio has inconsistent cadence metadata")
@@ -136,11 +174,29 @@ internal object AudioOutputVerifier {
         val maximumObserved =
             metadata.maxSampleDeltaUs
                 ?: throw IOException("Audio sample cadence evidence is missing")
-        if (
-            maximumObserved <= 0L ||
-            maximumObserved >
+        if (maximumObserved <= 0L) {
+            throw IOException("Audio sample cadence contains an internal missing or sparse frame gap")
+        }
+        val idealMaximum =
             saturatedAdd(maximumFrameDurationUs(metadata), FRAME_TIMESTAMP_ROUNDING_US)
-        ) {
+        if (maximumObserved <= idealMaximum) return
+
+        // Lossless copy has already passed source/copy/output payload integrity. Permit only
+        // source-inherited timestamp jitter, plus the existing mux timestamp rounding bound.
+        val sourceMaximum = inheritedSource?.maxSampleDeltaUs
+        val inheritedMaximum =
+            if (
+                inheritedSource != null &&
+                inheritedSource.sampleCount > 1L &&
+                inheritedSource.sampleTimesMonotonic &&
+                sourceMaximum != null &&
+                sourceMaximum > 0L
+            ) {
+                saturatedAdd(sourceMaximum, FRAME_TIMESTAMP_ROUNDING_US)
+            } else {
+                null
+            }
+        if (inheritedMaximum == null || maximumObserved > inheritedMaximum) {
             throw IOException("Audio sample cadence contains an internal missing or sparse frame gap")
         }
     }

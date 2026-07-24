@@ -161,6 +161,64 @@ class AudioOutputVerifierTest {
     }
 
     @Test
+    fun `lossless copy accepts source inherited AAC cadence jitter from the device case`() {
+        val source = deviceCadenceSourceMetadata()
+        val output = deviceCadenceOutputMetadata(source)
+
+        assertEquals(
+            output,
+            AudioOutputVerifier.requireValidLosslessCopy(
+                source = source,
+                copy = copyResult(source, usesIndexedPhysicalSampleSizes = true),
+                output = output,
+            ),
+        )
+    }
+
+    @Test
+    fun `lossless copy rejects a cadence gap introduced beyond the source`() {
+        val source = deviceCadenceSourceMetadata().copy(maxSampleDeltaUs = 21_334L)
+        val output = deviceCadenceOutputMetadata(source).copy(maxSampleDeltaUs = 23_812L)
+
+        assertThrows(IOException::class.java) {
+            AudioOutputVerifier.requireValidLosslessCopy(
+                source = source,
+                copy = copyResult(source, usesIndexedPhysicalSampleSizes = true),
+                output = output,
+            )
+        }
+    }
+
+    @Test
+    fun `lossless copy rejects a newly introduced full AAC frame gap`() {
+        val source = deviceCadenceSourceMetadata()
+        val output = deviceCadenceOutputMetadata(source).copy(maxSampleDeltaUs = 42_668L)
+
+        assertThrows(IOException::class.java) {
+            AudioOutputVerifier.requireValidLosslessCopy(
+                source = source,
+                copy = copyResult(source, usesIndexedPhysicalSampleSizes = true),
+                output = output,
+            )
+        }
+    }
+
+    @Test
+    fun `transcode verification does not inherit a source cadence exception`() {
+        val source = deviceCadenceSourceMetadata()
+        val output = deviceCadenceOutputMetadata(source, fileName = "transcoded.m4a")
+
+        assertThrows(IOException::class.java) {
+            AudioOutputVerifier.requireValid(
+                output,
+                AudioOutputVerifier.AAC_MIME,
+                AudioOutputVerifier.TRANSCODE_AAC_PROFILES,
+                expectedSource = source,
+            )
+        }
+    }
+
+    @Test
     fun `expected source with regressing timestamps fails before output coverage comparison`() {
         val output = validMetadata().copy(sourceUri = "copy.m4a", fileName = "copy.m4a")
         assertThrows(IOException::class.java) {
@@ -361,6 +419,42 @@ class AudioOutputVerifierTest {
         usesIndexedPhysicalSampleSizes = usesIndexedPhysicalSampleSizes,
         sampleDigest = metadata.sampleDigest,
     )
+
+    private fun deviceCadenceSourceMetadata() =
+        AudioMetadata(
+            sourceUri = "content://media/source/99",
+            fileName = "device-source.mp4",
+            fileSizeBytes = 26_586_782L,
+            durationMs = 17_179L,
+            container = "video/mp4",
+            audioMime = AudioOutputVerifier.AAC_MIME,
+            audioChannels = 1,
+            audioSampleRate = 48_000,
+            audioBitrate = 96_000,
+            audioTrackCount = 1,
+            videoTrackCount = 1,
+            firstSampleTimeUs = 0L,
+            lastSampleTimeUs = 17_158_041L,
+            sampleCount = 805L,
+            sampleBytes = 206_177L,
+            sampleDigest = VALID_SAMPLE_DIGEST,
+            usesIndexedPhysicalSampleSizes = true,
+            sampleTimesMonotonic = true,
+            maxSampleDeltaUs = 23_812L,
+            audioProfile = AudioOutputVerifier.AAC_PROFILE_LC,
+        )
+
+    private fun deviceCadenceOutputMetadata(
+        source: AudioMetadata,
+        fileName: String = "copy.m4a",
+    ) =
+        source.copy(
+            sourceUri = "content://media/output/100",
+            fileName = fileName,
+            fileSizeBytes = 220_000L,
+            container = "audio/mp4",
+            videoTrackCount = 0,
+        )
 
     private fun shortValidMetadata() =
         AudioMetadata(
