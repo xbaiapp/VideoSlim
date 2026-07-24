@@ -182,7 +182,7 @@ internal object AudioOutputVerifier {
         if (maximumObserved <= idealMaximum) return
 
         // Lossless copy has already passed source/copy/output payload integrity. Permit only
-        // source-inherited timestamp jitter, plus the existing mux timestamp rounding bound.
+        // source-inherited timestamp jitter within a narrow, device-backed absolute bound.
         val sourceMaximum = inheritedSource?.maxSampleDeltaUs
         val inheritedMaximum =
             if (
@@ -192,7 +192,10 @@ internal object AudioOutputVerifier {
                 sourceMaximum != null &&
                 sourceMaximum > 0L
             ) {
-                saturatedAdd(sourceMaximum, FRAME_TIMESTAMP_ROUNDING_US)
+                minOf(
+                    saturatedAdd(sourceMaximum, FRAME_TIMESTAMP_ROUNDING_US),
+                    saturatedAdd(idealMaximum, MAX_INHERITED_SOURCE_JITTER_US),
+                )
             } else {
                 null
             }
@@ -246,6 +249,7 @@ internal object AudioOutputVerifier {
     private const val TIMELINE_TOLERANCE_FRAMES = 2L
     private const val ENCODER_DELAY_TOLERANCE_FRAMES = 2L
     private const val FRAME_TIMESTAMP_ROUNDING_US = 2_000L
+    private const val MAX_INHERITED_SOURCE_JITTER_US = 1_000L
     private const val MAX_GENERAL_AUDIO_FRAME_US = 120_000L
     private const val MIN_COVERAGE_RATIO = 0.75
 }

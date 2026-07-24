@@ -204,6 +204,38 @@ class AudioOutputVerifierTest {
     }
 
     @Test
+    fun `lossless copy rejects a full AAC frame gap inherited from the source`() {
+        val source = deviceCadenceSourceMetadata().copy(maxSampleDeltaUs = 42_668L)
+        val output = deviceCadenceOutputMetadata(source)
+
+        assertThrows(IOException::class.java) {
+            AudioOutputVerifier.requireValidLosslessCopy(
+                source = source,
+                copy = copyResult(source, usesIndexedPhysicalSampleSizes = true),
+                output = output,
+            )
+        }
+    }
+
+    @Test
+    fun `lossless copy checks payload integrity before accepting inherited cadence`() {
+        val source = deviceCadenceSourceMetadata()
+        val output = deviceCadenceOutputMetadata(source)
+        val incompleteCopy =
+            copyResult(source, usesIndexedPhysicalSampleSizes = true).copy(
+                totalBytes = source.sampleBytes - 1L,
+            )
+
+        assertThrows(IOException::class.java) {
+            AudioOutputVerifier.requireValidLosslessCopy(
+                source = source,
+                copy = incompleteCopy,
+                output = output,
+            )
+        }
+    }
+
+    @Test
     fun `transcode verification does not inherit a source cadence exception`() {
         val source = deviceCadenceSourceMetadata()
         val output = deviceCadenceOutputMetadata(source, fileName = "transcoded.m4a")
