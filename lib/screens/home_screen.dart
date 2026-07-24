@@ -3128,6 +3128,12 @@ bool _isNewerThanSnapshot(ProgressEvent event, TaskSnapshot snapshot) {
     return false;
   }
   if (event.state != TaskState.running) return true;
+  if (event.automaticSoftwareDecoderRetry &&
+      !snapshot.automaticSoftwareDecoderRetry &&
+      snapshot.videoDecoderMode == RequestedVideoDecoderMode.hardware &&
+      event.videoDecoderMode == RequestedVideoDecoderMode.software) {
+    return true;
+  }
   if (event.percent > snapshot.percent) return true;
   if (event.percent < snapshot.percent) return false;
   final phaseComparison = _phaseRank(event.phase) - _phaseRank(snapshot.phase);

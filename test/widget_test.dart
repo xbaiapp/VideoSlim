@@ -2408,6 +2408,52 @@ void main() {
   );
 
   testWidgets(
+    'automatic retry attempt boundary outranks a delayed hardware snapshot',
+    (WidgetTester tester) async {
+      final engine = _FakeEngine()
+        ..snapshotCompleter = Completer<TaskSnapshot?>();
+      final picker = _FakePicker();
+      final backend = _MemoryBackend();
+      addTearDown(engine.close);
+
+      await tester.pumpWidget(
+        _app(engine: engine, picker: picker, logger: _logger(backend)),
+      );
+      await tester.pump();
+      engine.progress.add(
+        const ProgressEvent(
+          taskId: 'restored-task',
+          percent: 0,
+          state: TaskState.running,
+          phase: TaskPhase.preparing,
+          videoDecoderMode: RequestedVideoDecoderMode.software,
+          automaticSoftwareDecoderRetry: true,
+        ),
+      );
+      await tester.pump();
+      engine.snapshotCompleter!.complete(
+        TaskSnapshot(
+          taskId: 'restored-task',
+          percent: 89,
+          state: TaskState.running,
+          phase: TaskPhase.encoding,
+          sourceUri: _sourceUri,
+          outputFileName: 'restored_slim.mp4',
+          videoDecoderMode: RequestedVideoDecoderMode.hardware,
+          startedAtEpochMs: DateTime(2026, 7, 19, 1).millisecondsSinceEpoch,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('0%'), findsOneWidget);
+      expect(find.text('硬件读取失败，已自动改用兼容方式从头重试…'), findsOneWidget);
+      expect(find.text('89%'), findsNothing);
+    },
+  );
+
+  testWidgets(
     'audio progress before reconnect snapshot kind is known is replayed',
     (WidgetTester tester) async {
       final sourceMetadata = Completer<VideoInfo>();

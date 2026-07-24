@@ -786,18 +786,13 @@ internal class ProcessingService : Service() {
                 ),
             ) { "Automatic decoder retry could not transfer publication ownership" }
             launch.videoRequest = retryRequest
-            val mirrored =
+            check(
                 ProcessingRuntime.registry.beginAutomaticSoftwareDecoderRetry(
                     taskId = context.serviceTaskId,
                     retryRequest = retryRequest.toChannelMap(),
                     startedAtEpochMs = System.currentTimeMillis(),
-                )
-            if (!mirrored) {
-                log(
-                    "task=${context.serviceTaskId} automatic software decoder retry started " +
-                        "without a current registry mirror",
-                )
-            }
+                ),
+            ) { "Automatic decoder retry could not transfer the registry snapshot" }
             log(
                 "task=${context.serviceTaskId} automatic software decoder retry started " +
                     "engineTask=${retryRoute.engineTaskId} output=${retryRequest.outputFileName}",
