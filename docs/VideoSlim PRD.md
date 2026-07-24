@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.20（记录C2/F21 API 37能力报告与所有者决定PENDING边界） |
-| 日期 | 2026-07-23 |
-| 状态 | M3 `ACCEPTED — private scope`；`1.7.0+23 / 7c49e57...`已实现F20/C1a但所有者跳过真机验收（未记PASS）；D1确认Pixel HEVC运行期明显过冲；M4-B/F8 `1.8.0+24 / 9351e75...`由所有者报告测试成功并接受private scope，未提供的逐项矩阵仍PENDING；C2/F21 `1.9.0+25 / 11f169c...`已收到Pixel 10 Pro / API 37完整能力报告，纠正SHA无独立review PASS，项目所有者接受决定与未报告交互项PENDING；C1b/F22与M4-C仍未授权 |
+| 文档版本 | v1.21（冻结一次性无确认自动软件解码重试与 `1.9.1+26` 私有候选边界） |
+| 日期 | 2026-07-24 |
+| 状态 | M3 与 M4-B/F8 已按 private scope 接受；C2/F21 `1.9.0+25 / 11f169c...` 的 Pixel 10 Pro/API 37 能力证据保持冻结；一次性自动软件解码重试 `1.9.1+26 / 8f4e970...` 已通过静态门禁和 APK 核验，真机验收 PENDING；独立 exact-state review 超时无裁决，控制器已用唯一修订关闭两个 attempt-boundary 问题；C1b/F22 与 M4-C 仍未授权 |
 | 目标读者 | AI 编程助手 + 项目所有者 |
 | 产品名 | 视频瘦身（VideoSlim，工作代号，可随时更换） |
 
@@ -219,7 +219,7 @@
 - Android 纯函数 mapper 将显示方向像素矩形除以显示方向宽高，映射为 Media3 `Crop` NDC 参数（注意 y 轴翻转）并计算偶数化输出宽高。默认不做旋转补偿：Media3 effects 预期在按旋转元数据转正后的帧上运行；`rotationDegrees` 只用于校验与 F19 记录。必须先用 0/90/180/270° 样本做单测与真机验证，只有真实旋转样本错位时才在 mapper 内增加补偿并记录结论；
 - `TranscodeEngine` effects 顺序固定为 `Crop → Presentation`，`longEdge` 作用于裁剪后宽高；无 crop 时与 `1.4.3+18` 路径一致；
 - UI 层可以夹取裁剪框；native preflight 对越界、零/负面积、偶数化后小于编码器下限的 crop 必须 fail closed，返回 §5.4 的 `INVALID_CROP`，不得静默夹取；
-- publication / recovery / registry / `ProcessingService` / `finishOnce` / 通知 / 音频提取 / decoderMode 兼容重试 / MediaStore 与 SAF 发布 / 空间预检均不改；保持单服务、单任务、`finishOnce` 唯一终止门、硬件 VBR、main-affine 与 `commit()` durability 语义。
+- publication / recovery / registry / `ProcessingService` / `finishOnce` / 通知 / 音频提取 / decoderMode / MediaStore 与 SAF 发布 / 空间预检均不改；后续一次性自动软件解码 fallback 只能在同一单服务、单用户任务和 `finishOnce` 终止模型内扩展，不能建立第二工作流；硬件 VBR、main-affine 与 `commit()` durability 语义保持不变。
 
 **真机验收**：
 1. 横屏视频裁中部区域，输出与框选一致，误差 ≤ 2px；
@@ -247,7 +247,7 @@
 - App/处理服务启动时先与实际活动任务对账。若任务日志存在但已无对应活动任务，可删除由私有目录边界证明所有权的临时文件；公共输出只有在**当前对象**所有权可被不可变证据证明时才允许删除。`ALLOCATED` 阶段、相同 SAF URI、相同 legacy MediaStore URI/名称/路径都不单独授予删除权。Android 8～9 无法区分原半成品与同 URI/路径被替换写入的新对象，因此所有未发布 legacy 记录一律进入 durable quarantine、释放 active journal 槽但不删除公共对象；`PUBLISHED` 只保留输出并清理过期日志；
 - 启动对账后扫描**仅限 App 自有**的 `cache/transcode/`：删除未被当前活动任务引用的孤儿文件；清理为 best-effort，失败写入 F19 日志但不得阻塞启动或覆盖业务结果；严禁扫描或删除用户其他目录、无日志归属的公共媒体以及已经成功发布的输出；
 - 同一时间只允许一个媒体处理任务（视频压缩或音频提取，P0 阶段），新任务需等待或取消当前任务。
-- Flutter 的 snapshot/源 metadata 恢复、初始音频/视频目的地预检、音频普通/AAC 重试和视频普通/兼容重试都属于同一全局 interaction lock；每次 `await` 后必须重新证明 generation、EventChannel、源、目的地 revision 与发布状态所有权。恢复 snapshot 查询失败时，native 任务存在性未知，必须保守保持全局锁，直到原生明确返回 no-task、接受取消或应用重启重新对账；仅源 metadata 恢复失败不能丢弃已证明的 native task。EventChannel 在 native task 尚未提交时**关闭**仍使预检 generation 失效并释放锁；但 task 已保留后收到可恢复/格式错误必须 snapshot reconcile/rebind 或保持 uncertain lock，不得调用 `_failGeneration` 遗忘仍可能运行的 native task，迟到的 MethodChannel task ID/结果仍须按 generation 关联。并发 reconcile 以最新 query epoch 为准，匹配 task/kind 的进度是 native liveness 证据，可使迟到的 null/error snapshot 失效。
+- Flutter 的 snapshot/源 metadata 恢复、初始音频/视频目的地预检、音频普通/AAC 重试和视频普通用户重试都属于同一全局 interaction lock；每次 `await` 后必须重新证明 generation、EventChannel、源、目的地 revision 与发布状态所有权。一次性自动软件 decoder fallback 由当前 native `ProcessingService` 独占处理，不再次调用 Flutter `process()`、不预留第二个 workflow generation；Flutter 只消费同一 task 的 attempt-boundary snapshot/event。恢复 snapshot 查询失败时，native 任务存在性未知，必须保守保持全局锁，直到原生明确返回 no-task、接受取消或应用重启重新对账；仅源 metadata 恢复失败不能丢弃已证明的 native task。EventChannel 在 native task 尚未提交时**关闭**仍使预检 generation 失效并释放锁；但 task 已保留后收到可恢复/格式错误必须 snapshot reconcile/rebind 或保持 uncertain lock，不得调用 `_failGeneration` 遗忘仍可能运行的 native task，迟到的 MethodChannel task ID/结果仍须按 generation 关联。并发 reconcile 以最新 query epoch 为准，匹配 task/kind 的进度是 native liveness 证据，可使迟到的 null/error snapshot 失效。
 - task ID 或恢复 metadata 未确定期间的进度暂存必须按 generation/task/kind 有界 coalesce：每个保留 key 最多保存最新 running 与首个 terminal，terminal 后忽略 running 回退；全局 key 数有固定上限。恢复后按接收序回放，并以 snapshot 的 task/kind/phase/percent 判定新旧，禁止无界 `List` 随事件量增长。
 
 **验收标准**：M2 已按 Pixel 当前私有使用场景接受；进度、正常失败/取消清理、任务恢复和发布所有权边界保持为产品契约。M3 当前服务器门禁只能证明源码、host JVM/Flutter 行为与 APK 可组装，不能替代 API 26–28/Pixel/GrapheneOS 的物理设备验收。接近 6 小时、接近 50 GB、持续后台至完成、转码/发布强杀、连续 10 次异常中断、多 Provider 与多 SoC 的组合矩阵保留为 non-blocking hardening：未实际执行不得标为 PASS，补证前不得据此扩大生产支持范围，但不阻止 M3 候选准备。
@@ -411,6 +411,7 @@ abstract class VideoEngine {
   "percent": 0.0,
   "state": "running|success|failed|cancelled",
   "phase": "preparing|encoding|publishing|cancelling|finished",
+  "automaticSoftwareDecoderRetry": false,
   "outputUri": null,
   "outputFileName": null,
   "outputLocationLabel": "String",
@@ -419,9 +420,9 @@ abstract class VideoEngine {
 }
 ```
 
-视频任务可继续携带 `videoDecoderMode` 与 `actualVideoEncodingMode`；音频任务不得据此显示视频 Decoder/Encoder 状态。百分比、状态与阶段仍遵守 M2 的单调和终态规则。
+视频任务可继续携带 `videoDecoderMode`、`actualVideoEncodingMode` 与 `automaticSoftwareDecoderRetry`；音频任务不得据此显示视频 Decoder/Encoder 状态。百分比、状态与阶段在同一 engine attempt 内仍遵守 M2 的单调和终态规则；显式 `hardware → software` 自动 attempt boundary 合法地把当前 attempt 重置为 `preparing/0%`，并在 reconnect 时优先于迟到的旧硬件 snapshot。
 
-**TaskSnapshot**：至少携带进度事件的全部公共字段，加上 `sourceUri`、`startedAtEpochMs` 与 `retryRequest`。`taskKind=video_compression` 时 `retryRequest` 严格解析为 `ProcessRequest`；`taskKind=audio_extraction` 时严格解析为 `AudioExtractRequest`，两者不得串线。
+**TaskSnapshot**：至少携带进度事件的全部公共字段，加上 `sourceUri`、`startedAtEpochMs` 与 `retryRequest`。视频自动 fallback 运行期间必须持久化软件 decoder request 与 `automaticSoftwareDecoderRetry=true`，恢复后仍表示同一用户任务的当前 attempt，不得重新显示确认或提交第二任务。`taskKind=video_compression` 时 `retryRequest` 严格解析为 `ProcessRequest`；`taskKind=audio_extraction` 时严格解析为 `AudioExtractRequest`，两者不得串线。
 
 **M3 稳定错误码**：
 - `AUDIO_TRACK_MISSING`：没有第一条可提取音轨；
@@ -435,7 +436,9 @@ abstract class VideoEngine {
 
 继续复用 `INSUFFICIENT_STORAGE`、source/provider 权限错误、`OUTPUT_PERMISSION_LOST`、`CANCELLED` 与 `UNKNOWN`；普通 UI 不泄露原始异常，技术细节只进入 F19，任何凭据一律写为 `[REDACTED]`。
 
-**重试契约**：视频和音频重试必须在第一次 `await` 前预留新的 workflow generation，并置位全局 destination-validation/single-flight 锁；每次异步返回后同时复核 generation、源 URI/源对象、原 retry request、保存位置 revision、输出未发布及 EventChannel 未关闭。锁定期间重置、重新选源、切换保存文件夹和重复重试均不得启动第二条工作流。视频普通重试只对可恢复错误开放（存储不足、provider 瞬态失败、视频解码/编码失败、输出权限丢失、未知瞬态错误）；`CANCELLED`、源权限永久丢失、源损坏/不可用、格式不支持、Encoder 不可用和 compatibility decoder 不可用均不得显示或执行重试。hardware `VIDEO_DECODING_FAILED` 的兼容入口还必须满足同一组未发布/通道存活/源与保存位置前置条件。
+**重试契约**：用户主动的视频/音频普通重试必须在第一次 `await` 前预留新的 workflow generation，并置位全局 destination-validation/single-flight 锁；每次异步返回后同时复核 generation、源 URI/源对象、原 retry request、保存位置 revision、输出未发布及 EventChannel 未关闭。锁定期间重置、重新选源、切换保存文件夹和重复重试均不得启动第二条工作流。视频普通重试只对可恢复错误开放；`CANCELLED`、源权限永久丢失、源损坏/不可用、格式不支持、Encoder 不可用和 software decoder 不可用均不得执行循环重试。
+
+**一次性自动 decoder fallback 契约**：仅视频任务第一次 hardware attempt 的结构化 `VIDEO_DECODING_FAILED`，且未取消、未 forced finish、未使用过自动 retry 时有资格。native 必须在同一个 `ProcessingService` launch 与用户 task ID 内，确认旧 Transformer/codec 已结束、旧 temp/recovery 已清理后，精确复用原 `ProcessRequest` 并只把 `videoDecoderMode` 改为 software。engine route、publication owner、registry snapshot 与 recovery ownership 必须转给新 attempt；任一转移失败均 fail closed，旧 route 的迟到事件和发布 claim 必须拒绝。registry/UI/前台通知重置为 `preparing/0%` 并明确显示自动兼容重试；不得弹确认框、不得由 Flutter 第二次提交。软件 attempt 成功或失败后进入唯一 terminal outcome，禁止再循环。encoder/audio/storage/publication/general failure、取消和 forced finish 均不触发。
 
 ### 5.5 Android 端实现要点
 
@@ -651,6 +654,13 @@ class HistoryRecord {
 - 验收目标：视频起止误差不超过1帧加设备容差，音频另允许约一个AAC frame封装差；以`docs/m4-b-device-acceptance.md`的真机ffprobe和主观音画同步为准，不在证据前宣称已保证帧精度。
 - 不做：多段、跨文件拼接、无损切割或时间轴缩略图带。任何可感知音画漂移、trim恢复丢失或文件安全问题立即停止。
 
+### 一次性自动软件解码重试
+- 状态：`PRIVATE INTERNAL CANDIDATE — DEVICE ACCEPTANCE PENDING`。`1.9.1+26 / 8f4e970...` 已通过 Flutter `259/259`、Android JVM `359/359`、debug/release lint、assemble、ARM64 release build 与 APK 静态核验。
+- 触发：仅同一用户视频任务的首次 hardware `VIDEO_DECODING_FAILED`；无确认，在原 `ProcessingService` 内自动从头尝试 software decoder 一次。相同素材后来硬件成功，因此不建立永久黑名单，新任务仍先硬件。
+- 不变项：输入、crop/trim、codec、VBR 码率、尺寸、音频、目的地、输出名、metadata、SAF/MediaStore 和 C2 只读查询。
+- 审查边界：唯一独立 exact-state review 在 600 秒超时且无 verdict；控制器用唯一修订关闭延迟 snapshot attempt-boundary 与 registry fail-open 两项问题，不把 NO VERDICT 记为 PASS，也不启动无限复审。
+- 证据与真机清单：`docs/automatic-software-decoder-retry-completion-report.md`、`docs/automatic-software-decoder-retry-device-acceptance.md`。
+
 ### M4-C 同源多段时间编辑（F23）
 - 状态：`PLANNED — NOT AUTHORIZED`。M4-B依赖已满足，但本功能仍需独立授权。
 - 范围：`Composition + EditedMediaItemSequence`将同一来源拆为有序、不重叠的多个片段，共享`Crop → Presentation`效果并一次导出；`segments[{startMs,endMs}]`长度1与M4-B等价。
@@ -676,6 +686,7 @@ class HistoryRecord {
 | HDR 输入颜色异常 | 中 | 5.7-R4 |
 | 机型编码器差异 | 中 | 5.7-R2 |
 | 长任务被杀 | 中 | 5.7-R3 |
+| 非确定性硬件 decoder 生命周期失败 | 中 | 首次结构化 `VIDEO_DECODING_FAILED` 在同任务内自动 software fallback 一次；无永久黑名单、无循环；真机验收见独立清单 |
 | FFmpeg 生态/授权 | 低（因主架构不依赖） | 5.7-R7、附录 C |
 
 ---
